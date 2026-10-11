@@ -34,6 +34,9 @@ struct WallpaperSettingsView: View {
                     Section("Properties") {
                         properties(of: item)
                     }
+                    Section("Music") {
+                        MusicSettingsRows(item: item)
+                    }
                     if let scene = scene(of: item), !scene.variables.isEmpty {
                         Section("Scene") {
                             ForEach(scene.variables) { variable in

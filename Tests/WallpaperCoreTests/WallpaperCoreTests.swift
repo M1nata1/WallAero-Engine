@@ -234,6 +234,48 @@ final class WallpaperLibraryTests: XCTestCase {
         XCTAssertEqual(reopened.item(withID: second.id)?.shownSettings.scaling, .stretch)
     }
 
+    func testEveryWallpaperHasMusicOfItsOwn() async throws {
+        let folder = root.appendingPathComponent("Library")
+        let library = WallpaperLibrary(rootURL: folder)
+        let first = try await library.importFile(at: TestMedia.pngFile(in: root))
+        let second = try await library.importFile(at: TestMedia.pngFile(in: root))
+        XCTAssertNil(first.shownSettings.music)
+
+        let own = Wallpaper.Settings.Music(folderPath: "/Music/Night", playlist: "Calm", isShuffled: true)
+        library.setSettings(Wallpaper.Settings(scaling: .fit, music: own), for: first.id)
+        // What used to be one folder for all goes to those that have no music of their own.
+        library.adoptMusic(Wallpaper.Settings.Music(folderPath: "/Music/All"))
+
+        let reopened = WallpaperLibrary(rootURL: folder)
+        XCTAssertEqual(reopened.item(withID: first.id)?.shownSettings.music, own)
+        XCTAssertEqual(reopened.item(withID: first.id)?.shownSettings.scaling, .fit)
+        XCTAssertEqual(reopened.item(withID: second.id)?.shownSettings.music?.folderPath, "/Music/All")
+        XCTAssertEqual(reopened.item(withID: second.id)?.shownSettings.music?.isShuffled, false)
+    }
+
+    func testSettingsWrittenBeforeMusicWasPerWallpaperStillOpen() throws {
+        let old = #"{"position":20,"scaling":"fit","speed":0.5}"#
+        let settings = try JSONDecoder().decode(Wallpaper.Settings.self, from: Data(old.utf8))
+        XCTAssertEqual(settings, Wallpaper.Settings(scaling: .fit, position: 20, speed: 0.5))
+        XCTAssertNil(settings.music)
+    }
+
+    func testOnlyOneWallpaperIsHeard() {
+        func wallpaper(audio: Bool, music: String?) -> Wallpaper {
+            Wallpaper(id: UUID(), name: "W", kind: .video, fileName: "a.mp4", thumbnailFileName: nil, sourceFormat: "MP4",
+                      wasConverted: false, pixelWidth: 1920, pixelHeight: 1080, duration: 5, hasAudio: audio, fileSize: 1,
+                      settings: music.map { Wallpaper.Settings(music: .init(folderPath: $0)) })
+        }
+        let silent = wallpaper(audio: false, music: nil)
+        let loud = wallpaper(audio: true, music: nil)
+        let musical = wallpaper(audio: false, music: "/Music")
+
+        XCTAssertNil(Wallpaper.heard(among: []))
+        XCTAssertNil(Wallpaper.heard(among: [silent, nil]))
+        XCTAssertEqual(Wallpaper.heard(among: [silent, loud, musical])?.index, 1)
+        XCTAssertEqual(Wallpaper.heard(among: [nil, musical, loud])?.wallpaper.id, musical.id)
+    }
+
     func testALibraryWrittenBeforeSettingsExistedStillOpens() throws {
         let old = #"[{"dateAdded":"2026-10-01T09:00:00Z","duration":6.8,"fileName":"a.mp4","fileSize":10,"hasAudio":true,"id":"09970F42-E5A6-40F3-8100-68207CA21CDF","kind":"video","name":"Old","pixelHeight":1080,"pixelWidth":1920,"sourceFormat":"MP4","thumbnailFileName":null,"wasConverted":false}]"#
         let decoder = JSONDecoder()

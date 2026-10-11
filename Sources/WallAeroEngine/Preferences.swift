@@ -33,6 +33,7 @@ final class Preferences: ObservableObject {
         static let playbackRate = "playbackRate"
         static let playsSound = "playsSound"
         static let volume = "volume"
+        // Music was one folder for all wallpapers once; see `sharedMusic`.
         static let musicFolderPath = "musicFolderPath"
         static let musicPlaylist = "musicPlaylist"
         static let shufflesMusic = "shufflesMusic"
@@ -59,16 +60,13 @@ final class Preferences: ObservableObject {
     @Published var volume: Double {
         didSet { defaults.set(volume, forKey: Key.volume) }
     }
-    /// A folder of the user's own music, played in place of the video's sound. Nil: none chosen.
-    @Published var musicFolderPath: String? {
-        didSet { defaults.set(musicFolderPath, forKey: Key.musicFolderPath) }
-    }
-    /// The playlist to play from that folder; nil plays all the music in it.
-    @Published var musicPlaylist: String? {
-        didSet { defaults.set(musicPlaylist, forKey: Key.musicPlaylist) }
-    }
-    @Published var shufflesMusic: Bool {
-        didSet { defaults.set(shufflesMusic, forKey: Key.shufflesMusic) }
+    /// Music used to be one folder for all wallpapers, chosen here. Each wallpaper has its own
+    /// now; this is only read once, to hand the old choice over to the wallpapers there were.
+    var sharedMusic: Wallpaper.Settings.Music? {
+        defaults.string(forKey: Key.musicFolderPath).map {
+            Wallpaper.Settings.Music(folderPath: $0, playlist: defaults.string(forKey: Key.musicPlaylist),
+                                     isShuffled: defaults.bool(forKey: Key.shufflesMusic))
+        }
     }
     /// Let wallpapers that ask for it follow the sound the Mac is playing.
     @Published var reactsToSound: Bool {
@@ -107,9 +105,6 @@ final class Preferences: ObservableObject {
         playbackRate = defaults.double(forKey: Key.playbackRate)
         playsSound = defaults.bool(forKey: Key.playsSound)
         volume = defaults.double(forKey: Key.volume)
-        musicFolderPath = defaults.string(forKey: Key.musicFolderPath)
-        musicPlaylist = defaults.string(forKey: Key.musicPlaylist)
-        shufflesMusic = defaults.bool(forKey: Key.shufflesMusic)
         reactsToSound = defaults.bool(forKey: Key.reactsToSound)
         pauseWhenCovered = defaults.bool(forKey: Key.pauseWhenCovered)
         pauseOnBattery = defaults.bool(forKey: Key.pauseOnBattery)

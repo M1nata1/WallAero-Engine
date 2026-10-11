@@ -303,6 +303,21 @@ public final class WallpaperLibrary: ObservableObject {
         save()
     }
 
+    /// Gives every wallpaper that has no music of its own the music that used to be set once
+    /// for all of them.
+    public func adoptMusic(_ music: Wallpaper.Settings.Music) {
+        var changed = false
+        for index in items.indices where items[index].shownSettings.music == nil {
+            var settings = items[index].shownSettings
+            settings.music = music
+            items[index].settings = settings
+            changed = true
+        }
+        if changed {
+            save()
+        }
+    }
+
     public func category(of tag: String) -> String? {
         tagCategories[tag.lowercased()]
     }

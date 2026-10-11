@@ -65,10 +65,11 @@ enum ScreenshotMode {
             .environmentObject(state)
 
         // The second picture has the settings open, scrolled to their end, where the cursors are
-        // (`--settings-top` leaves them at the top, to check the first sections).
-        let showsEnd = !CommandLine.arguments.contains("--settings-top") && secondTab == .general
+        // (`--settings-top` leaves them at the top, to check the first sections, and
+        // `--settings-end` scrolls a wallpaper's settings to their end as well).
+        let showsEnd = CommandLine.arguments.contains("--settings-end")
+            || (!CommandLine.arguments.contains("--settings-top") && secondTab == .general)
         Task {
-            await manager.readMusicFolderForDisplay()
             if let seconds = values(of: "--watch-theme").last.flatMap(Int.init) {
                 state.showsSettings = true
                 await watchTheme(AnyView(mainView), seconds: seconds, in: directory)

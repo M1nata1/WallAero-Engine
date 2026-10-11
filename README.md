@@ -16,11 +16,11 @@ Live wallpapers for macOS: videos, GIFs and pictures on your desktop — beneath
 - **Scenes and an editor:** turn any video or picture into a scene and shape it in a visual editor: a clock and the date, text, pictures, shapes, background effects, and layers with your own HTML, CSS and JavaScript. See [Scenes](#scenes).
 - **Web wallpapers:** a folder with an `index.html` is shown as a wallpaper. Web wallpapers made for Wallpaper Engine work too.
 - **Reacting to sound:** an equalizer in a scene moves to whatever your Mac is playing: a song in any app, a video in the browser. See [Reacting to sound](#reacting-to-sound).
-- **Your own music:** listen to your own songs in place of the video's sound. Pick a folder in Settings: its subfolders and `.m3u` files become playlists. With no folder chosen, the sound comes from the video. See [Music](#music).
+- **Your own music:** every wallpaper can have music of its own, played in place of its sound. Pick a folder in the wallpaper's settings: its subfolders and `.m3u` files become playlists. With no folder chosen, the sound comes from the video. See [Music](#music).
 - **Cursors:** Windows cursor packs (`.ani`, `.cur`) replace the pointer across the whole system, animation included. Which file becomes which pointer is read from the pack's `install.inf`. See [Cursors](#cursors).
 - **Controls:** a menu bar icon (pause, next wallpaper, quick pick), a library window with drag and drop, and Open With → WallAero Engine in Finder.
 - **Search and tags:** find a wallpaper by its name, give wallpapers tags of your own, sort the tags into categories and tick the ones the library should show.
-- **Settings of every wallpaper:** scaling (fill / fit / stretch), which part stays in view when filling crops the picture, and speed. A scene adds the settings its author put up for changing.
+- **Settings of every wallpaper:** scaling (fill / fit / stretch), which part stays in view when filling crops the picture, speed and music. A scene adds the settings its author put up for changing.
 - **Settings of the app:** sound and volume, open at login, and the first frame as the regular macOS wallpaper (shown on the lock screen and in Mission Control).
 - **Interface language:** English or Russian, following the system language; any other language gets English. To change it for WallAero Engine alone, go to System Settings → General → Language & Region → Applications.
 
@@ -75,14 +75,17 @@ The settings are at the side of the same window; the gear button hides and shows
 
 ## Music
 
-Open Settings → General → Playback → Music folder and pick a folder with your songs. Sound turns on by itself, and the music takes the place of the video's sound.
+Music is set wallpaper by wallpaper. Select a wallpaper in the library, and in its settings, under Music, click Choose Folder… and pick a folder with your songs. Sound turns on by itself, and while that wallpaper is on, the music plays in place of its own sound. Another wallpaper can have other music, or none.
 
-- **Playlists.** Every subfolder with music in it is a playlist, and so is every `.m3u` or `.m3u8` file. In Settings you choose one playlist or All Music. Songs lying directly in the chosen folder play only under All Music.
+- **Playlists.** Every subfolder with music in it is a playlist, and so is every `.m3u` or `.m3u8` file. In the wallpaper's settings you choose one playlist or All Music. Songs lying directly in the chosen folder play only under All Music.
 - **Order.** Songs play in order, around and around. Shuffle plays them in random order: each one once before any repeats.
 - **Formats:** MP3, M4A, AAC, WAV, AIFF and FLAC. A file that cannot be opened is skipped.
 - **Next Track** is in the menu bar icon's menu, which also shows the song that is playing.
 - **Pausing.** Music keeps playing while windows cover the desktop. It pauses together with the wallpaper: on Pause in the menu, while the screen is locked or the displays sleep and, if you turned those on, on battery power and in Low Power Mode. Without a wallpaper chosen, music does not play. With the volume all the way down nothing plays either, and the music goes on from the same place when you turn it up.
+- **Changing wallpapers.** The music changes with the wallpaper. If the new wallpaper has the same folder, the song goes on.
+- **Several displays.** Only one wallpaper is heard: on the first display, in the order of the menu bar, whose wallpaper has music of its own or sound in its video.
 - **Back to the video's sound:** click Remove next to the folder.
+- **Sound and volume** are for all wallpapers at once: Settings → General → Playback.
 
 ## Scenes
 

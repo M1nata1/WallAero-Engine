@@ -37,8 +37,24 @@ public struct Wallpaper: Codable, Identifiable, Hashable, Sendable {
     /// The tags the user gave it, once there are any; `tagList` is what to go by.
     public var tags: [String]?
 
-    /// What every wallpaper lets be set: how it fills the screen and how fast it plays.
+    /// What every wallpaper lets be set: how it fills the screen, how fast it plays and what
+    /// music goes with it.
     public struct Settings: Codable, Hashable, Sendable {
+        /// Music of the user's own that plays while the wallpaper is on, in place of its sound.
+        public struct Music: Codable, Hashable, Sendable {
+            /// The folder with the songs.
+            public var folderPath: String
+            /// The playlist to play from that folder; nil plays all the music in it.
+            public var playlist: String?
+            public var isShuffled: Bool
+
+            public init(folderPath: String, playlist: String? = nil, isShuffled: Bool = false) {
+                self.folderPath = folderPath
+                self.playlist = playlist
+                self.isShuffled = isShuffled
+            }
+        }
+
         public enum Scaling: String, Codable, CaseIterable, Sendable {
             /// Covers the whole screen, cropping the edges if the proportions differ.
             case fill
@@ -53,11 +69,14 @@ public struct Wallpaper: Codable, Identifiable, Hashable, Sendable {
         public var position: Double
         /// 1 is the wallpaper's own speed.
         public var speed: Double
+        /// Nil: no music of its own, and a video is heard with its own sound.
+        public var music: Music?
 
-        public init(scaling: Scaling = .fill, position: Double = 50, speed: Double = 1) {
+        public init(scaling: Scaling = .fill, position: Double = 50, speed: Double = 1, music: Music? = nil) {
             self.scaling = scaling
             self.position = position
             self.speed = speed
+            self.music = music
         }
     }
 
@@ -65,6 +84,18 @@ public struct Wallpaper: Codable, Identifiable, Hashable, Sendable {
     public var shownSettings: Settings { settings ?? Settings() }
 
     public var tagList: [String] { tags ?? [] }
+
+    /// Of the wallpapers on the displays, in the displays' order, the one that is heard: the
+    /// first with music of its own or with sound in its video. Only one is, so that two do not
+    /// sound at once. `index` is its place in the list.
+    public static func heard(among shown: [Wallpaper?]) -> (index: Int, wallpaper: Wallpaper)? {
+        for (index, wallpaper) in shown.enumerated() {
+            if let wallpaper, wallpaper.shownSettings.music != nil || wallpaper.hasAudio {
+                return (index, wallpaper)
+            }
+        }
+        return nil
+    }
 
     /// Whether a search for `text` among the wallpapers the ticked tags leave finds this one.
     /// The tags come in groups, one per category: a wallpaper stays if it has a tag from every
