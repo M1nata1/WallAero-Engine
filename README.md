@@ -29,8 +29,6 @@ A ready-made build is in the repository: [**download WallAeroEngine.zip**](https
 2. Open the app. It is not notarized by Apple, so on first launch macOS stops it and says it cannot verify it. Close that message.
 3. Open System Settings → Privacy & Security, click Open Anyway near the bottom and confirm with your password. You only have to do this once.
 
-Updating from AiWallpaper, as the app used to be called? Just open WallAero Engine: on first launch it moves your library, settings and cursor backups over. Turn "Open at login" on again in Settings, then delete the old AiWallpaper app.
-
 Instead of steps 2–3, you can remove the quarantine flag in Terminal; the app then opens without any warning:
 
 ```bash
