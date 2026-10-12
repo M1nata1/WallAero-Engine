@@ -124,6 +124,45 @@ enum ScreenshotMode {
         window.close()
     }
 
+    /// `--picture-desktop <picture.png> [--after <seconds>] [--times <n>] [--switch-to <id>]` starts the app as
+    /// usual and has it take pictures of its own windows on the desktop, the way they are being
+    /// shown: `picture-1.png` after the given seconds (5), and so on. For each it says how much
+    /// of it is black and what the wallpaper is doing. A capture of the whole screen needs a
+    /// permission; an app's picture of its own window does not, which is the point.
+    static var desktopPictureURL: URL? {
+        values(of: "--picture-desktop").last.map { URL(fileURLWithPath: $0) }
+    }
+
+    static func pictureDesktop(of manager: WallpaperManager, to url: URL) {
+        let pause = values(of: "--after").last.flatMap(Double.init) ?? 5
+        let times = values(of: "--times").last.flatMap(Int.init) ?? 1
+        Task {
+            for time in 1...max(1, times) {
+                try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
+                for (index, desktop) in manager.desktops.enumerated() {
+                    var image: CGImage?
+                    if #available(macOS 14.4, *) {
+                        image = try? await captureWithScreenCaptureKit(desktop.window)
+                    }
+                    let name = url.deletingPathExtension().lastPathComponent + "-\(time)" + (index > 0 ? "-\(index + 1)" : "") + ".png"
+                    if let image {
+                        write(image, to: url.deletingLastPathComponent().appendingPathComponent(name))
+                    }
+                    let black = image.map { "\(Int((blackShare(of: $0) * 100).rounded())) %" } ?? "could not look"
+                    let web = desktop.view.webView
+                    print("\(name): \(desktop.item?.name ?? "nothing") — black \(black); window alpha \(desktop.window.alphaValue), "
+                        + "on screen \(desktop.isVisibleOnScreen); still in front \(web?.isShowingStill ?? false); reason for a pause: \(manager.pauseReason.map { "\($0)" } ?? "none")")
+                    fflush(stdout)
+                }
+                // `--switch-to <wallpaper id>`: after the first picture that wallpaper is chosen,
+                // the way a click in the library would choose it.
+                if time == 1, let id = values(of: "--switch-to").last.flatMap(UUID.init(uuidString:)) {
+                    manager.setWallpaper(id, for: .all)
+                }
+            }
+        }
+    }
+
     /// `--toggle-settings`, with `--screenshots`: opens the main window the way the app does,
     /// narrow and without the settings, then shows them at its side and hides them again as the
     /// button in the toolbar would. It takes a picture each time (`toggle-1.png`, …) and prints
@@ -636,11 +675,12 @@ enum ScreenshotMode {
     /// `--ready-test <video, picture or web wallpaper folder> [--picture <file.png>]` shows a
     /// wallpaper the way a desktop window does — out of sight until it has a picture — and
     /// prints how long that took and how much of the window was still black when it was revealed.
-    /// With `--watch <seconds>` it keeps looking for that long and reports the blackest moment
-    /// and whether a web wallpaper's page was loaded anew; `--touch <file name>` rewrites a file
+    /// With `--watch <seconds>` it keeps looking for that long and reports the blackest moment,
+    /// when a picture first came, and whether a web wallpaper's page was loaded anew; `--touch <file name>` rewrites a file
     /// of the wallpaper meanwhile, as saving it in an editor would. `--scaling fill|fit|stretch`
     /// and `--position <percent>` show a video or picture the way those settings of it would,
-    /// in a window of `--window <width> <height>`.
+    /// in a window of `--window <width> <height>`. `--backdrop <picture>` gives a web wallpaper
+    /// the picture that is seen until its page has drawn.
     static var readyTestTarget: URL? {
         values(of: "--ready-test").last.map { URL(fileURLWithPath: $0) }
     }
@@ -680,6 +720,10 @@ enum ScreenshotMode {
                     var blackest = 0.0
                     var looks = 0
                     var touched = false
+                    // When the window first had a picture and how black it was at the last look:
+                    // a window black for a moment and one that stays black are not the same fault.
+                    var pictureAfter: Double?
+                    var last = 0.0
                     let watchStarted = CFAbsoluteTimeGetCurrent()
                     while CFAbsoluteTimeGetCurrent() - watchStarted < seconds {
                         if !touched, CFAbsoluteTimeGetCurrent() - watchStarted > 0.6, let name = values(of: "--touch").last {
@@ -689,13 +733,18 @@ enum ScreenshotMode {
                             try? (text + "\n").write(to: file, atomically: true, encoding: .utf8)
                         }
                         if #available(macOS 14.4, *), let look = try? await captureWithScreenCaptureKit(window) {
-                            blackest = max(blackest, blackShare(of: look))
+                            last = blackShare(of: look)
+                            blackest = max(blackest, last)
                             looks += 1
+                            if pictureAfter == nil, last < 0.5 {
+                                pictureAfter = CFAbsoluteTimeGetCurrent() - watchStarted
+                            }
                         }
                         try? await Task.sleep(nanoseconds: 20_000_000)
                     }
                     let sameLoad = await view.webView?.value(of: "window.__sameLoad === true") as? Bool
                     print("watched \(looks) times: blackest \(Int((blackest * 100).rounded())) %; page loaded anew: \(sameLoad.map { $0 ? "no" : "yes" } ?? "not a page")")
+                    print("a picture \(pictureAfter.map { String(format: "%.2f s after the reveal", $0) } ?? "never came"); black at the end: \(Int((last * 100).rounded())) %")
                 }
                 exit(0)
             }
@@ -721,7 +770,8 @@ enum ScreenshotMode {
             }
         }
         if isFolder.boolValue, let project = WebProject(folder: target) {
-            view.showWeb(project)
+            // `--backdrop <picture>` stands in for the library's picture of the page.
+            view.showWeb(project, backdrop: values(of: "--backdrop").last.flatMap(NSImage.init(contentsOfFile:)))
         } else if UTType(filenameExtension: target.pathExtension)?.conforms(to: .image) == true {
             view.showImage(at: target)
         } else {

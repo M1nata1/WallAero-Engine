@@ -106,8 +106,8 @@ final class WallpaperView: NSView {
     }
 
     /// `hearsSound` is off only for the helper that measures a wallpaper without listening to
-    /// the Mac.
-    func showWeb(_ project: WebProject, hearsSound: Bool = true) {
+    /// the Mac. `backdrop` is a picture of the page to be seen until the page has drawn itself.
+    func showWeb(_ project: WebProject, hearsSound: Bool = true, backdrop: NSImage? = nil) {
         clear()
         let webView = WebWallpaperView(frame: bounds)
         webView.hearsSound = hearsSound
@@ -116,7 +116,7 @@ final class WallpaperView: NSView {
         webView.setAudio(muted: isMuted, volume: volume)
         webView.setPlaying(isPlaying, rate: rate)
         webView.onReady = { [weak self] in self?.contentIsReady() }
-        webView.show(project)
+        webView.show(project, backdrop: backdrop)
     }
 
     private func contentIsReady() {

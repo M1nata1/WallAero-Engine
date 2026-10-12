@@ -40,6 +40,10 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
 
     private var webView: WKWebView?
     private let stillView = NSImageView()
+    /// A picture of the page, behind it. A web view is see-through until its page has drawn,
+    /// and on a busy Mac — at login above all — that can take seconds; this picture is what is
+    /// seen there then, instead of black. See `show` and `pageHasDrawn`.
+    private let backdropView = NSView()
     private var project: WebProject?
     private var watcher: FolderWatcher?
 
@@ -72,6 +76,13 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         stillView.autoresizingMask = [.width, .height]
         stillView.frame = bounds
         stillView.isHidden = true
+        backdropView.wantsLayer = true
+        backdropView.layer?.contentsGravity = .resizeAspectFill
+        backdropView.layer?.masksToBounds = true
+        backdropView.autoresizingMask = [.width, .height]
+        backdropView.frame = bounds
+        backdropView.isHidden = true
+        addSubview(backdropView)
         addSubview(stillView)
     }
 
@@ -82,9 +93,13 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
 
     // MARK: - Content
 
-    func show(_ project: WebProject, watchingForChanges: Bool = true) {
+    /// - Parameter backdrop: a picture of the page as it looked before, the library's own, to
+    ///   be seen until the page has drawn itself.
+    func show(_ project: WebProject, backdrop: NSImage? = nil, watchingForChanges: Bool = true) {
         unload()
         self.project = project
+        backdropView.layer?.contents = backdrop
+        backdropView.isHidden = backdrop == nil
         if project.isScene {
             // Scenes made by an older version of the app get the current page and runtime.
             _ = try? SceneProject.refreshGeneratedFiles(in: project.folder)
@@ -127,6 +142,8 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         isFrozen = false
         stillView.image = nil
         stillView.isHidden = true
+        backdropView.isHidden = true
+        backdropView.layer?.contents = nil
         pageWantsSound = false
         updateSound()
         resumeLoadWaiters()
@@ -231,6 +248,9 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         if message["ready"] != nil {
             pageIsReady()
         }
+        if message["drawn"] != nil {
+            pageHasDrawn()
+        }
     }
 
     /// The page is given the sound only while it asks for it and is playing: listening to the
@@ -269,6 +289,19 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
             stillView.image = nil
         }
         onReady?()
+    }
+
+    /// The page has drawn frames of its own, so the picture behind it has done its job. It is
+    /// taken away rather than left there: a page with see-through parts would show it for good.
+    /// The frames take a moment more to reach the screen, hence the short wait.
+    private func pageHasDrawn() {
+        guard !backdropView.isHidden else { return }
+        let generation = loadGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.loadGeneration == generation else { return }
+            self.backdropView.isHidden = true
+            self.backdropView.layer?.contents = nil
+        }
     }
 
     /// A page is blank while it loads again. A picture of how it looked covers that; a paused
@@ -383,15 +416,25 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         function settle() {
           if (--waiting > 0) return;
           var told = false;
+          function post(message) {
+            try {
+              window.webkit.messageHandlers.wallaeroHost.postMessage(message);
+            } catch (error) {}
+          }
           function tell() {
             if (told) return;
             told = true;
-            try {
-              window.webkit.messageHandlers.wallaeroHost.postMessage({ ready: true });
-            } catch (error) {}
+            post({ ready: true });
           }
-          // Two frames on, the picture has been drawn. A hidden page draws none, hence the timer.
-          requestAnimationFrame(function () { requestAnimationFrame(tell); });
+          // Two frames on, the picture has been drawn, and the app is told so apart from being
+          // told the page is ready: a hidden page draws no frames, hence the timer, and on a
+          // busy Mac the timer comes first while there is still nothing to see.
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+              tell();
+              post({ drawn: true });
+            });
+          });
           setTimeout(tell, 150);
         }
         Array.prototype.forEach.call(document.querySelectorAll('video'), function (video) {

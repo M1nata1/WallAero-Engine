@@ -113,6 +113,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in self?.presentImportFailures() }
             .store(in: &cancellables)
 
+        if let url = ScreenshotMode.desktopPictureURL {
+            ScreenshotMode.pictureDesktop(of: manager, to: url)
+        }
+
         isLaunched = true
         if !urlsOpenedBeforeLaunch.isEmpty {
             open(urlsOpenedBeforeLaunch)

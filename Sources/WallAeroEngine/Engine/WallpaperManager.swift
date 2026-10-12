@@ -276,6 +276,9 @@ final class WallpaperManager: NSObject, ObservableObject {
         SoundSpectrum.shared.isEnabled = preferences.reactsToSound
     }
 
+    /// What is on each display, for `--picture-desktop`.
+    var desktops: [ScreenWallpaper] { displays.compactMap { screens[$0.id] } }
+
     /// Starts or stops every player according to the current state of the Mac.
     func updatePlayback() {
         let reason = currentPauseReason()
@@ -569,7 +572,8 @@ final class WallpaperManager: NSObject, ObservableObject {
 final class ScreenWallpaper: NSObject {
     let displayID: String
     let view: WallpaperView
-    private let window: WallpaperWindow
+    /// The window on the desktop. Not private: `--picture-desktop` takes a picture of it.
+    let window: WallpaperWindow
     private(set) var item: Wallpaper?
     private var isPlaying = false
     private weak var manager: WallpaperManager?
@@ -645,7 +649,10 @@ final class ScreenWallpaper: NSObject {
                 view.clear()
                 break
             }
-            view.showWeb(project)
+            // The library's picture of it stands in until the page has drawn; the full-size
+            // still if there is one, the thumbnail otherwise.
+            let picture = (library.renderedStillURL(for: newItem) ?? library.thumbnailURL(for: newItem)).flatMap(NSImage.init(contentsOf:))
+            view.showWeb(project, backdrop: picture)
             view.webView?.onContentChange = { [weak self] in
                 guard let self else { return }
                 self.manager?.webWallpaperDidChange(newItem)
