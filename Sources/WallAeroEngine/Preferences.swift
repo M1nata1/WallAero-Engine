@@ -37,7 +37,6 @@ final class Preferences: ObservableObject {
         static let musicFolderPath = "musicFolderPath"
         static let musicPlaylist = "musicPlaylist"
         static let shufflesMusic = "shufflesMusic"
-        static let reactsToSound = "reactsToSound"
         static let pauseWhenCovered = "pauseWhenCovered"
         static let pauseOnBattery = "pauseOnBattery"
         static let pauseInLowPowerMode = "pauseInLowPowerMode"
@@ -68,10 +67,6 @@ final class Preferences: ObservableObject {
                                      isShuffled: defaults.bool(forKey: Key.shufflesMusic))
         }
     }
-    /// Let wallpapers that ask for it follow the sound the Mac is playing.
-    @Published var reactsToSound: Bool {
-        didSet { defaults.set(reactsToSound, forKey: Key.reactsToSound) }
-    }
     /// Stop decoding while windows or a full-screen app hide the desktop.
     @Published var pauseWhenCovered: Bool {
         didSet { defaults.set(pauseWhenCovered, forKey: Key.pauseWhenCovered) }
@@ -95,7 +90,6 @@ final class Preferences: ObservableObject {
             Key.playbackRate: 1.0,
             Key.playsSound: false,
             Key.volume: 0.5,
-            Key.reactsToSound: true,
             Key.pauseWhenCovered: true,
             Key.pauseOnBattery: false,
             Key.pauseInLowPowerMode: true,
@@ -105,7 +99,6 @@ final class Preferences: ObservableObject {
         playbackRate = defaults.double(forKey: Key.playbackRate)
         playsSound = defaults.bool(forKey: Key.playsSound)
         volume = defaults.double(forKey: Key.volume)
-        reactsToSound = defaults.bool(forKey: Key.reactsToSound)
         pauseWhenCovered = defaults.bool(forKey: Key.pauseWhenCovered)
         pauseOnBattery = defaults.bool(forKey: Key.pauseOnBattery)
         pauseInLowPowerMode = defaults.bool(forKey: Key.pauseInLowPowerMode)

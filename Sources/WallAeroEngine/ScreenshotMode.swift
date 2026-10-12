@@ -814,8 +814,7 @@ enum ScreenshotMode {
     /// `--scene <scene folder>` the scene is shown in a window and the report says what its page
     /// was really given, also while paused; `--picture <file.png>` saves how it looked at the end,
     /// `--eval <JavaScript>` runs in the page before the listening and `--eval-after <JavaScript>`
-    /// after it, its value printed. `--switch-off-at <second>` turns the reaction to sound off for
-    /// two seconds, as the switch in the settings would. `--synthetic` listens to a made-up
+    /// after it, its value printed. `--synthetic` listens to a made-up
     /// sound instead of the Mac's — three seconds of silence, four of a tone, three of silence,
     /// three of the tone, then silence — which needs no permission and always goes the same way.
     ///
@@ -888,7 +887,6 @@ enum ScreenshotMode {
                 view = page
                 window = host
             }
-            let switchOffAt = values(of: "--switch-off-at").last.flatMap(Int.init)
             func heard() async -> String? {
                 guard let view else { return nil }
                 let text = await view.value(of: "var h = JSON.stringify(window.__heard); __heard.frames = 0; __heard.loudest = 0; h")
@@ -897,10 +895,6 @@ enum ScreenshotMode {
             for second in 1...max(1, Int(seconds)) {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 line("second \(second):", page: await heard())
-                if let switchOffAt, second == switchOffAt || second == switchOffAt + 2 {
-                    SoundSpectrum.shared.isEnabled = second != switchOffAt
-                    print(SoundSpectrum.shared.isEnabled ? "— switched on —" : "— switched off —")
-                }
             }
             if let view {
                 for script in values(of: "--eval-after") {

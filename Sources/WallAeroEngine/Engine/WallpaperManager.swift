@@ -273,7 +273,6 @@ final class WallpaperManager: NSObject, ObservableObject {
             screen.view.setAudio(muted: !audible, volume: Float(preferences.volume))
         }
         music.volume = Float(preferences.volume)
-        SoundSpectrum.shared.isEnabled = preferences.reactsToSound
     }
 
     /// What is on each display, for `--picture-desktop`.

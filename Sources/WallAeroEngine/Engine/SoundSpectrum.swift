@@ -14,13 +14,6 @@ import WallpaperCore
 final class SoundSpectrum {
     static let shared = SoundSpectrum()
 
-    /// The user's choice in the settings.
-    var isEnabled = true {
-        didSet {
-            if isEnabled != oldValue { update() }
-        }
-    }
-
     private struct Listener {
         weak var owner: AnyObject?
         let handler: (String) -> Void
@@ -57,7 +50,6 @@ final class SoundSpectrum {
     }
 
     private func deliver(_ script: String) {
-        guard isEnabled else { return }
         var someoneLeft = false
         for (key, listener) in listeners {
             if listener.owner == nil {
@@ -71,8 +63,7 @@ final class SoundSpectrum {
     }
 
     private func update() {
-        let wanted = isEnabled && !listeners.isEmpty
-        if wanted {
+        if !listeners.isEmpty {
             pendingStop?.cancel()
             pendingStop = nil
             if !isCapturing {
@@ -82,9 +73,8 @@ final class SoundSpectrum {
         } else if isCapturing, pendingStop == nil {
             // A wallpaper pauses and plays again every time a window passes over the desktop;
             // the listening is not set up anew for each of those moments.
-            let delay: UInt64 = isEnabled ? 5_000_000_000 : 0
             pendingStop = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: delay)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
                 guard !Task.isCancelled, let self else { return }
                 self.pendingStop = nil
                 self.isCapturing = false

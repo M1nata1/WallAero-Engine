@@ -68,7 +68,6 @@
 "Playlist" = "Плейлист";
 "All Music" = "Вся музыка";
 "Shuffle" = "Перемешивать";
-"Wallpapers react to sound" = "Обои реагируют на звук";
 "Choose a folder with music. Its subfolders and .m3u files become playlists." = "Выберите папку с музыкой. Вложенные папки и файлы .m3u станут плейлистами.";
 "No music was found in that folder." = "В этой папке нет музыки.";
 "MP3, M4A, AAC, WAV, AIFF and FLAC files are supported." = "Поддерживаются файлы MP3, M4A, AAC, WAV, AIFF и FLAC.";

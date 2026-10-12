@@ -47,9 +47,6 @@ struct SettingsView: View {
                     Image(systemName: "speaker.wave.3.fill")
                 }
                 .disabled(!preferences.playsSound)
-                if #available(macOS 14.2, *) {
-                    Toggle("Wallpapers react to sound", isOn: $preferences.reactsToSound)
-                }
             }
 
             Section("Energy") {

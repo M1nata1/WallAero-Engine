@@ -144,7 +144,6 @@ window.wallpaperRegisterAudioListener(levels => {
 
 About thirty times a second the listener gets 128 numbers from 0 to 1: 64 bands of the left channel, then 64 of the right, low notes first. The levels adjust to how loud the source is, so a quiet video moves the bars as much as a loud song does. In silence every number is 0.
 
-- **To turn it off,** go to Settings → General → Playback → Wallpapers react to sound. Listeners are no longer called, and a layer can go back to moving on its own.
 - **If you clicked Don't Allow** and the bars lie flat, open System Settings → Privacy & Security → Screen & System Audio Recording and turn WallAero Engine on under System Audio Recording Only.
 - The Mac's sound is listened to only while such a wallpaper is playing on screen: not while it is paused or covered by windows, and never for wallpapers that do not ask for it.
 - This needs macOS 14.2 or later. On older systems the listener is never called.
