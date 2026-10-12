@@ -60,6 +60,8 @@ final class WallpaperManager: NSObject, ObservableObject {
     /// The music of the wallpaper that is heard. When it has any, the music plays in place of
     /// the wallpaper's own sound.
     let music = PlaylistPlayer()
+    /// Passes the mouse on to web wallpapers, which lie under the desktop and get none.
+    private let pointer = PointerForwarder()
 
     private static let assignmentsKey = "assignments"
 
@@ -275,6 +277,17 @@ final class WallpaperManager: NSObject, ObservableObject {
         music.volume = Float(preferences.volume)
     }
 
+    /// Plays the mouse at a place on the screens — a move, a press and a release — the way
+    /// the real mouse is passed on, and says whether the place is the desktop. For
+    /// `--picture-desktop`, which has no mouse to move.
+    func playPointer(at place: NSPoint) -> String {
+        let isDesktop = pointer.isDesktop(at: place)
+        pointer.handle(.move, at: place)
+        pointer.handle(.down, at: place)
+        pointer.handle(.up, at: place)
+        return "\(isDesktop ? "the desktop" : "a window is in the way"); the mouse is \(pointer.isActive ? "being passed on" : "not passed on")"
+    }
+
     /// What is on each display, for `--picture-desktop`.
     var desktops: [ScreenWallpaper] { displays.compactMap { screens[$0.id] } }
 
@@ -291,6 +304,9 @@ final class WallpaperManager: NSObject, ObservableObject {
         // Unlike the picture, the music goes on while windows cover the desktop: songs that
         // stopped whenever a window was maximized would be of little use.
         music.setPlaying(playsMusic && isAudible && hasWallpaper && pauseReason == nil)
+        // The mouse is watched only while a page is on the desktop to be told of it.
+        pointer.targets = { [weak self] in self?.screens.values.compactMap(\.pointerTarget) ?? [] }
+        pointer.isActive = screens.values.contains { $0.pointerTarget != nil }
     }
 
     private func currentPauseReason() -> PauseReason? {
@@ -592,6 +608,14 @@ final class ScreenWallpaper: NSObject {
             self, selector: #selector(occlusionStateDidChange),
             name: NSWindow.didChangeOcclusionStateNotification, object: window
         )
+    }
+
+    /// The page of a web wallpaper that is playing here, as what the mouse is passed on to.
+    var pointerTarget: PointerForwarder.Target? {
+        guard isPlaying, let page = view.webView else { return nil }
+        return PointerForwarder.Target(id: ObjectIdentifier(page), frame: window.frame) { [weak page] kind, point in
+            page?.pointer(kind, at: point)
+        }
     }
 
     /// False while other windows, a full-screen app or the lock screen cover the desktop.

@@ -242,6 +242,16 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         }
     }
 
+    // MARK: - Pointer
+
+    /// Tells the page what the mouse did; see `PointerForwarder`. The point is in the view,
+    /// from its top left corner. A paused wallpaper is told nothing.
+    func pointer(_ kind: PointerForwarder.Kind, at point: CGPoint) {
+        guard hasLoaded, isPlaying, !isFrozen else { return }
+        let place = String(format: "%.1f, %.1f", point.x, point.y)
+        webView?.evaluateJavaScript("window.__wallaeroHost && window.__wallaeroHost.pointer('\(kind.rawValue)', \(place))")
+    }
+
     // MARK: - Sound
 
     private func hostMessage(_ message: [String: Any]) {
@@ -428,8 +438,81 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         autoplay: function (media) {
           autoplaying.add(media);
           applyTo(media);
-        }
+        },
+        pointer: function (kind, x, y) { pointer(kind, x, y); }
       };
+      // The pointer. A wallpaper lies under the desktop's icons, so the web engine gets no
+      // mouse for it; the app says where the pointer is over the desktop and when its button
+      // goes down and comes up, and the page is sent the events a mouse would have made.
+      var pressedOn = [];  // what the button went down on
+      var lastOver = [];   // what the pointer was last over
+      function placesAt(x, y) {
+        var places = [];
+        function look(page, view, x, y) {
+          var element = page.elementFromPoint(x, y) || page.documentElement;
+          if (element.tagName === 'IFRAME') {
+            try {
+              var box = element.getBoundingClientRect();
+              if (element.contentDocument) return look(element.contentDocument, element.contentWindow, x - box.left, y - box.top);
+            } catch (error) {}
+          }
+          places.push({ element: element, view: view, x: x, y: y });
+        }
+        look(document, window, x, y);
+        // The page of a scene lies behind the scene's layers. It gets the pointer too when a
+        // layer is over it: the page is the wallpaper, the layer only stands on it.
+        var behind = document.querySelector('#wallaero-background > iframe');
+        if (behind && places[0].view === window) {
+          try {
+            var frame = behind.getBoundingClientRect();
+            look(behind.contentDocument, behind.contentWindow, x - frame.left, y - frame.top);
+          } catch (error) {}
+        }
+        return places;
+      }
+      function send(place, names, buttons) {
+        names.forEach(function (name) {
+          var isPointer = name.indexOf('pointer') === 0;
+          // Made in the page the event goes to, so that the page takes it for one of its own.
+          var Event = isPointer ? place.view.PointerEvent : place.view.MouseEvent;
+          if (!Event || !place.element.isConnected) return;
+          var details = { bubbles: true, cancelable: true, composed: true, view: place.view, detail: name === 'click' ? 1 : 0,
+                          clientX: place.x, clientY: place.y, screenX: place.x, screenY: place.y, button: 0, buttons: buttons };
+          if (isPointer) {
+            details.pointerId = 1;
+            details.pointerType = 'mouse';
+            details.isPrimary = true;
+            details.pressure = buttons ? 0.5 : 0;
+          }
+          try {
+            place.element.dispatchEvent(new Event(name, details));
+          } catch (error) {
+            console.error(error);
+          }
+        });
+      }
+      function pointer(kind, x, y) {
+        if (kind === 'leave') {
+          lastOver.forEach(function (place) { send(place, ['pointerout', 'pointerleave', 'mouseout', 'mouseleave'], 0); });
+          lastOver = [];
+          return;
+        }
+        var places = placesAt(x, y);
+        if (kind === 'down') {
+          pressedOn = places;
+          places.forEach(function (place) { send(place, ['pointerdown', 'mousedown'], 1); });
+        } else if (kind === 'up') {
+          places.forEach(function (place, index) {
+            send(place, ['pointerup', 'mouseup'], 0);
+            // A click is a press and a release on the same thing.
+            if (pressedOn[index] && pressedOn[index].element === place.element) send(place, ['click'], 0);
+          });
+          pressedOn = [];
+        } else {
+          places.forEach(function (place) { send(place, ['pointermove', 'mousemove'], pressedOn.length ? 1 : 0); });
+        }
+        lastOver = places;
+      }
       // The app keeps a wallpaper out of sight until there is something to see, and a page
       // that loads anew covered until then. It is told when the page has loaded and every
       // video on it has its first frame.

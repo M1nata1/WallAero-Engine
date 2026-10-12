@@ -125,7 +125,7 @@ enum ScreenshotMode {
         window.close()
     }
 
-    /// `--picture-desktop <picture.png> [--after <seconds>] [--times <n>] [--switch-to <id>]` starts the app as
+    /// `--picture-desktop <picture.png> [--after <seconds>] [--times <n>] [--switch-to <id>] [--click <x> <y>]` starts the app as
     /// usual and has it take pictures of its own windows on the desktop, the way they are being
     /// shown: `picture-1.png` after the given seconds (5), and so on. For each it says how much
     /// of it is black and what the wallpaper is doing. A capture of the whole screen needs a
@@ -160,7 +160,92 @@ enum ScreenshotMode {
                 if time == 1, let id = values(of: "--switch-to").last.flatMap(UUID.init(uuidString:)) {
                     manager.setWallpaper(id, for: .all)
                 }
+                // `--click <x> <y>`, in parts of the main display from its bottom left: after
+                // the first picture the mouse is played there — a move, a press, a release —
+                // through the same door the real mouse comes in by.
+                let arguments = CommandLine.arguments
+                if time == 1, let index = arguments.firstIndex(of: "--click"), index + 2 < arguments.count,
+                   let x = Double(arguments[index + 1]), let y = Double(arguments[index + 2]), let screen = NSScreen.main {
+                    let place = NSPoint(x: screen.frame.minX + screen.frame.width * x, y: screen.frame.minY + screen.frame.height * y)
+                    print("the mouse is played at \(Int(place.x)),\(Int(place.y)): \(manager.playPointer(at: place))")
+                    fflush(stdout)
+                }
             }
+        }
+    }
+
+    /// `--pointer-test <seconds>` checks how the mouse is passed on to web wallpapers, with a
+    /// made-up wallpaper as large as the main display that only writes down what it is told.
+    /// It says which places of the display count as the desktop, plays a press, a drag onto a
+    /// window and a release there to see what the wallpaper would be sent, and then watches the
+    /// real mouse for the given seconds: move it and click the desktop meanwhile.
+    static var pointerTestSeconds: Double? {
+        values(of: "--pointer-test").last.flatMap(Double.init)
+    }
+
+    static func pointerTest(seconds: Double) {
+        NSApp.setActivationPolicy(.accessory)
+        guard let screen = NSScreen.main else { exit(1) }
+        let forwarder = PointerForwarder()
+        var told: [String] = []
+        let wallpaper = NSObject()
+        forwarder.targets = {
+            [PointerForwarder.Target(id: ObjectIdentifier(wallpaper), frame: screen.frame) { kind, point in
+                told.append("\(kind.rawValue) \(Int(point.x)),\(Int(point.y))")
+            }]
+        }
+
+        // Which places are the desktop: a grid over the display, and the first of each sort.
+        var desktop: NSPoint?
+        var covered: NSPoint?
+        var count = 0
+        let steps = 24
+        for row in 0..<steps {
+            for column in 0..<steps {
+                let place = NSPoint(x: screen.frame.minX + (CGFloat(column) + 0.5) * screen.frame.width / CGFloat(steps),
+                                    y: screen.frame.minY + (CGFloat(row) + 0.5) * screen.frame.height / CGFloat(steps))
+                if forwarder.isDesktop(at: place) {
+                    count += 1
+                    desktop = desktop ?? place
+                } else {
+                    covered = covered ?? place
+                }
+            }
+        }
+        print("the desktop shows at \(count) of \(steps * steps) places of the main display; under the pointer now: \(forwarder.isDesktop(at: NSEvent.mouseLocation) ? "the desktop" : "a window")")
+
+        Task {
+            if let desktop, let covered {
+                // Each step a little after the last: moves told too close together are held back.
+                let steps: [(PointerForwarder.Kind, NSPoint, String)] = [
+                    (.move, covered, "the pointer over a window"), (.move, desktop, "onto the desktop"),
+                    (.down, desktop, "the button goes down"), (.move, covered, "dragged onto a window"),
+                    (.up, covered, "released there"), (.move, covered, "moved on over the window"),
+                    (.down, covered, "a click in the window"), (.up, covered, "and its release"),
+                ]
+                for (kind, place, what) in steps {
+                    told = []
+                    forwarder.handle(kind, at: place)
+                    try? await Task.sleep(nanoseconds: 60_000_000)
+                    print("  \(what): \(told.isEmpty ? "nothing" : told.joined(separator: "; "))")
+                }
+            } else {
+                print("  the display is all desktop or all windows; nothing to play out")
+            }
+            told = []
+            // What reaches the app at all, whether or not it is over the desktop.
+            var seen = 0
+            let watcher = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .leftMouseDown, .leftMouseUp]) { _ in
+                seen += 1
+            }
+            forwarder.isActive = true
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            forwarder.isActive = false
+            watcher.map(NSEvent.removeMonitor)
+            let moves = told.filter { $0.hasPrefix("move") }.count
+            print("the real mouse in \(Int(seconds)) s: \(seen) events reached the app; passed on: \(moves) moves, \(told.filter { $0.hasPrefix("down") }.count) presses, "
+                + "\(told.filter { $0.hasPrefix("up") }.count) releases, \(told.filter { $0.hasPrefix("leave") }.count) times left the desktop")
+            exit(0)
         }
     }
 

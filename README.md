@@ -157,7 +157,7 @@ A wallpaper made for Wallpaper Engine is added the way it was downloaded: click 
 - **A video wallpaper** is added as a plain video.
 - **Wallpaper Engine's own scenes** are stored in a closed format and cannot be opened.
 - Audio visualizers follow the sound your Mac is playing, see [Reacting to sound](#reacting-to-sound). The rest of Wallpaper Engine's media API (the track's title, cover and position) is not there.
-- A wallpaper lies under the desktop's icons and windows, so it does not react to the mouse.
+- The mouse reaches web wallpapers and scenes: they follow the pointer while it is over the desktop and take clicks on it. A click goes to the desktop as well, as ever, and where a window covers the wallpaper the mouse is the window's.
 - Scenes and web wallpapers use more energy and memory than plain video: they are drawn by the web engine built into macOS. Plain videos keep taking the direct route. While paused, the page stands completely still.
 
 Any other folder with an `index.html` in it, or an archive of one, is added the same way and shown as it is.

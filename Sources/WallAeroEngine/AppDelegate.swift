@@ -46,6 +46,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.run()
             return
         }
+        if let seconds = ScreenshotMode.pointerTestSeconds {
+            ScreenshotMode.pointerTest(seconds: seconds)
+            app.run()
+            return
+        }
         if let request = ScreenshotMode.importTest {
             ScreenshotMode.runImportTest(request)
             app.run()
