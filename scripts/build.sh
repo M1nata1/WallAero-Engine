@@ -86,13 +86,6 @@ if [ "$INSTALL" -eq 1 ]; then
         osascript -e "quit app \"$APP_NAME\"" >/dev/null 2>&1 || pkill -x "$EXECUTABLE" || true
         sleep 1
     fi
-    # The app was called AiWallpaper before. Its library and settings move over when the new
-    # one first opens, so the copy this script installed under the old name can go.
-    if [ -d "/Applications/AiWallpaper.app" ]; then
-        echo "→ Removing the old /Applications/AiWallpaper.app…"
-        pgrep -x AiWallpaper >/dev/null && { osascript -e 'quit app "AiWallpaper"' >/dev/null 2>&1 || pkill -x AiWallpaper || true; sleep 1; }
-        rm -rf "/Applications/AiWallpaper.app"
-    fi
     rm -rf "/Applications/$APP_NAME.app"
     cp -R "$APP" /Applications/
     APP="/Applications/$APP_NAME.app"

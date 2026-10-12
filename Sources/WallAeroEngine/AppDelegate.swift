@@ -51,10 +51,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.run()
             return
         }
-        // The screenshot helper runs next to the copy in use and must not move its data.
-        if ScreenshotMode.outputDirectory == nil {
-            LegacyMigration.run()
-        }
         let delegate = AppDelegate()
         app.delegate = delegate
         withExtendedLifetime(delegate) {

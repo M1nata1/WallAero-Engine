@@ -44,12 +44,6 @@ public final class WallpaperLibrary: ObservableObject {
         return applicationSupport.appendingPathComponent("WallAeroEngine", isDirectory: true)
     }
 
-    /// Where the library lived while the app was called AiWallpaper; see `LegacyData`.
-    public nonisolated static var legacyRootURL: URL {
-        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return applicationSupport.appendingPathComponent("AiWallpaper", isDirectory: true)
-    }
-
     public init(rootURL: URL = WallpaperLibrary.defaultRootURL) {
         self.rootURL = rootURL
         mediaURL = rootURL.appendingPathComponent("Media", isDirectory: true)
