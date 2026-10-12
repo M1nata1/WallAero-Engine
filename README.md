@@ -53,7 +53,7 @@ xattr -dr com.apple.quarantine "/Applications/WallAero Engine.app"
 - **Controls:** a menu bar icon (pause, next wallpaper, quick pick), a library window with drag and drop, and Open With → WallAero Engine in Finder.
 - **Search and tags:** find a wallpaper by its name, give wallpapers tags of your own, sort the tags into categories and tick the ones the library should show.
 - **Settings of every wallpaper:** scaling (fill / fit / stretch), which part stays in view when filling crops the picture, speed and music. A scene adds the settings its author put up for changing.
-- **Settings of the app:** sound and volume, open at login, and the first frame as the regular macOS wallpaper (shown on the lock screen and in Mission Control).
+- **Settings of the app:** sound and volume, open at login, and the wallpaper on the lock screen (as a still picture, which Mission Control shows too).
 - **Interface language:** English or Russian, following the system language; any other language gets English. To change it for WallAero Engine alone, go to System Settings → General → Language & Region → Applications.
 
 ## Building from source
@@ -113,7 +113,7 @@ A scene is a wallpaper made of a background and layers on top of it. Select a vi
 - **Every layer** has a position, a size, a rotation, an opacity, a blending mode, a shadow and an animation: pulse, float, spin or blink.
 - **A code layer** holds any HTML, CSS and JavaScript inside the layer's box. Its script gets the variables `layer` (the layer's element) and `scene` (the whole scene).
 - **Variables.** Add Variable puts a value up for changing without the editor: a color, a number with limits, a switch, a text or a list of options. It shows in the wallpaper's settings under the title you give it, and the scene reads it by its name in code: `var(--name)` in CSS, `wallaero.variables.name` in JavaScript, `{name}` in a text layer. A change shows on the desktop at once; a script can follow it with the `wallaero:variables` event.
-- **Lock screen.** With "Use the first frame as the macOS wallpaper" on, the lock screen shows a still picture of the scene, on which a clock would be stuck at one time. Every layer has a Show on Lock Screen switch: turn it off and the layer is left out of that picture.
+- **Lock screen.** With "Show the wallpaper on the lock screen" on, the lock screen shows a still picture of the scene, on which a clock would be stuck at one time. Every layer has a Show on Lock Screen switch: turn it off and the layer is left out of that picture.
 - **Saving.** Changes are saved by themselves and show on the desktop at once if the scene is the current wallpaper. ⌘Z undoes, ⇧⌘Z redoes.
 
 A scene is an ordinary web page. The folder button in the editor's toolbar opens its files:
@@ -242,4 +242,4 @@ log stream --predicate 'subsystem == "com.fadevec.WallAeroEngine"'
 ## Limitations
 
 - macOS cannot play WebM, MKV or AVI out of the box — convert them to MP4 (H.264 or HEVC), for example with HandBrake.
-- Live wallpapers do not play on the lock screen: macOS does not let third-party apps show anything there. The first frame is shown instead if "Use the first frame as the macOS wallpaper" is on.
+- Live wallpapers do not play on the lock screen: macOS does not let third-party apps show anything there. The first frame is shown instead if "Show the wallpaper on the lock screen" is on.

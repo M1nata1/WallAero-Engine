@@ -77,7 +77,7 @@
 "Pause in Low Power Mode" = "Ставить на паузу в режиме энергосбережения";
 "General" = "Основные";
 "Open at login" = "Открывать при входе в систему";
-"Use the first frame as the macOS wallpaper" = "Использовать первый кадр как обои macOS";
+"Show the wallpaper on the lock screen" = "Показывать обои на экране блокировки";
 "Library folder" = "Папка библиотеки";
 
 /* Menus */

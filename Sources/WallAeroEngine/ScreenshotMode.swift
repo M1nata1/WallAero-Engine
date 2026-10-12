@@ -84,7 +84,8 @@ enum ScreenshotMode {
             state.showsSettings = true
             state.settingsTab = .wallpaper
             await shoot(AnyView(mainView), title: "WallAero Engine", size: NSSize(width: 1180, height: 700),
-                        to: directory.appendingPathComponent("library.png")) { _ in
+                        to: directory.appendingPathComponent("library.png")) { window in
+                scrollSettings(in: window, toEnd: false)
                 state.showsTagFilter = showsTags
             }
             state.showsTagFilter = false
@@ -92,7 +93,7 @@ enum ScreenshotMode {
             await shoot(AnyView(mainView), title: "WallAero Engine", size: NSSize(width: 1180, height: 760),
                         to: directory.appendingPathComponent("settings.png")) { window in
                 if showsEnd {
-                    scrollSettingsToEnd(in: window)
+                    scrollSettings(in: window, toEnd: true)
                 }
             }
             NSApp.terminate(nil)
@@ -109,7 +110,7 @@ enum ScreenshotMode {
         window.makeKeyAndOrderFront(nil)
         try? await Task.sleep(nanoseconds: 700_000_000)
         if !CommandLine.arguments.contains("--settings-top") {
-            scrollSettingsToEnd(in: window)
+            scrollSettings(in: window, toEnd: true)
         }
         for second in 1...max(1, seconds) {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -195,8 +196,10 @@ enum ScreenshotMode {
         window.close()
     }
 
-    /// Scrolls whatever scrolls in the right half of the window, the settings, to its end.
-    private static func scrollSettingsToEnd(in window: NSWindow) {
+    /// Scrolls whatever scrolls in the right half of the window, the settings, to its end or
+    /// back to its start. The settings sometimes open a little way down; a picture of how the
+    /// window opens is taken from their start.
+    private static func scrollSettings(in window: NSWindow, toEnd: Bool) {
         guard let content = window.contentView else { return }
         func scrollViews(in view: NSView) -> [NSScrollView] {
             view.subviews.flatMap { subview in
@@ -206,7 +209,8 @@ enum ScreenshotMode {
         for scrollView in scrollViews(in: content) where scrollView.convert(scrollView.bounds, to: nil).minX > content.bounds.midX {
             guard let document = scrollView.documentView else { continue }
             let end = max(0, document.frame.height - scrollView.contentView.bounds.height)
-            scrollView.contentView.scroll(to: NSPoint(x: 0, y: document.isFlipped ? end : 0))
+            let atEnd = document.isFlipped ? end : 0
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: toEnd ? atEnd : end - atEnd))
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
     }

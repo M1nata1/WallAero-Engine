@@ -67,7 +67,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-                Toggle("Use the first frame as the macOS wallpaper", isOn: $preferences.setsSystemWallpaper)
+                Toggle("Show the wallpaper on the lock screen", isOn: $preferences.setsSystemWallpaper)
                 LabeledContent("Library folder") {
                     Button("Show in Finder") {
                         NSWorkspace.shared.open(library.rootURL)
