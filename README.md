@@ -44,7 +44,7 @@ xattr -dr com.apple.quarantine "/Applications/WallAero Engine.app"
 
 You need Xcode 15 or later and macOS 13 Ventura or later. With only the Command Line Tools (Swift 5.9+), universal builds are not available — use `--native`.
 
-For the look of macOS 26, build with Xcode 26: macOS shows it only to apps built with its SDK. Older tools build the app too, and macOS 26 then draws it the way earlier systems do.
+For the look of macOS 26, build with Xcode 26 or later: macOS shows it only to apps built with its SDK. Older tools build the app too, and macOS 26 then draws it the way earlier systems do. `scripts/build.sh` ends by saying which SDK the app carries. Some tools leave that mark at the oldest macOS the app runs on instead of the SDK they built with; the script then puts the right one in.
 
 The app is universal: macOS runs the version for its own processor, Apple silicon or Intel.
 
@@ -59,7 +59,7 @@ scripts/screenshots.sh        # retake the README screenshots in both languages 
 
 The app is signed ad hoc, so a copy built on your own Mac opens right away, without a warning.
 
-`swift run WallAeroEngine` and an editor's Run button start the program without the app around it. That is enough to try a change, but its settings are kept apart from the app's, and macOS takes it for a different program when it asks for permissions.
+`swift run WallAeroEngine` and an editor's Run button start the program without the app around it. That is enough to try a change, but its settings are kept apart from the app's, and macOS takes it for a different program when it asks for permissions. Nothing corrects the SDK mark of such a run, so with tools that leave it wrong the program looks on macOS 26 as it does on earlier systems.
 
 ## Usage
 

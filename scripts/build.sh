@@ -47,6 +47,25 @@ cp Resources/Info.plist "$APP/Contents/"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp -R Resources/*.lproj "$APP/Contents/Resources/"
 
+# macOS goes by the SDK version stamped into the app: on macOS 26 an app stamped with an earlier
+# SDK is drawn in the look of the earlier systems, whatever its code says. Some tools do not
+# stamp the SDK they built with and leave the oldest macOS the app runs on in its place (seen
+# with Swift 6.4 and the macOS 27 SDK: "sdk 13.0"). The app was built against the SDK the tools
+# report, so that one is stamped in.
+BINARY="$APP/Contents/MacOS/$EXECUTABLE"
+stamp() { xcrun vtool -show-build "$BINARY" 2>/dev/null | awk -v key="$1" '$1 == key { print $2; exit }'; }
+STAMPED_SDK="$(stamp sdk)"
+OLDEST_OS="$(stamp minos)"
+BUILT_WITH_SDK="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || true)"
+if [ -n "$BUILT_WITH_SDK" ] && [ -n "$STAMPED_SDK" ] && [ "$STAMPED_SDK" = "$OLDEST_OS" ] && [ "$STAMPED_SDK" != "$BUILT_WITH_SDK" ]; then
+    echo "→ Stamping the macOS $BUILT_WITH_SDK SDK (the tools left $STAMPED_SDK there)…"
+    # The tool warns that the signature is no longer good; the app is signed right below.
+    xcrun vtool -set-build-version macos "$OLDEST_OS" "$BUILT_WITH_SDK" -replace -output "$BINARY.stamped" "$BINARY" \
+        2> >(grep -v "code signature will be invalid" >&2)
+    mv "$BINARY.stamped" "$BINARY"
+    chmod +x "$BINARY"
+fi
+
 echo "→ Signing (ad hoc)…"
 codesign --force --sign - --timestamp=none "$APP"
 
@@ -78,3 +97,14 @@ if [ "$INSTALL" -eq 1 ]; then
 fi
 
 echo "✓ $APP"
+
+# What macOS will go by, said aloud, so that nobody has to wonder why the same sources look
+# different on two Macs.
+STAMPED_SDK="$(xcrun vtool -show-build "$APP/Contents/MacOS/$EXECUTABLE" 2>/dev/null | awk '$1 == "sdk" { print $2; exit }')"
+if [ -n "$STAMPED_SDK" ]; then
+    echo "  built with the macOS $STAMPED_SDK SDK"
+    if [ "${STAMPED_SDK%%.*}" -lt 26 ]; then
+        echo "! On macOS 26 this app will look as on earlier systems: the new look needs the macOS 26 SDK."
+        echo "  Install Xcode 26 or later (or its Command Line Tools) and build again."
+    fi
+fi
