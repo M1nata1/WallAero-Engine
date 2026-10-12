@@ -39,7 +39,9 @@ if [ ! -f Resources/AppIcon.icns ]; then
     swift scripts/make-icon.swift Resources/AppIcon.icns
 fi
 
-echo "→ Assembling $APP…"
+# Braces around the name: in a terminal with a UTF-8 locale the bash that comes with macOS takes
+# the first byte of a character like "…" right after a name for a part of the name.
+echo "→ Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/$EXECUTABLE" "$APP/Contents/MacOS/"
