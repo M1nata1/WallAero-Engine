@@ -1,0 +1,3509 @@
+import Foundation
+
+/// The player of Wallpaper Engine's own scenes: the script a scene's page loads to draw one as
+/// its background. It is written into the folder of every scene that holds such a scene, next
+/// to the runtime, and rewritten when the app has a newer one. See `WallpaperEngineScene` for
+/// how a scene's files get there.
+public enum WallpaperEngineRuntime {
+    public static let fileName = "engine.js"
+
+    /// The script. While the player is being worked on it can be taken from a file instead,
+    /// named by `WALLAERO_ENGINE_JS`, so that a change shows without building the app.
+    public static var script: String {
+        #if DEBUG
+        if let path = ProcessInfo.processInfo.environment["WALLAERO_ENGINE_JS"],
+           let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            return text
+        }
+        #endif
+        return source
+    }
+
+    static let source = #"""
+    // WallAero Engine: the player of Wallpaper Engine's own scenes.
+    // Generated and rewritten when the app updates.
+    //
+    // A scene of Wallpaper Engine's is a list of objects on a canvas: pictures, each with a chain of
+    // effects drawn by shaders; particles; sounds. The scene's own files say all of it — they lie in
+    // the table the page loads before this script — and this draws them with WebGL. The shaders are
+    // the scene's own, written in Wallpaper Engine's dialect of GLSL; they are translated to the
+    // GLSL this browser compiles the way Wallpaper Engine itself does it on phones. What a scene
+    // leaves to Wallpaper Engine — the headers its shaders include, the textures it names without
+    // bringing them — is made here.
+    (function () {
+      'use strict';
+
+      // What the player has to say of the scene: what it left out, and why.
+      var notes = [];
+      function note(text) {
+        if (notes.length < 100 && notes.indexOf(text) < 0) notes.push(text);
+      }
+
+      // ------------------------------------------------------------------ values
+
+      // The wallpaper's settings as they are set now, by the names the scene knows them under.
+      var properties = {};
+
+      // A value as a scene gives it. One that a setting of the wallpaper, an animation or a script
+      // stands behind is written as an object with the value inside; a setting, if the wallpaper
+      // has it, takes the place of that value. A setting may also stand behind a yes or no by
+      // being at one certain choice.
+      function plain(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value) || !('value' in value || 'user' in value)) return value;
+        var user = value.user;
+        var name = user && typeof user === 'object' ? user.name : user;
+        if (typeof name === 'string' && Object.prototype.hasOwnProperty.call(properties, name)) {
+          var given = properties[name];
+          if (user && typeof user === 'object' && user.condition !== undefined) return String(given) === String(user.condition);
+          return given;
+        }
+        return value.value;
+      }
+
+      function number(value, fallback) {
+        value = plain(value);
+        if (typeof value === 'number' && isFinite(value)) return value;
+        if (typeof value === 'string' && value.trim() !== '' && isFinite(Number(value))) return Number(value);
+        if (typeof value === 'boolean') return value ? 1 : 0;
+        return fallback;
+      }
+
+      // Several numbers written as one text, "990.000 540.000 0.000", or one number for them all.
+      function numbers(value, count, fallback) {
+        value = plain(value);
+        var list = [];
+        if (typeof value === 'number') {
+          for (var i = 0; i < count; i++) list.push(value);
+        } else if (typeof value === 'string') {
+          list = value.trim().split(/\s+/).map(Number).filter(function (n) { return isFinite(n); });
+        } else if (Array.isArray(value)) {
+          list = value.map(Number).filter(function (n) { return isFinite(n); });
+        }
+        var result = [];
+        for (var j = 0; j < count; j++) {
+          result.push(j < list.length ? list[j] : (Array.isArray(fallback) ? fallback[j] : fallback));
+        }
+        return result;
+      }
+
+      function flag(value, fallback) {
+        value = plain(value);
+        if (value === 'true' || value === '1') return true;
+        if (value === 'false' || value === '0') return false;
+        return typeof value === 'boolean' ? value : (typeof value === 'number' ? value !== 0 : fallback);
+      }
+
+      function key(name) {
+        return String(name).replace(/\\/g, '/').toLowerCase();
+      }
+
+      // ------------------------------------------------------------------ headers
+      //
+      // What the shaders of a scene include and Wallpaper Engine keeps to itself. These are written
+      // anew to the same names; a function a shader calls that is not here fails to compile, and
+      // the effect it belongs to is left out.
+
+      var BLENDS = [
+        // 1–5: darker
+        'min(A, B)',
+        'A * B',
+        '1.0 - min(vec3(1.0), (1.0 - A) / max(B, vec3(0.0001)))',
+        'max(A + B - 1.0, vec3(0.0))',
+        '(dot(A, vec3(0.299, 0.587, 0.114)) < dot(B, vec3(0.299, 0.587, 0.114)) ? A : B)',
+        // 6–10: lighter
+        'max(A, B)',
+        '1.0 - (1.0 - A) * (1.0 - B)',
+        'min(vec3(1.0), A / max(1.0 - B, vec3(0.0001)))',
+        'A + B',
+        '(dot(A, vec3(0.299, 0.587, 0.114)) > dot(B, vec3(0.299, 0.587, 0.114)) ? A : B)',
+        // 11–17: contrast
+        'mix(2.0 * A * B, 1.0 - 2.0 * (1.0 - A) * (1.0 - B), step(0.5, A))',
+        'mix(2.0 * A * B + A * A * (1.0 - 2.0 * B), sqrt(A) * (2.0 * B - 1.0) + 2.0 * A * (1.0 - B), step(0.5, B))',
+        'mix(2.0 * A * B, 1.0 - 2.0 * (1.0 - A) * (1.0 - B), step(0.5, B))',
+        'mix(1.0 - min(vec3(1.0), (1.0 - A) / max(2.0 * B, vec3(0.0001))), min(vec3(1.0), A / max(2.0 * (1.0 - B), vec3(0.0001))), step(0.5, B))',
+        'clamp(A + 2.0 * B - 1.0, 0.0, 1.0)',
+        'mix(min(A, 2.0 * B), max(A, 2.0 * B - 1.0), step(0.5, B))',
+        'step(vec3(1.0), A + B)',
+        // 18–20: difference
+        'abs(A - B)',
+        'A + B - 2.0 * A * B',
+        'max(A - B, vec3(0.0))',
+        // 21–25
+        'min(vec3(1.0), A * A / max(1.0 - B, vec3(0.0001)))',
+        'min(vec3(1.0), B * B / max(1.0 - A, vec3(0.0001)))',
+        'min(A, B) - max(A, B) + 1.0',
+        '(A + B) * 0.5',
+        '1.0 - abs(1.0 - A - B)'
+      ];
+
+      var HEADERS = {
+        'common.h': [
+          '#define M_PI 3.14159265359',
+          '#define M_PI_HALF 1.57079632679',
+          '#define M_PI_2 6.28318530718',
+          '#define SQRT_2 1.41421356237',
+          '#define SQRT_3 1.73205080756',
+          'vec3 hsv2rgb(vec3 c) {',
+          '  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);',
+          '  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);',
+          '  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);',
+          '}',
+          'vec3 rgb2hsv(vec3 c) {',
+          '  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);',
+          '  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));',
+          '  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));',
+          '  float d = q.x - min(q.w, q.y);',
+          '  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1.0e-10)), d / (q.x + 1.0e-10), q.x);',
+          '}',
+          'vec2 rotateVec2(vec2 v, float r) {',
+          '  vec2 cs = vec2(cos(r), sin(r));',
+          '  return vec2(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x);',
+          '}',
+          'float greyscale(vec3 color) { return dot(color, vec3(0.299, 0.587, 0.114)); }'
+        ].join('\n'),
+
+        // The blend modes go by number, in the order image editors list them.
+        'common_blending.h': ['vec3 wallaeroBlend(vec3 A, vec3 B) {'].concat(BLENDS.map(function (formula, index) {
+          return '#if BLENDMODE == ' + (index + 1) + '\n  return ' + formula + ';\n#endif';
+        })).concat([
+          '  return B;',
+          '}',
+          'vec3 ApplyBlending(float blendMode, vec3 A, vec3 B, float opacity) {',
+          '  return mix(A, wallaeroBlend(A, B), opacity);',
+          '}'
+        ]).join('\n'),
+
+        // The mapping of the unit square onto any four-cornered shape, as a matrix.
+        'common_perspective.h': [
+          'mat3 squareToQuad(vec2 p0, vec2 p1, vec2 p2, vec2 p3) {',
+          '  vec2 d1 = p1 - p2;',
+          '  vec2 d2 = p3 - p2;',
+          '  vec2 sum = p0 - p1 + p2 - p3;',
+          '  float det = d1.x * d2.y - d2.x * d1.y;',
+          '  float g = 0.0;',
+          '  float h = 0.0;',
+          '  if (abs(det) > 1.0e-10) {',
+          '    g = (sum.x * d2.y - d2.x * sum.y) / det;',
+          '    h = (d1.x * sum.y - sum.x * d1.y) / det;',
+          '  }',
+          '  return mat3(p1.x - p0.x + g * p1.x, p1.y - p0.y + g * p1.y, g,',
+          '              p3.x - p0.x + h * p3.x, p3.y - p0.y + h * p3.y, h,',
+          '              p0.x, p0.y, 1.0);',
+          '}'
+        ].join('\n'),
+
+        'common_fragment.h': [
+          'vec3 DecompressNormal(vec4 normal) {',
+          '  vec2 xy = normal.ag * 2.0 - 1.0;',
+          '  return vec3(xy, sqrt(clamp(1.0 - dot(xy, xy), 0.0, 1.0)));',
+          '}',
+          'vec4 DecompressNormalWithMask(vec4 normal) {',
+          '  vec2 xy = normal.ag * 2.0 - 1.0;',
+          '  return vec4(xy, sqrt(clamp(1.0 - dot(xy, xy), 0.0, 1.0)), normal.r);',
+          '}',
+          'float ConvertSampleR8(vec4 color) { return color.r; }',
+          'vec4 ConvertTexture0Format(vec4 color) { return color; }'
+        ].join('\n'),
+
+        'common_vertex.h': [
+          'mat3 BuildTangentSpace(vec3 normal, vec4 signedTangent) {',
+          '  vec3 tangent = signedTangent.xyz;',
+          '  vec3 bitangent = cross(normal, tangent) * signedTangent.w;',
+          '  return mat3(tangent, bitangent, normal);',
+          '}',
+          'mat3 BuildTangentSpace(mat3 modelTransform, vec3 normal, vec4 signedTangent) {',
+          '  vec3 tangent = normalize(modelTransform * signedTangent.xyz);',
+          '  vec3 n = normalize(modelTransform * normal);',
+          '  return mat3(tangent, cross(n, tangent) * signedTangent.w, n);',
+          '}'
+        ].join('\n')
+      };
+
+      // ------------------------------------------------------------------ shaders
+      //
+      // A shader of Wallpaper Engine's is GLSL of the old kind with names of its own on top, written
+      // loosely: whole numbers wherever fractions are meant. Wallpaper Engine turns them into the
+      // strict GLSL of phones by making every whole number a fraction, and so does this:
+      //
+      //   – `#include`, `#if` and the like are resolved here, with the switches of the effect;
+      //   – whole numbers and the type for them become fractions, except where the language wants
+      //     a whole number, between square brackets;
+      //   – the old names for inputs and outputs, and Wallpaper Engine's own for functions, become
+      //     the ones of this GLSL.
+
+      // Every switch a shader declares in a comment, `// [COMBO] {...}`, and what its uniforms say
+      // of themselves in theirs.
+      function annotations(source) {
+        var result = { combos: {}, uniforms: {} };
+        source.replace(/\r\n?/g, '\n').split('\n').forEach(function (line) {
+          var combo = /^\s*\/\/\s*\[\s*(?:COMBO|COMBO_OFF|OFF_COMBO)\s*\]\s*(\{.*\})\s*$/.exec(line);
+          if (combo) {
+            try {
+              var declared = JSON.parse(combo[1]);
+              if (declared && declared.combo) result.combos[declared.combo] = number(declared['default'], 0);
+            } catch (error) {}
+            return;
+          }
+          var uniform = /^\s*uniform\s+\w+\s+(\w+)\s*(?:\[[^\]]*\])?\s*;\s*\/\/\s*(\{.*\})\s*$/.exec(line);
+          if (uniform) {
+            try {
+              result.uniforms[uniform[1]] = JSON.parse(uniform[2]);
+            } catch (error) {}
+          }
+        });
+        return result;
+      }
+
+      // Without its comments, and with the line endings of Windows, where these files are written,
+      // made plain.
+      function stripComments(source) {
+        return source.replace(/\r\n?/g, '\n').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, '');
+      }
+
+      // The value of the condition of an `#if`: whole-number arithmetic, comparisons, `defined`.
+      // A name that stands for nothing counts as zero.
+      function evaluate(expression, defines, depth) {
+        var tokens = expression.match(/0[xX][0-9a-fA-F]+|\d+\.?\d*|[A-Za-z_]\w*|&&|\|\||==|!=|<=|>=|[-+*\/%()!<>]/g) || [];
+        var at = 0;
+        function valueOf(name) {
+          if (!(name in defines) || depth > 8) return 0;
+          var text = String(defines[name]).trim();
+          if (text === '') return 1;
+          if (/^-?\d+(\.\d*)?$/.test(text)) return Number(text);
+          return evaluate(text, defines, depth + 1);
+        }
+        function primary() {
+          var token = tokens[at++];
+          if (token === undefined) return 0;
+          if (token === '(') {
+            var inner = or();
+            at++;
+            return inner;
+          }
+          if (token === '!') return primary() ? 0 : 1;
+          if (token === '-') return -primary();
+          if (token === '+') return primary();
+          if (token === 'defined') {
+            var name = tokens[at++];
+            if (name === '(') {
+              name = tokens[at++];
+              at++;
+            }
+            return name in defines ? 1 : 0;
+          }
+          if (/^[A-Za-z_]/.test(token)) return valueOf(token);
+          return /^0[xX]/.test(token) ? parseInt(token, 16) : Number(token);
+        }
+        function product() {
+          var left = primary();
+          while (tokens[at] === '*' || tokens[at] === '/' || tokens[at] === '%') {
+            var operator = tokens[at++];
+            var right = primary();
+            left = operator === '*' ? left * right : (right === 0 ? 0 : (operator === '/' ? Math.trunc(left / right) : left % right));
+          }
+          return left;
+        }
+        function sum() {
+          var left = product();
+          while (tokens[at] === '+' || tokens[at] === '-') {
+            left = tokens[at++] === '+' ? left + product() : left - product();
+          }
+          return left;
+        }
+        function comparison() {
+          var left = sum();
+          while (['<', '>', '<=', '>=', '==', '!='].indexOf(tokens[at]) >= 0) {
+            var operator = tokens[at++];
+            var right = sum();
+            left = (operator === '<' ? left < right : operator === '>' ? left > right : operator === '<=' ? left <= right :
+                    operator === '>=' ? left >= right : operator === '==' ? left === right : left !== right) ? 1 : 0;
+          }
+          return left;
+        }
+        function and() {
+          var left = comparison();
+          while (tokens[at] === '&&') {
+            at++;
+            var right = comparison();
+            left = left && right ? 1 : 0;
+          }
+          return left;
+        }
+        function or() {
+          var left = and();
+          while (tokens[at] === '||') {
+            at++;
+            var right = and();
+            left = left || right ? 1 : 0;
+          }
+          return left;
+        }
+        return or();
+      }
+
+      // Resolves includes and conditions. `defines` is added to by the shader's own `#define`s;
+      // those stay in the text too, for the compiler to put in where they are used.
+      function preprocess(source, defines, files, included) {
+        var out = [];
+        var stack = []; // of { outer: whether the lines around are live, taken: a branch was, live }
+        function live() {
+          return stack.length === 0 || stack[stack.length - 1].live;
+        }
+        stripComments(source).replace(/\\\r?\n/g, ' ').split('\n').forEach(function (line) {
+          var directive = /^\s*#\s*(\w+)\s*(.*)$/.exec(line);
+          if (!directive) {
+            if (live()) out.push(line);
+            return;
+          }
+          var name = directive[1];
+          var rest = directive[2].trim();
+          var top = stack[stack.length - 1];
+          if (name === 'if' || name === 'ifdef' || name === 'ifndef') {
+            var outer = live();
+            var met = outer && (name === 'if' ? evaluate(rest, defines, 0) !== 0 : (rest.split(/\s/)[0] in defines) === (name === 'ifdef'));
+            stack.push({ outer: outer, taken: met, live: met });
+          } else if (name === 'elif' && top) {
+            top.live = top.outer && !top.taken && evaluate(rest, defines, 0) !== 0;
+            top.taken = top.taken || top.live;
+          } else if (name === 'else' && top) {
+            top.live = top.outer && !top.taken;
+            top.taken = true;
+          } else if (name === 'endif') {
+            stack.pop();
+          } else if (!live()) {
+            return;
+          } else if (name === 'include') {
+            var header = key(rest.replace(/["<>]/g, '').trim());
+            if (included[header]) return;
+            included[header] = true;
+            var text = HEADERS[header];
+            if (text === undefined) text = files['shaders/' + header];
+            if (text === undefined) {
+              // Left for the compiler to trip over: the effect is then left out, with the reason.
+              out.push('#error the header ' + header + ' is not known');
+              return;
+            }
+            out.push(preprocess(text, defines, files, included));
+          } else if (name === 'define') {
+            var define = /^(\w+)(\([^)]*\))?\s*(.*)$/.exec(rest);
+            if (!define) return;
+            // One with arguments is the compiler's to deal with; a plain one is also kept here,
+            // for the conditions that ask about it.
+            if (!define[2]) defines[define[1]] = define[3];
+            out.push('#define ' + define[1] + (define[2] || '') + ' ' + define[3]);
+          } else if (name === 'undef') {
+            delete defines[rest.split(/\s/)[0]];
+            out.push('#undef ' + rest);
+          }
+          // #pragma, #extension, #version and the like have no meaning here.
+        });
+        return out.join('\n');
+      }
+
+      // Names this GLSL keeps for itself that a shader may have taken for something of its own.
+      var TAKEN = ['sample', 'input', 'output', 'filter', 'common', 'partition', 'active', 'smooth', 'flat', 'half', 'fixed',
+                   'packed', 'resource', 'shared', 'texture', 'cast', 'namespace', 'using', 'external', 'interface', 'long',
+                   'short', 'double', 'unsigned', 'superp', 'patch', 'centroid', 'layout', 'precise', 'inline', 'noinline',
+                   'static', 'extern', 'public', 'union', 'enum', 'typedef', 'template', 'this', 'goto', 'class', 'asm'];
+      var NAMES = {
+        texSample2D: 'texture', texSample2DLod: 'textureLod', texture2D: 'texture', texture2DLod: 'textureLod',
+        textureCube: 'texture', frac: 'fract', atan2: 'atan', lerp: 'mix', ddx: 'dFdx', ddy: 'dFdy',
+        ivec2: 'vec2', ivec3: 'vec3', ivec4: 'vec4', uvec2: 'vec2', uvec3: 'vec3', uvec4: 'vec4',
+        float2: 'vec2', float3: 'vec3', float4: 'vec4', float3x3: 'mat3', float4x4: 'mat4', gl_FragColor: 'wallaero_FragColor'
+      };
+      var TOKEN = /([A-Za-z_]\w*)|((?:0[xX][0-9a-fA-F]+|\d+\.?\d*(?:[eE][-+]?\d+)?|\.\d+(?:[eE][-+]?\d+)?)[fFuUlL]*)|(\s+)|([\s\S])/g;
+
+      function wholeNumber(text) {
+        return /^(0[xX][0-9a-fA-F]+|\d+)[uUlL]*$/.test(text);
+      }
+
+      // A number as a fraction.
+      function fraction(text) {
+        text = text.replace(/[fFuUlL]+$/, '');
+        if (/^0[xX]/.test(text)) return parseInt(text, 16) + '.0';
+        if (/[eE]/.test(text)) return text;
+        if (text.indexOf('.') < 0) return text + '.0';
+        if (text.charAt(0) === '.') return '0' + text;
+        return text.charAt(text.length - 1) === '.' ? text + '0' : text;
+      }
+
+      // Turns the text between `from` and `to` of the tokens into this GLSL.
+      function rewrite(tokens, from, to, stage) {
+        var out = '';
+        for (var i = from; i < to; i++) {
+          var token = tokens[i];
+          if (token.kind === 'name') {
+            var name = token.text;
+            if (name === 'int' || name === 'uint') {
+              // As a type it is the type of fractions; called, it cuts the fraction off a number.
+              var next = i + 1;
+              while (next < to && tokens[next].kind === 'space') next++;
+              out += next < to && tokens[next].text === '(' ? 'trunc' : 'float';
+            } else if (name === 'attribute') {
+              out += 'in';
+            } else if (name === 'varying') {
+              out += stage === 'vertex' ? 'out' : 'in';
+            } else if (name === 'main' && stage === 'vertex') {
+              out += 'wallaero_main';
+            } else if (NAMES.hasOwnProperty(name)) {
+              out += NAMES[name];
+            } else if (TAKEN.indexOf(name) >= 0) {
+              // A shader written for this GLSL already may call `texture` as the function it is.
+              var after = i + 1;
+              while (after < to && tokens[after].kind === 'space') after++;
+              out += name === 'texture' && after < to && tokens[after].text === '(' ? name : name + '_';
+            } else {
+              out += name;
+            }
+          } else if (token.kind === 'number') {
+            out += fraction(token.text);
+          } else if (token.text === '[') {
+            // What is between square brackets counts things, and stays a whole number.
+            var depth = 1;
+            var close = i + 1;
+            while (close < to && depth > 0) {
+              if (tokens[close].text === '[') depth++;
+              if (tokens[close].text === ']') depth--;
+              close++;
+            }
+            var inside = tokens.slice(i + 1, close - 1).filter(function (inner) { return inner.kind !== 'space'; });
+            if (inside.length === 0) {
+              out += '[]';
+            } else if (inside.length === 1 && inside[0].kind === 'number' && wholeNumber(inside[0].text)) {
+              out += '[' + parseInt(inside[0].text, /^0[xX]/.test(inside[0].text) ? 16 : 10) + ']';
+            } else {
+              out += '[int(' + rewrite(tokens, i + 1, close - 1, stage) + ')]';
+            }
+            i = close - 1;
+          } else {
+            out += token.text;
+          }
+        }
+        return out;
+      }
+
+      function tokenize(text) {
+        var tokens = [];
+        var match;
+        TOKEN.lastIndex = 0;
+        while ((match = TOKEN.exec(text)) !== null) {
+          tokens.push({ kind: match[1] ? 'name' : match[2] ? 'number' : match[3] ? 'space' : 'other', text: match[0] });
+        }
+        return tokens;
+      }
+
+      // The whole of a shader, ready to compile. `defines` are the switches of the effect.
+      function translate(source, stage, defines, files) {
+        var table = { GLSL: 1 };
+        Object.keys(defines).forEach(function (name) { table[name] = defines[name]; });
+        var pieces = [];
+        var plainLines = [];
+        // Lines that are not directives are rewritten together: a bracket may open on one line
+        // and close on another.
+        function flush() {
+          if (!plainLines.length) return;
+          var tokens = tokenize(plainLines.join('\n'));
+          pieces.push(rewrite(tokens, 0, tokens.length, stage));
+          plainLines = [];
+        }
+        preprocess(source, table, files, {}).split('\n').forEach(function (line) {
+          var define = /^(\s*#define\s+\w+(?:\([^)]*\))?)(.*)$/.exec(line);
+          if (define) {
+            flush();
+            var tokens = tokenize(define[2]);
+            pieces.push(define[1] + rewrite(tokens, 0, tokens.length, stage));
+          } else if (/^\s*#/.test(line)) {
+            flush();
+            pieces.push(line);
+          } else {
+            plainLines.push(line);
+          }
+        });
+        flush();
+
+        var head = [
+          '#version 300 es',
+          'precision highp float;',
+          'precision highp int;',
+          'precision highp sampler2D;',
+          '#define mul(x, y) ((y) * (x))',
+          '#define saturate(x) clamp(x, 0.0, 1.0)',
+          '#define CAST2(x) vec2(x)',
+          '#define CAST3(x) vec3(x)',
+          '#define CAST4(x) vec4(x)',
+          '#define CAST3X3(x) mat3(x)',
+          '#define fmod(x, y) ((x) - (y) * trunc((x) / (y)))',
+          '#define log10(x) (log2(x) * 0.30102999566)'
+        ];
+        // The switches are also names a shader may use as numbers.
+        Object.keys(defines).forEach(function (name) {
+          head.push('#define ' + name + ' ' + fraction(String(Number(defines[name]) || 0)));
+        });
+        var tail = [];
+        if (stage === 'vertex') {
+          // A picture is kept with its top row first, in a texture and in what is drawn into one
+          // alike; the shader is written for a screen that has its top row at the top.
+          head.push('uniform float wallaero_Flip;');
+          tail.push('void main() {', '  wallaero_main();', '  gl_Position.y *= wallaero_Flip;', '}');
+        } else {
+          head.push('out vec4 wallaero_FragColor;');
+        }
+        return head.concat(pieces, tail).join('\n') + '\n';
+      }
+
+      // ------------------------------------------------------------------ values that change
+      //
+      // A value of a scene — where a picture is, how see-through, what a text says — is written
+      // plainly, or with something behind it: a setting of the wallpaper, an animation that changes
+      // it over time, a script that works it out. All three come as an object with the plain value
+      // inside, which is what `plain` gives; the rest is done here.
+
+      // An animation of a value: for each of its numbers a list of moments, with the number at
+      // each and how the curve leaves one moment and arrives at the next.
+      //
+      //   { c0: [{ frame, value, front: { enabled, x, y }, back: { enabled, x, y } }, …], c1: …,
+      //     options: { fps, length, mode } }
+      function curveOf(animation) {
+        if (!animation || typeof animation !== 'object') return null;
+        var channels = [];
+        Object.keys(animation).forEach(function (name) {
+          var channel = /^c(\d+)$/.exec(name);
+          if (!channel || !Array.isArray(animation[name])) return;
+          var keys = animation[name].filter(function (each) { return each && isFinite(Number(each.frame)) && isFinite(Number(each.value)); })
+            .map(function (each) {
+              function handle(said) {
+                return said && said.enabled ? [Number(said.x) || 0, Number(said.y) || 0] : null;
+              }
+              return { frame: Number(each.frame), value: Number(each.value), front: handle(each.front), back: handle(each.back) };
+            })
+            .sort(function (first, second) { return first.frame - second.frame; });
+          if (keys.length) channels[Number(channel[1])] = keys;
+        });
+        if (!channels.length) return null;
+        var options = animation.options || {};
+        var rate = Number(options.fps) > 0 ? Number(options.fps) : 30;
+        var length = Number(options.length) > 0 ? Number(options.length) : 0;
+        channels.forEach(function (keys) { length = Math.max(length, options.length > 0 ? 0 : keys[keys.length - 1].frame); });
+        var mode = String(options.mode || 'loop').toLowerCase();
+
+        function at(keys, frame) {
+          if (frame <= keys[0].frame) return keys[0].value;
+          var last = keys[keys.length - 1];
+          if (frame >= last.frame) return last.value;
+          var index = 1;
+          while (keys[index].frame < frame) index++;
+          var from = keys[index - 1], to = keys[index];
+          var share = (frame - from.frame) / (to.frame - from.frame || 1);
+          if (!from.front && !to.back) return from.value + (to.value - from.value) * share;
+          // A curve drawn with two handles; the moment along it is looked for, then its height.
+          var x1 = from.frame + (from.front ? from.front[0] : 0), y1 = from.value + (from.front ? from.front[1] : 0);
+          var x2 = to.frame + (to.back ? to.back[0] : 0), y2 = to.value + (to.back ? to.back[1] : 0);
+          function along(first, second, third, fourth, t) {
+            var rest = 1 - t;
+            return rest * rest * rest * first + 3 * rest * rest * t * second + 3 * rest * t * t * third + t * t * t * fourth;
+          }
+          var low = 0, high = 1;
+          for (var step = 0; step < 24; step++) {
+            var middle = (low + high) / 2;
+            if (along(from.frame, x1, x2, to.frame, middle) < frame) low = middle;
+            else high = middle;
+          }
+          return along(from.value, y1, y2, to.value, (low + high) / 2);
+        }
+
+        // The numbers at a moment, in seconds since the scene began; a number the animation
+        // does not have is left as `base` has it.
+        return function (seconds, base) {
+          var frame = seconds * rate;
+          if (length > 0) {
+            if (mode === 'mirror') {
+              frame = frame % (length * 2);
+              if (frame > length) frame = length * 2 - frame;
+            } else if (mode === 'single') {
+              frame = Math.min(frame, length);
+            } else {
+              frame = frame % length;
+            }
+          }
+          var result = base.slice();
+          channels.forEach(function (keys, index) {
+            if (index < result.length) result[index] = at(keys, frame);
+          });
+          return result;
+        };
+      }
+
+      // --- What a script of a scene has to work with ----------------------------------------
+      //
+      // Scripts are written against Wallpaper Engine's own names: vectors, a few helpers, and
+      // objects that stand for the scene, the layer and the app. Those are made here to the same
+      // names, as its documentation gives them.
+
+      function vector(names) {
+        function Vector(first) {
+          var given = arguments;
+          var self = this;
+          if (typeof first === 'string') {
+            var parts = first.trim().split(/\s+/).map(Number);
+            names.forEach(function (name, index) { self[name] = isFinite(parts[index]) ? parts[index] : 0; });
+          } else if (first && typeof first === 'object') {
+            names.forEach(function (name, index) {
+              self[name] = typeof first[name] === 'number' ? first[name] : (typeof given[index] === 'number' && index > 0 ? given[index] : 0);
+            });
+          } else if (given.length <= 1) {
+            // One number stands for them all.
+            names.forEach(function (name) { self[name] = typeof first === 'number' ? first : 0; });
+          } else {
+            names.forEach(function (name, index) { self[name] = typeof given[index] === 'number' ? given[index] : 0; });
+          }
+        }
+        var proto = Vector.prototype;
+        function each(self, other, change) {
+          var result = new Vector(0);
+          names.forEach(function (name) {
+            result[name] = change(self[name], other !== null && typeof other === 'object' ? (typeof other[name] === 'number' ? other[name] : 0) : other);
+          });
+          return result;
+        }
+        function both(change) {
+          return function (other) { return each(this, other === undefined ? 0 : other, change); };
+        }
+        function alone(change) {
+          return function () { return each(this, 0, change); };
+        }
+        proto.copy = alone(function (value) { return value; });
+        proto.add = both(function (value, other) { return value + other; });
+        proto.subtract = both(function (value, other) { return value - other; });
+        proto.multiply = both(function (value, other) { return value * other; });
+        proto.divide = both(function (value, other) { return value / other; });
+        proto.min = both(Math.min);
+        proto.max = both(Math.max);
+        proto.mod = both(function (value, other) { return value - other * Math.floor(value / other); });
+        proto.step = both(function (value, edge) { return value < edge ? 0 : 1; });
+        proto.negate = alone(function (value) { return -value; });
+        proto.abs = alone(Math.abs);
+        proto.sign = alone(Math.sign);
+        proto.round = alone(Math.round);
+        proto.floor = alone(Math.floor);
+        proto.ceil = alone(Math.ceil);
+        proto.fract = alone(function (value) { return value - Math.floor(value); });
+        proto.dot = function (other) {
+          var self = this, sum = 0;
+          names.forEach(function (name) { sum += self[name] * other[name]; });
+          return sum;
+        };
+        proto.lengthSqr = function () { return this.dot(this); };
+        proto.length = function () { return Math.sqrt(this.dot(this)); };
+        proto.distanceSqr = function (other) { return this.subtract(other).lengthSqr(); };
+        proto.distance = function (other) { return this.subtract(other).length(); };
+        proto.normalize = function () {
+          var length = this.length();
+          return length > 0 ? this.divide(length) : this.copy();
+        };
+        proto.equals = function (other) {
+          var self = this;
+          return !!other && names.every(function (name) { return self[name] === other[name]; });
+        };
+        proto.isFinite = function () {
+          var self = this;
+          return names.every(function (name) { return isFinite(self[name]); });
+        };
+        proto.mix = function (other, amount) {
+          var self = this;
+          var result = new Vector(0);
+          names.forEach(function (name) {
+            var share = typeof amount === 'object' ? amount[name] : amount;
+            result[name] = self[name] + (other[name] - self[name]) * share;
+          });
+          return result;
+        };
+        proto.clamp = function (least, most) { return this.max(least).min(most); };
+        proto.smoothStep = function (least, most) {
+          var self = this;
+          var result = new Vector(0);
+          names.forEach(function (name) {
+            var low = typeof least === 'object' ? least[name] : least, high = typeof most === 'object' ? most[name] : most;
+            var share = Math.max(0, Math.min(1, (self[name] - low) / (high - low || 1)));
+            result[name] = share * share * (3 - 2 * share);
+          });
+          return result;
+        };
+        proto.reflect = function (normal) { return this.subtract(normal.multiply(2 * this.dot(normal))); };
+        proto.project = function (other) { return other.multiply(this.dot(other) / (other.lengthSqr() || 1)); };
+        proto.angleBetween = function (other) {
+          return Math.acos(Math.max(-1, Math.min(1, this.dot(other) / ((this.length() * other.length()) || 1)))) * 180 / Math.PI;
+        };
+        proto.toString = function () {
+          var self = this;
+          return names.map(function (name) { return self[name]; }).join(' ');
+        };
+        return Vector;
+      }
+
+      var Vec2 = vector(['x', 'y']);
+      var Vec3 = vector(['x', 'y', 'z']);
+      var Vec4 = vector(['x', 'y', 'z', 'w']);
+      // Angles are in degrees, as everywhere in scripts.
+      Vec2.prototype.angle = function () { return Math.atan2(this.y, this.x) * 180 / Math.PI; };
+      Vec2.prototype.perpendicular = function () { return new Vec2(-this.y, this.x); };
+      Vec2.prototype.rotate = function (angle) {
+        var cos = Math.cos(angle * Math.PI / 180), sin = Math.sin(angle * Math.PI / 180);
+        return new Vec2(this.x * cos - this.y * sin, this.x * sin + this.y * cos);
+      };
+      Vec3.prototype.cross = function (other) {
+        return new Vec3(this.y * other.z - this.z * other.y, this.z * other.x - this.x * other.z, this.x * other.y - this.y * other.x);
+      };
+
+      var MODULES = {
+        WEMath: {
+          smoothStep: function (least, most, value) {
+            var share = Math.max(0, Math.min(1, (value - least) / (most - least || 1)));
+            return share * share * (3 - 2 * share);
+          },
+          mix: function (first, second, share) { return first + (second - first) * share; },
+          deg2rad: Math.PI / 180,
+          rad2deg: 180 / Math.PI
+        },
+        WEVector: {
+          angleVector2: function (angle) { return new Vec2(Math.cos(angle * Math.PI / 180), Math.sin(angle * Math.PI / 180)); },
+          vectorAngle2: function (direction) { return Math.atan2(direction.y, direction.x) * 180 / Math.PI; }
+        },
+        WEColor: {
+          // Colors go from 0 to 1 a part; the hue too.
+          rgb2hsv: function (rgb) {
+            var most = Math.max(rgb.x, rgb.y, rgb.z), least = Math.min(rgb.x, rgb.y, rgb.z);
+            var spread = most - least;
+            var hue = 0;
+            if (spread > 0) {
+              if (most === rgb.x) hue = ((rgb.y - rgb.z) / spread) % 6;
+              else if (most === rgb.y) hue = (rgb.z - rgb.x) / spread + 2;
+              else hue = (rgb.x - rgb.y) / spread + 4;
+            }
+            hue = (hue / 6 + 1) % 1;
+            return new Vec3(hue, most > 0 ? spread / most : 0, most);
+          },
+          hsv2rgb: function (hsv) {
+            function part(shift) {
+              var k = (shift + hsv.x * 6) % 6;
+              return hsv.z - hsv.z * hsv.y * Math.max(0, Math.min(k, 4 - k, 1));
+            }
+            return new Vec3(part(5), part(3), part(1));
+          },
+          normalizeColor: function (rgb) { return new Vec3(rgb.x / 255, rgb.y / 255, rgb.z / 255); },
+          expandColor: function (rgb) { return new Vec3(rgb.x * 255, rgb.y * 255, rgb.z * 255); }
+        }
+      };
+
+      // Anything a script asks of an object that is not made here does nothing and gives
+      // nothing, rather than stopping the script.
+      function lenient(target) {
+        if (typeof Proxy !== 'function') return target;
+        return new Proxy(target, {
+          get: function (object, name) {
+            if (name in object || typeof name !== 'string') return object[name];
+            return function () {};
+          }
+        });
+      }
+
+      // Matrices are not made here; a script that makes one goes on, and gets nothing from it.
+      function Matrix() {
+        return lenient(this);
+      }
+
+      // The settings a script declares for itself: `createScriptProperties().addSlider({…}).finish()`.
+      // Each has a name and a value, and the scene may give another value for it.
+      function scriptSettings(given) {
+        return function () {
+          var values = {};
+          var builder = typeof Proxy === 'function' ? new Proxy({}, {
+            get: function (object, name) {
+              if (name === 'finish') return function () { return values; };
+              return function (said) {
+                if (said && said.name !== undefined) {
+                  values[said.name] = given && said.name in given ? plain(given[said.name]) : said.value;
+                }
+                return builder;
+              };
+            }
+          }) : { finish: function () { return values; } };
+          return builder;
+        };
+      }
+
+      // Turns the text of a script into what it has to offer: the functions the scene calls.
+      // A script is a module; its `export`s are found, and its `import`s of the helpers above
+      // are given those. In Wallpaper Engine a script has the scene to work with and nothing
+      // else, so the page's own names are kept from it; and what it declares is its own, whatever
+      // it is called.
+      var EVENTS = ['init', 'update', 'destroy', 'resizeScreen', 'applyUserProperties', 'applyGeneralSettings',
+                    'cursorEnter', 'cursorLeave', 'cursorMove', 'cursorDown', 'cursorUp', 'cursorClick'];
+      var KEPT_AWAY = ['window', 'document', 'globalThis', 'self', 'top', 'parent', 'frames', 'opener', 'fetch', 'XMLHttpRequest',
+                       'WebSocket', 'EventSource', 'Worker', 'navigator', 'location', 'history', 'indexedDB', 'sessionStorage',
+                       'caches', 'eval', 'Function', 'open', 'postMessage', 'webkit'];
+      function compileScript(source, names, values) {
+        var text = String(source).replace(/\r\n?/g, '\n')
+          .replace(/^\s*import\s+\*\s+as\s+(\w+)\s+from\s+['"](\w+)['"]\s*;?/gm, function (whole, name, module) {
+            return 'var ' + name + ' = __modules.' + module + ' || {};';
+          })
+          .replace(/^\s*import\s+\{([^}]*)\}\s+from\s+['"](\w+)['"]\s*;?/gm, function (whole, list, module) {
+            return 'var {' + list.replace(/\s+as\s+/g, ': ') + '} = __modules.' + module + ' || {};';
+          })
+          .replace(/^(\s*)export\s+(default\s+)?(?=function|var|let|const|class|async)/gm, '$1')
+          .replace(/^\s*export\s*\{[^}]*\}\s*;?/gm, '');
+        var tail = '\n;return {' + EVENTS.map(function (name) {
+          return name + ': typeof ' + name + ' === "function" ? ' + name + ' : null';
+        }).join(', ') + '};';
+        var body = 'return (function () {\n"use strict";\n' + text + tail + '\n}).call(undefined);';
+        return Function.apply(null, names.concat(['__modules'], KEPT_AWAY, [body])).apply(null, values.concat([MODULES]));
+      }
+
+      // ------------------------------------------------------------------ pictures made here
+      //
+      // Textures a scene names without bringing them: Wallpaper Engine has them, a scene's
+      // package does not. They are drawn here to the same purpose — a flat color, noise, the soft
+      // shapes particles are made of — and so look alike, not the same.
+
+      // A value that is the same every time for the same place: noise that does not change from
+      // one start of the wallpaper to the next.
+      function hash(x, y, seed) {
+        var h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed | 0, 2147483647);
+        h = Math.imul(h ^ (h >>> 13), 1274126177);
+        return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+      }
+
+      // Smooth noise that repeats every `period` cells, so that a texture of it tiles.
+      function smoothNoise(x, y, period, seed) {
+        var x0 = Math.floor(x), y0 = Math.floor(y);
+        var fx = x - x0, fy = y - y0;
+        fx = fx * fx * (3 - 2 * fx);
+        fy = fy * fy * (3 - 2 * fy);
+        function corner(cx, cy) {
+          return hash(((cx % period) + period) % period, ((cy % period) + period) % period, seed);
+        }
+        var top = corner(x0, y0) + (corner(x0 + 1, y0) - corner(x0, y0)) * fx;
+        var bottom = corner(x0, y0 + 1) + (corner(x0 + 1, y0 + 1) - corner(x0, y0 + 1)) * fx;
+        return top + (bottom - top) * fy;
+      }
+
+      // Clouds: noise of several sizes laid over one another.
+      function cloudsPixels(size) {
+        var pixels = new Uint8Array(size * size * 4);
+        var least = 1, most = 0;
+        var values = new Float32Array(size * size);
+        for (var y = 0; y < size; y++) {
+          for (var x = 0; x < size; x++) {
+            var value = 0, weight = 0.5, cells = 4;
+            for (var octave = 0; octave < 6; octave++) {
+              value += weight * smoothNoise(x / size * cells, y / size * cells, cells, octave + 1);
+              weight *= 0.5;
+              cells *= 2;
+            }
+            values[y * size + x] = value;
+            least = Math.min(least, value);
+            most = Math.max(most, value);
+          }
+        }
+        for (var i = 0; i < size * size; i++) {
+          var shade = Math.round((values[i] - least) / (most - least) * 255);
+          pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = shade;
+          pixels[i * 4 + 3] = 255;
+        }
+        return pixels;
+      }
+
+      function noisePixels(size) {
+        var pixels = new Uint8Array(size * size * 4);
+        for (var i = 0; i < size * size * 4; i++) {
+          pixels[i] = Math.round(hash(i % (size * 4), Math.floor(i / (size * 4)), 7) * 255);
+        }
+        return pixels;
+      }
+
+      // The shapes of particles, drawn white on nothing; a particle's own color tints them.
+      function spritePixels(name, size) {
+        var canvas = document.createElement('canvas');
+        canvas.width = canvas.height = size;
+        var context = canvas.getContext('2d');
+        var half = size / 2;
+        function glow(x, y, radius, strength) {
+          var gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+          gradient.addColorStop(0, 'rgba(255,255,255,' + strength + ')');
+          gradient.addColorStop(0.4, 'rgba(255,255,255,' + strength * 0.45 + ')');
+          gradient.addColorStop(1, 'rgba(255,255,255,0)');
+          context.fillStyle = gradient;
+          context.fillRect(0, 0, size, size);
+        }
+        if (/fog|smoke|cloud|mist|steam|dust|haze/.test(name)) {
+          // A puff: many soft blots, more of them toward the middle.
+          for (var blot = 0; blot < 40; blot++) {
+            var angle = hash(blot, 1, 3) * Math.PI * 2;
+            var away = Math.pow(hash(blot, 2, 3), 0.8) * half * 0.55;
+            glow(half + Math.cos(angle) * away, half + Math.sin(angle) * away, half * (0.2 + hash(blot, 3, 3) * 0.3), 0.12);
+          }
+        } else if (/rain|drop|streak|line|trail|beam|ray/.test(name)) {
+          var streak = context.createLinearGradient(0, 0, 0, size);
+          streak.addColorStop(0, 'rgba(255,255,255,0)');
+          streak.addColorStop(0.5, 'rgba(255,255,255,0.9)');
+          streak.addColorStop(1, 'rgba(255,255,255,0)');
+          context.fillStyle = streak;
+          context.fillRect(half - size * 0.04, 0, size * 0.08, size);
+        } else if (/star|sparkle|flare|twinkle/.test(name)) {
+          glow(half, half, half * 0.5, 1);
+          context.fillStyle = 'rgba(255,255,255,0.8)';
+          [[1, 0.06], [0.06, 1]].forEach(function (arm) {
+            context.beginPath();
+            context.ellipse(half, half, half * arm[0], half * arm[1], 0, 0, Math.PI * 2);
+            context.fill();
+          });
+        } else if (/leaf|petal|feather|confetti|flake/.test(name)) {
+          context.fillStyle = 'rgba(255,255,255,0.95)';
+          context.beginPath();
+          context.ellipse(half, half, half * 0.85, half * 0.4, Math.PI / 5, 0, Math.PI * 2);
+          context.fill();
+        } else {
+          // A soft round dot: snow, sparks, lights, and whatever has no shape of its own here.
+          glow(half, half, half, 1);
+        }
+        return context.getImageData(0, 0, size, size).data;
+      }
+
+      // ------------------------------------------------------------------ the player
+
+      function play(canvas, scene, settings) {
+        properties = {};
+        Object.keys(settings || {}).forEach(function (name) { properties[name] = settings[name]; });
+        var files = (scene && scene.files) || {};
+        var pictures = (scene && scene.textures) || {};
+        var soundFiles = (scene && scene.sounds) || {};
+        var puppets = (scene && scene.puppets) || {};
+        var stopped = false;
+        var gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false,
+                                               premultipliedAlpha: false, preserveDrawingBuffer: false });
+        if (!gl) {
+          note('this Mac\'s web engine has no WebGL 2; the scene cannot be drawn');
+          return { stop: function () {} };
+        }
+
+        // A file of the scene that holds JSON. The files are written by programs, but by many
+        // versions of them; one that does not parse is treated as missing.
+        function json(name) {
+          var text = files[key(name)];
+          if (typeof text !== 'string') return null;
+          try {
+            return JSON.parse(text);
+          } catch (error) {
+            try {
+              return JSON.parse(text.replace(/,(\s*[}\]])/g, '$1'));
+            } catch (again) {
+              note(name + ' cannot be read');
+              return null;
+            }
+          }
+        }
+
+        // --- Programs ---------------------------------------------------------
+
+        function compile(type, source, what) {
+          var shader = gl.createShader(type);
+          gl.shaderSource(shader, source);
+          gl.compileShader(shader);
+          if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            var problem = (gl.getShaderInfoLog(shader) || '').split('\n')[0];
+            // The line the compiler names, to make the reason readable.
+            var line = /ERROR: \d+:(\d+)/.exec(problem);
+            var text = line ? (source.split('\n')[Number(line[1]) - 1] || '').trim() : '';
+            note(what + ' does not compile: ' + problem.replace(/^ERROR: \d+:\d+: /, '') + (text ? ' — in “' + text.slice(0, 80) + '”' : ''));
+            gl.deleteShader(shader);
+            return null;
+          }
+          return shader;
+        }
+
+        // A program with what it takes: its uniforms by name, with their kinds.
+        function link(vertexSource, fragmentSource, what) {
+          var vertex = compile(gl.VERTEX_SHADER, vertexSource, what + ' (vertex)');
+          var fragment = vertex && compile(gl.FRAGMENT_SHADER, fragmentSource, what + ' (fragment)');
+          if (!vertex || !fragment) return null;
+          var program = gl.createProgram();
+          gl.attachShader(program, vertex);
+          gl.attachShader(program, fragment);
+          // The same places in every program, so that one shape serves them all.
+          ['a_Position', 'a_TexCoord', 'a_Place', 'a_Color', 'a_Frame', 'a_Spot', 'a_Uv'].forEach(function (name, index) {
+            gl.bindAttribLocation(program, index, name);
+          });
+          gl.linkProgram(program);
+          gl.deleteShader(vertex);
+          gl.deleteShader(fragment);
+          if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            note(what + ' does not link: ' + (gl.getProgramInfoLog(program) || '').split('\n')[0]);
+            gl.deleteProgram(program);
+            return null;
+          }
+          var uniforms = {};
+          var count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+          for (var i = 0; i < count; i++) {
+            var info = gl.getActiveUniform(program, i);
+            var name = info.name.replace(/\[0\]$/, '');
+            uniforms[name] = { location: gl.getUniformLocation(program, info.name), type: info.type, size: info.size };
+          }
+          return { program: program, uniforms: uniforms };
+        }
+
+        // --- Shapes -----------------------------------------------------------
+
+        // The rectangle every pass of an effect is drawn as: the corners of the screen, each with
+        // the corner of the picture that belongs there, the top left one first.
+        var passShape = gl.createVertexArray();
+        gl.bindVertexArray(passShape);
+        var passBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, passBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+          -1, 1, 0, 0, 0,
+          1, 1, 0, 1, 0,
+          -1, -1, 0, 0, 1,
+          1, -1, 0, 1, 1
+        ]), gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
+        gl.enableVertexAttribArray(1);
+        gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 12);
+        gl.bindVertexArray(null);
+
+        // --- Textures ---------------------------------------------------------
+
+        var loading = 0;       // pictures still on their way
+        var textureCache = {};
+
+        function newTexture(clamp, smooth) {
+          var texture = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, clamp ? gl.CLAMP_TO_EDGE : gl.REPEAT);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, clamp ? gl.CLAMP_TO_EDGE : gl.REPEAT);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+          return texture;
+        }
+
+        function fromPixels(pixels, size, clamp) {
+          var texture = newTexture(clamp, true);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+          gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(pixels.buffer || pixels));
+          if (size > 1) {
+            gl.generateMipmap(gl.TEXTURE_2D);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+          }
+          return { layers: [{ texture: texture, width: size, height: size }], width: size, height: size,
+                   channels: 'rgba', frames: null, ready: true };
+        }
+
+        function flat(red, green, blue, alpha) {
+          return fromPixels(new Uint8Array([red, green, blue, alpha]), 1, false);
+        }
+
+        // A texture by the name a material gives it: one of the scene's own, or one made here.
+        // The scene's own arrive later; until then the texture is see-through.
+        function texture(name) {
+          var id = key(name);
+          if (textureCache[id]) return textureCache[id];
+          var entry = pictures[id] || pictures['materials/' + id];
+          var result;
+          if (entry && entry.pictures && entry.pictures.length) {
+            result = { layers: [], width: entry.pictures[0].width, height: entry.pictures[0].height,
+                       channels: entry.channels || 'rgba', frames: entry.frames || null, ready: false };
+            var waiting = entry.pictures.length;
+            entry.pictures.forEach(function (picture, index) {
+              var layer = { texture: newTexture(entry.clamp !== false, entry.smooth !== false), width: picture.width, height: picture.height };
+              gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+              result.layers[index] = layer;
+              var image = new Image();
+              loading++;
+              image.onload = function () {
+                loading--;
+                if (stopped) return;
+                gl.bindTexture(gl.TEXTURE_2D, layer.texture);
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+                gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+                gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+                if (entry.smooth !== false) {
+                  gl.generateMipmap(gl.TEXTURE_2D);
+                  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+                }
+                if (--waiting === 0) result.ready = true;
+                changed();
+              };
+              image.onerror = function () {
+                loading--;
+                note('the picture ' + picture.file + ' cannot be loaded');
+                if (--waiting === 0) result.ready = true;
+                changed();
+              };
+              image.src = encodeURI(picture.file);
+            });
+          } else if (/(^|\/)util\/white$/.test(id)) {
+            result = flat(255, 255, 255, 255);
+          } else if (/(^|\/)util\/black$/.test(id)) {
+            result = flat(0, 0, 0, 255);
+          } else if (/(^|\/)util\/noflow$/.test(id)) {
+            // The middle value of a map of directions: no direction at all.
+            result = flat(127, 127, 0, 255);
+          } else if (/(^|\/)util\/normal/.test(id)) {
+            result = flat(128, 128, 255, 255);
+          } else if (/(^|\/)util\/.*(cloud|perlin)/.test(id)) {
+            result = fromPixels(cloudsPixels(256), 256, false);
+          } else if (/(^|\/)util\/.*noise/.test(id)) {
+            result = fromPixels(noisePixels(256), 256, false);
+          } else if (/(^|\/)particle\//.test(id)) {
+            result = fromPixels(spritePixels(id, 128), 128, true);
+            result.made = true;
+          } else {
+            note('the texture ' + name + ' is not in the scene; white stands in for it');
+            result = flat(255, 255, 255, 255);
+          }
+          textureCache[id] = result;
+          return result;
+        }
+
+        // --- Pictures to draw into --------------------------------------------
+
+        var targets = {};   // those not in use, by size
+
+        function acquire(width, height) {
+          width = Math.max(1, Math.round(width));
+          height = Math.max(1, Math.round(height));
+          var id = width + 'x' + height;
+          var free = targets[id];
+          if (free && free.length) return free.pop();
+          var texture = newTexture(true, true);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+          var framebuffer = gl.createFramebuffer();
+          gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+          return { id: id, framebuffer: framebuffer, texture: texture, width: width, height: height };
+        }
+
+        function release(target) {
+          if (!target) return;
+          (targets[target.id] = targets[target.id] || []).push(target);
+        }
+
+        function forgetTargets() {
+          Object.keys(targets).forEach(function (id) {
+            targets[id].forEach(function (target) {
+              gl.deleteFramebuffer(target.framebuffer);
+              gl.deleteTexture(target.texture);
+            });
+          });
+          targets = {};
+        }
+
+        // --- The scene --------------------------------------------------------
+
+        var description = json('scene.json') || {};
+        var general = description.general || {};
+        var projection = general.orthogonalprojection || {};
+        var sceneWidth = number(projection.width, 0);
+        var sceneHeight = number(projection.height, 0);
+        var clear = numbers(general.clearcolor, 3, 0);
+        var scale = 1;          // pixels drawn to a unit of the scene
+        var sceneTarget = null; // the whole scene, as drawn so far
+        var copyTarget = null;  // a copy of it, for what is blended with what lies under it
+        var time = 0;
+        var frameTime = 1 / 60;
+        var pointer = [0.5, 0.5];
+        var pointerBefore = [0.5, 0.5];
+        var spectrum = null;    // 64 bands left, 64 right, once a shader asks for the sound
+        var wantsSound = false;
+        var objects = [];
+        var redraw = true;      // something changed that a still scene has to be drawn again for
+
+        function changed() {
+          redraw = true;
+          wake();
+        }
+
+        var IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+        var MOVING = /^g_(Time|Frametime|Daytime|PointerPosition|PointerPositionLast|AudioSpectrum\d+(Left|Right))$/;
+
+        function bands(count, right) {
+          var values = new Float32Array(count);
+          if (!spectrum) return values;
+          var each = 64 / count;
+          for (var i = 0; i < count; i++) {
+            var sum = 0;
+            for (var j = 0; j < each; j++) sum += spectrum[(right ? 64 : 0) + i * each + j] || 0;
+            values[i] = sum / each;
+          }
+          return values;
+        }
+
+        // What Wallpaper Engine itself tells a shader, by the uniform's name.
+        function engineValue(name, context) {
+          switch (name) {
+            case 'g_Time': return [time];
+            case 'g_Frametime': return [frameTime];
+            case 'g_Daytime': var now = new Date(); return [(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400];
+            case 'g_PointerPosition': return pointer;
+            case 'g_PointerPositionLast': return pointerBefore;
+            case 'g_TexelSize': return [1 / context.width, 1 / context.height];
+            case 'g_TexelSizeHalf': return [0.5 / context.width, 0.5 / context.height];
+            case 'g_Screen': return [sceneWidth, sceneHeight, sceneWidth / sceneHeight];
+            case 'g_ParallaxPosition': return [0.5, 0.5];
+            case 'g_Alpha': case 'g_UserAlpha': case 'g_Brightness': return [1];
+            case 'g_Color': return [1, 1, 1];
+            case 'g_Color4': return [1, 1, 1, 1];
+            case 'g_EyePosition': return [0, 0, 1];
+            case 'g_ViewUp': case 'g_OrientationUp': return [0, 1, 0];
+            case 'g_ViewRight': case 'g_OrientationRight': return [1, 0, 0];
+            case 'g_ViewForward': case 'g_OrientationForward': return [0, 0, -1];
+          }
+          var resolution = /^g_Texture(\d)Resolution$/.exec(name);
+          if (resolution) return context.resolutions[Number(resolution[1])] || [1, 1, 1, 1];
+          if (/^g_Texture\dRotation$/.test(name)) return [1, 0, 0, 1];
+          if (/^g_Texture\dTranslation$/.test(name)) return [0, 0];
+          var audio = /^g_AudioSpectrum(16|32|64)(Left|Right)$/.exec(name);
+          if (audio) return bands(Number(audio[1]), audio[2] === 'Right');
+          return null;
+        }
+
+        function setUniform(uniform, values) {
+          var location = uniform.location;
+          switch (uniform.type) {
+            case gl.FLOAT:
+              if (uniform.size > 1) gl.uniform1fv(location, new Float32Array(values).subarray(0, uniform.size));
+              else gl.uniform1f(location, values[0]);
+              break;
+            case gl.FLOAT_VEC2: gl.uniform2f(location, values[0], values[1]); break;
+            case gl.FLOAT_VEC3: gl.uniform3f(location, values[0], values[1], values[2]); break;
+            case gl.FLOAT_VEC4: gl.uniform4f(location, values[0], values[1], values[2], values[3]); break;
+            case gl.INT: case gl.BOOL: gl.uniform1i(location, values[0]); break;
+          }
+        }
+
+        // --- A pass of an effect ---------------------------------------------
+
+        // Makes a pass ready to draw: its shader translated with the effect's switches, and for
+        // every uniform where its value comes from. Null if the shader is not there or will not
+        // compile; the effect is then left out.
+        function buildPass(shaderName, combos, constants, slotTextures, what, owner) {
+          var vertexSource = files['shaders/' + key(shaderName) + '.vert'];
+          var fragmentSource = files['shaders/' + key(shaderName) + '.frag'];
+          if (typeof vertexSource !== 'string' || typeof fragmentSource !== 'string') {
+            note(what + ': the shader ' + shaderName + ' is not in the scene');
+            return null;
+          }
+          var said = annotations(vertexSource + '\n' + fragmentSource);
+          var defines = {};
+          Object.keys(said.combos).forEach(function (name) { defines[name] = said.combos[name]; });
+          Object.keys(combos || {}).forEach(function (name) { defines[name] = number(combos[name], 0); });
+          // A texture slot may come with a switch of its own, on when a texture is put there.
+          var defaults = [];
+          Object.keys(said.uniforms).forEach(function (name) {
+            var slot = /^g_Texture(\d)$/.exec(name);
+            if (!slot) return;
+            var about = said.uniforms[name];
+            defaults[Number(slot[1])] = about['default'];
+            if (about.combo && slotTextures[Number(slot[1])]) defines[about.combo] = 1;
+          });
+          var program;
+          try {
+            program = link(translate(vertexSource, 'vertex', defines, files), translate(fragmentSource, 'fragment', defines, files), what);
+          } catch (error) {
+            note(what + ': ' + error.message);
+            return null;
+          }
+          if (!program) return null;
+          var pass = { program: program, moving: false, values: [], lives: [], slots: [], defaults: defaults };
+          Object.keys(program.uniforms).forEach(function (name) {
+            var uniform = program.uniforms[name];
+            var slot = /^g_Texture(\d)$/.exec(name);
+            if (slot && uniform.type === gl.SAMPLER_2D) {
+              pass.slots.push(Number(slot[1]));
+              gl.useProgram(program.program);
+              gl.uniform1i(uniform.location, Number(slot[1]));
+              return;
+            }
+            if (MOVING.test(name)) pass.moving = true;
+            if (/^g_AudioSpectrum/.test(name)) wantsSound = true;
+            var about = said.uniforms[name];
+            var value = { name: name, uniform: uniform, live: null, material: about ? about.material : undefined };
+            if (about) {
+              // What the scene sets the effect to, else what the shader says it starts with. A
+              // setting of the wallpaper, an animation or a script may stand behind it.
+              var given = about.material !== undefined && constants ? constants[about.material] : undefined;
+              var count = uniform.type === gl.FLOAT ? Math.max(1, uniform.size)
+                        : (uniform.type === gl.FLOAT_VEC2 ? 2 : (uniform.type === gl.FLOAT_VEC3 ? 3 : (uniform.type === gl.FLOAT_VEC4 ? 4 : 1)));
+              value.live = live(given !== undefined ? given : about['default'], count, 0, owner);
+              if (value.live.changes) pass.moving = true;
+              if (given && typeof given === 'object' && !Array.isArray(given)) pass.lives.push(value.live);
+            }
+            pass.values.push(value);
+          });
+          return pass;
+        }
+
+        // Draws a pass into `target` (null for none: the caller has one bound already).
+        // `inputs` are the textures by slot: { texture, resolution }.
+        function drawPass(pass, target, inputs) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+          gl.viewport(0, 0, target.width, target.height);
+          gl.disable(gl.BLEND);
+          gl.useProgram(pass.program.program);
+          var context = { width: target.nominalWidth || target.width, height: target.nominalHeight || target.height, resolutions: [] };
+          pass.slots.forEach(function (slot) {
+            var input = inputs[slot];
+            gl.activeTexture(gl.TEXTURE0 + slot);
+            gl.bindTexture(gl.TEXTURE_2D, input ? input.texture : null);
+          });
+          inputs.forEach(function (input, slot) {
+            if (input) context.resolutions[slot] = input.resolution;
+          });
+          pass.values.forEach(function (value) {
+            var uniform = value.uniform;
+            if (value.name === 'wallaero_Flip') {
+              gl.uniform1f(uniform.location, -1);
+            } else if (uniform.type === gl.FLOAT_MAT4) {
+              gl.uniformMatrix4fv(uniform.location, false, IDENTITY);
+            } else if (uniform.type === gl.FLOAT_MAT3) {
+              gl.uniformMatrix3fv(uniform.location, false, new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]));
+            } else {
+              var values = engineValue(value.name, context) || (value.live ? value.live.now : null);
+              if (values) setUniform(uniform, values);
+            }
+          });
+          gl.bindVertexArray(passShape);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+
+        // --- Values that change -----------------------------------------------
+        //
+        // Where an object is, how large, how see-through, what it says: each is read through a
+        // `live` value, which knows what stands behind it. One with an animation or a script is
+        // read every frame, one with a setting of the wallpaper when the settings change, and
+        // one with nothing behind it never again: what a script has made of it meanwhile stays.
+
+        var things = [];         // everything of the scene that has a place: pictures, texts, particles
+        var scripts = [];        // the scripts that are running
+        var timers = [];         // what the scripts asked to be called later
+        var shared = {};         // what the scripts keep for one another
+        var stored = {};         // what they keep for themselves
+        var dirty = true;        // something that shows has changed since the last frame drawn
+        var pressed = false;     // the mouse button
+        var audioBuffers = [];   // the sound, as the scripts asked for it
+
+        function same(first, second) {
+          if (!Array.isArray(first) || !Array.isArray(second)) return first === second;
+          if (first.length !== second.length) return false;
+          for (var i = 0; i < first.length; i++) {
+            if (first[i] !== second[i]) return false;
+          }
+          return true;
+        }
+
+        // `count` numbers, or with `kind` 'flag' a yes or no, or with 'text' a text. `unit`
+        // 'degrees' is for angles: the scene writes them in radians, scripts count in degrees.
+        function live(raw, count, fallback, owner, kind, unit) {
+          var behind = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+          var curve = behind ? curveOf(behind.animation) : null;
+          var script = behind && typeof behind.script === 'string' ? { said: behind, owner: owner, kind: kind || 'numbers', count: count, unit: unit } : null;
+          if (script) scripts.push(script);
+          function base() {
+            if (kind === 'text') {
+              var text = plain(raw);
+              return text === undefined || text === null ? '' : String(text);
+            }
+            if (kind === 'flag') return flag(raw, fallback);
+            return numbers(raw, count, fallback);
+          }
+          // `bound`: a setting of the wallpaper stands behind it.
+          var value = { changes: !!curve, script: script, bound: !!(behind && behind.user !== undefined && behind.user !== null), now: base() };
+          value.read = function () {
+            // A script carries on from what the value is; anything else starts from what the
+            // scene says.
+            var result = script && script.made !== undefined ? value.now : base();
+            if (curve) result = curve(time, result);
+            if (script) result = runScript(script, result);
+            value.now = result;
+            return result;
+          };
+          return value;
+        }
+
+        // A value of a kind this does not know, kept for the script behind it: the script runs,
+        // and what it does to the scene by itself shows.
+        function liveOfAnyKind(raw, owner) {
+          var value = raw.value;
+          if (typeof value === 'boolean') return live(raw, 0, value, owner, 'flag');
+          if (typeof value === 'number') return live(raw, 1, 0, owner);
+          var parts = typeof value === 'string' ? value.trim().split(/\s+/) : [];
+          if (!parts.length || !parts.every(function (part) { return part !== '' && isFinite(Number(part)); })) return live(raw, 0, '', owner, 'text');
+          return live(raw, Math.min(4, parts.length), 0, owner);
+        }
+
+        // --- Scripts ------------------------------------------------------------
+
+        var scale180 = 180 / Math.PI;
+
+        // A value as a script takes it, and back.
+        function toScript(script, value) {
+          if (script.kind !== 'numbers') return value;
+          var by = script.unit === 'degrees' ? scale180 : 1;
+          if (script.count === 1) return value[0] * by;
+          if (script.count === 2) return new Vec2(value[0] * by, value[1] * by);
+          if (script.count === 4) return new Vec4(value[0], value[1], value[2], value[3]);
+          return new Vec3(value[0] * by, value[1] * by, value[2] * by);
+        }
+
+        function fromScript(script, result, before) {
+          if (result === undefined || result === null) return before;
+          if (script.kind === 'text') return String(result);
+          if (script.kind === 'flag') return !!result;
+          var by = script.unit === 'degrees' ? 1 / scale180 : 1;
+          if (typeof result === 'number') return isFinite(result) ? before.map(function () { return result * by; }) : before;
+          if (typeof result === 'string') return numbers(result, script.count, before);
+          var list = [result.x, result.y, result.z, result.w];
+          return before.map(function (old, index) { return typeof list[index] === 'number' && isFinite(list[index]) ? list[index] * by : old; });
+        }
+
+        function call(script, name, argument) {
+          var wanted = script.made && script.made[name];
+          if (!wanted || script.failures > 3) return undefined;
+          try {
+            return wanted(argument);
+          } catch (error) {
+            script.failures = (script.failures || 0) + 1;
+            note('a script of “' + (script.owner ? script.owner.name : 'the scene') + '” fails: ' + error.message);
+            return undefined;
+          }
+        }
+
+        // Makes a script ready the first time its value is wanted — by then every object of the
+        // scene is there for it to ask about — and gives its value for this frame.
+        function runScript(script, current) {
+          if (script.made === undefined) {
+            script.made = null;
+            try {
+              script.made = compileScript(script.said.script,
+                ['engine', 'thisScene', 'thisLayer', 'thisObject', 'input', 'shared', 'console', 'localStorage', 'renderContext',
+                 'createScriptProperties', 'Vec2', 'Vec3', 'Vec4', 'Mat3', 'Mat4'],
+                [engineObject, sceneObject, layerObject(script.owner), lenient({}), inputObject, shared, consoleObject, storageObject, lenient({}),
+                 scriptSettings(script.said.scriptproperties), Vec2, Vec3, Vec4, Matrix, Matrix]);
+            } catch (error) {
+              note('a script of “' + (script.owner ? script.owner.name : 'the scene') + '” cannot be read: ' + error.message);
+            }
+            if (script.made) {
+              var first = call(script, 'init', toScript(script, current));
+              script.quiet = first === undefined;
+              current = fromScript(script, first, current);
+              call(script, 'applyUserProperties', engineObject.userProperties);
+            }
+          }
+          if (script.made && script.made.update) {
+            var answer = call(script, 'update', toScript(script, current));
+            // One that gives nothing back has done its work on the scene by itself.
+            script.quiet = answer === undefined;
+            current = fromScript(script, answer, current);
+          }
+          return current;
+        }
+
+        // A color or the like among the wallpaper's settings, as scripts get it.
+        function forScripts(value) {
+          if (typeof value === 'string' && /^\s*-?[\d.]+(\s+-?[\d.]+){2}\s*$/.test(value)) return new Vec3(value);
+          return value;
+        }
+
+        var engineObject = lenient({
+          AUDIO_RESOLUTION_16: 16, AUDIO_RESOLUTION_32: 32, AUDIO_RESOLUTION_64: 64,
+          get frametime() { return frameTime; },
+          get runtime() { return time; },
+          get timeOfDay() {
+            var now = new Date();
+            return (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400;
+          },
+          get canvasSize() { return new Vec2(sceneWidth, sceneHeight); },
+          get screenResolution() { return new Vec2(canvas.width, canvas.height); },
+          get userProperties() {
+            var result = {};
+            Object.keys(properties).forEach(function (name) { result[name] = forScripts(properties[name]); });
+            return result;
+          },
+          isPortrait: function () { return sceneHeight > sceneWidth; },
+          isLandscape: function () { return sceneWidth >= sceneHeight; },
+          isDesktopDevice: function () { return true; },
+          isMobileDevice: function () { return false; },
+          isWallpaper: function () { return true; },
+          isScreensaver: function () { return false; },
+          isRunningInEditor: function () { return false; },
+          openUserShortcut: function () { return false; },
+          registerAsset: function (file) { return file; },
+          // The sound the Mac plays, in as many bands as asked for; filled anew every frame.
+          registerAudioBuffers: function (resolution) {
+            var size = resolution === 16 || resolution === 32 ? resolution : 64;
+            var buffers = { left: new Float32Array(size), right: new Float32Array(size), average: new Float32Array(size) };
+            audioBuffers.push(buffers);
+            listen();
+            return buffers;
+          },
+          setTimeout: function (callback, delay) { return later(callback, delay, false); },
+          setInterval: function (callback, delay) { return later(callback, delay, true); }
+        });
+
+        // Calls a script back after a while of the scene's own time, which stands still while
+        // the wallpaper is paused. What is given back stops it.
+        function later(callback, delay, again) {
+          var timer = { callback: callback, every: Math.max(0, Number(delay) || 0) / 1000, again: again, at: 0 };
+          timer.at = time + timer.every;
+          timers.push(timer);
+          return function () { timers = timers.filter(function (each) { return each !== timer; }); };
+        }
+
+        var consoleObject = {
+          log: function () { if (window.console) window.console.log.apply(window.console, arguments); },
+          error: function () { note('a script says: ' + Array.prototype.join.call(arguments, ' ')); }
+        };
+
+        var storageObject = {
+          LOCATION_GLOBAL: 'global', LOCATION_SCREEN: 'screen',
+          get: function (name) { return stored[name]; },
+          set: function (name, value) { stored[name] = value; },
+          'delete': function (name) { return delete stored[name]; },
+          clear: function () { stored = {}; }
+        };
+
+        var inputObject = {
+          get cursorWorldPosition() { return new Vec3(pointer[0] * sceneWidth, (1 - pointer[1]) * sceneHeight, 0); },
+          get cursorScreenPosition() { return new Vec2(pointer[0] * canvas.width, pointer[1] * canvas.height); },
+          get cursorLeftDown() { return pressed; }
+        };
+
+        // An object of the scene as its scripts see it: what they read is what shows, and what
+        // they set shows from the next frame on.
+        function layerObject(thing) {
+          if (!thing) return lenient({});
+          if (thing.forScripts) return thing.forScripts;
+          var object = {};
+          function numbersOf(name, key, Vector, by) {
+            Object.defineProperty(object, name, {
+              enumerable: true,
+              get: function () {
+                var now = thing.state[key];
+                return Vector === Vec2 ? new Vec2(now[0] * by, now[1] * by) : new Vec3(now[0] * by, now[1] * by, now[2] * by);
+              },
+              set: function (value) {
+                var list = typeof value === 'number' ? [value, value, value] : [value.x, value.y, value.z];
+                thing.state[key] = thing.state[key].map(function (old, index) {
+                  return typeof list[index] === 'number' && isFinite(list[index]) ? list[index] / by : old;
+                });
+                dirty = true;
+              }
+            });
+          }
+          function plainOf(name, get, set) {
+            Object.defineProperty(object, name, { enumerable: true, get: get, set: function (value) { set(value); dirty = true; } });
+          }
+          numbersOf('origin', 'origin', Vec3, 1);
+          numbersOf('scale', 'scale', Vec3, 1);
+          numbersOf('angles', 'angles', Vec3, scale180);
+          numbersOf('color', 'color', Vec3, 1);
+          numbersOf('parallaxDepth', 'parallax', Vec2, 1);
+          plainOf('alpha', function () { return thing.state.alpha[0]; }, function (value) { thing.state.alpha = [Number(value) || 0]; });
+          plainOf('visible', function () { return thing.state.visible; }, function (value) { thing.state.visible = !!value; });
+          plainOf('name', function () { return thing.name; }, function () {});
+          plainOf('text', function () { return thing.state.text; }, function (value) { thing.state.text = String(value); });
+          plainOf('pointsize', function () { return (thing.state.pointsize || [0])[0]; }, function (value) {
+            if (Number(value) > 0) thing.state.pointsize = [Number(value)];
+          });
+          if (thing.own) {
+            // How a text looks, which a script may change as well as what it says.
+            ['font', 'padding', 'horizontalalign', 'verticalalign', 'opaquebackground', 'backgroundcolor',
+             'limitrows', 'maxrows', 'limitwidth', 'maxwidth'].forEach(function (name) {
+              plainOf(name, function () {
+                var now = thing.own[name] !== undefined ? thing.own[name] : plain(thing.said[name]);
+                return name === 'backgroundcolor' ? new Vec3(String(now === undefined ? '0 0 0' : now)) : now;
+              }, function (value) {
+                thing.own[name] = value && typeof value === 'object' ? String(value) : value;
+              });
+            });
+          }
+          Object.defineProperty(object, 'size', { enumerable: true, get: function () {
+            return new Vec2(thing.size ? thing.size[0] : 0, thing.size ? thing.size[1] : 0);
+          } });
+          object.getParent = function () { return thing.parent !== undefined && find(thing.parent) ? layerObject(find(thing.parent)) : null; };
+          object.getChildren = function () {
+            return things.filter(function (each) { return each.parent !== undefined && String(each.parent) === String(thing.id); }).map(layerObject);
+          };
+          object.isPlaying = function () { return true; };
+          if (thing.sound) {
+            // A sound, to be started, stopped and made louder or softer.
+            ['play', 'stop', 'pause', 'isPlaying'].forEach(function (name) { object[name] = thing.sound[name]; });
+            plainOf('volume', function () { return thing.state.volume[0]; }, function (value) {
+              thing.state.volume = [Number(value) || 0];
+              thing.settle();
+            });
+          }
+          object.getEffectCount = function () { return thing.effects ? thing.effects.length : 0; };
+          // An effect of the object, by its name or its number: to be switched on and off, and
+          // its settings changed.
+          object.getEffect = function (wanted) {
+            var effects = thing.effects || [];
+            var effect = typeof wanted === 'number' ? effects[wanted] : effects.filter(function (each) { return each.name === wanted; })[0];
+            if (!effect) return null;
+            if (!effect.forScripts) {
+              effect.forScripts = lenient({
+                get name() { return effect.name; },
+                get visible() { return !!effect.shown.now; },
+                set visible(value) {
+                  if (effect.shown.now === !!value) return;
+                  effect.shown.now = !!value;
+                  stale(thing);
+                },
+                getMaterialCount: function () { return effect.passes.length; },
+                setMaterialProperty: function (name, value) {
+                  var list = typeof value === 'number' ? [value, value, value, value] : (value ? [value.x, value.y, value.z, value.w] : []);
+                  effect.passes.forEach(function (pass) {
+                    (pass.values || []).forEach(function (each) {
+                      if (each.material !== name || !each.live) return;
+                      each.live.now = each.live.now.map(function (old, index) { return typeof list[index] === 'number' && isFinite(list[index]) ? list[index] : old; });
+                      stale(thing);
+                    });
+                  });
+                }
+              });
+            }
+            return effect.forScripts;
+          };
+          object.getAnimationLayerCount = function () { return thing.puppet && thing.puppet.moving ? 1 : 0; };
+          // Other parts of an object a script may steer — an animation, a video — take what they
+          // are told and do nothing with it.
+          ['getAnimationLayer', 'getTextureAnimation', 'getVideoTexture', 'getAnimation', 'getMaterial'].forEach(function (name) {
+            object[name] = function () { return lenient({ visible: true, rate: 1, isPlaying: function () { return true; }, getFrame: function () { return 0; } }); };
+          });
+          thing.forScripts = lenient(object);
+          return thing.forScripts;
+        }
+
+        function find(wanted) {
+          if (wanted && wanted.forScripts) return wanted;
+          var named = things.filter(function (thing) { return thing.name === wanted; })[0];
+          return named || things.filter(function (thing) { return thing.id !== undefined && String(thing.id) === String(wanted); })[0] ||
+                 (typeof wanted === 'number' ? things[wanted] || null : null);
+        }
+
+        var sceneObject = lenient({
+          getLayer: function (wanted) { return find(wanted) ? layerObject(find(wanted)) : null; },
+          getLayerByID: function (wanted) { return find(wanted) ? layerObject(find(wanted)) : null; },
+          getLayerCount: function () { return things.length; },
+          enumerateLayers: function () { return things.map(layerObject); },
+          getLayerIndex: function (wanted) { return things.indexOf(find(wanted)); },
+          getCameraTransforms: function () {
+            return { eye: new Vec3(0, 0, 1), center: new Vec3(0, 0, 0), up: new Vec3(0, 1, 0), zoom: 1 };
+          },
+          get bloom() { return flag(general.bloom, false); },
+          set bloom(value) { general.bloom = !!value; dirty = true; },
+          get bloomstrength() { return number(general.bloomstrength, 2); },
+          set bloomstrength(value) { general.bloomstrength = Number(value); dirty = true; },
+          get bloomthreshold() { return number(general.bloomthreshold, 0.65); },
+          set bloomthreshold(value) { general.bloomthreshold = Number(value); dirty = true; },
+          get clearcolor() { return new Vec3(clear[0], clear[1], clear[2]); },
+          set clearcolor(value) { clear = [value.x, value.y, value.z]; dirty = true; },
+          get cameraparallax() { return flag(general.cameraparallax, false); },
+          set cameraparallax(value) { general.cameraparallax = !!value; dirty = true; }
+        });
+
+        // Runs what the scripts asked to be called later, and fills the sound they listen to.
+        function serveScripts() {
+          timers.slice().forEach(function (timer) {
+            if (time < timer.at) return;
+            if (timer.again) timer.at = time + Math.max(timer.every, 0.001);
+            else timers = timers.filter(function (each) { return each !== timer; });
+            try {
+              timer.callback();
+            } catch (error) {
+              note('a script fails in what it asked to be called for later: ' + error.message);
+            }
+          });
+          audioBuffers.forEach(function (buffers) {
+            var size = buffers.left.length;
+            var left = bands(size, false), right = bands(size, true);
+            for (var i = 0; i < size; i++) {
+              buffers.left[i] = left[i];
+              buffers.right[i] = right[i];
+              buffers.average[i] = (left[i] + right[i]) / 2;
+            }
+          });
+        }
+
+        // Tells the scripts of something that happened to the scene as a whole.
+        function tellScripts(name, argument) {
+          scripts.forEach(function (script) { call(script, name, argument); });
+        }
+
+        // Tells the scripts what the mouse did. A script hears of it when the pointer is over the
+        // object it belongs to.
+        function tellPointer(kind) {
+          var world = inputObject.cursorWorldPosition;
+          scripts.forEach(function (script) {
+            var made = script.made;
+            var thing = script.owner;
+            if (!made || !thing || !thing.state || !thing.size) return;
+            var stands = standing(thing);
+            var width = Math.abs(thing.size[0] * stands.scale[0]), height = Math.abs(thing.size[1] * stands.scale[1]);
+            var over = stands.visible && Math.abs(world.x - stands.origin[0]) <= width / 2 && Math.abs(world.y - stands.origin[1]) <= height / 2;
+            var event = { worldPosition: world, localPosition: new Vec3(world.x - stands.origin[0], world.y - stands.origin[1], 0) };
+            if (over !== !!script.over) {
+              script.over = over;
+              call(script, over ? 'cursorEnter' : 'cursorLeave', event);
+            }
+            if (!over && !(kind === 'up' && script.held)) return;
+            if (kind === 'move') call(script, 'cursorMove', event);
+            if (kind === 'down') {
+              script.held = true;
+              call(script, 'cursorDown', event);
+            }
+            if (kind === 'up') {
+              call(script, 'cursorUp', event);
+              if (script.held && over) call(script, 'cursorClick', event);
+              script.held = false;
+            }
+          });
+        }
+
+        // --- Putting a picture on the scene -----------------------------------
+
+        var placeVertex = [
+          '#version 300 es',
+          'in vec3 a_Position;',
+          'in vec2 a_TexCoord;',
+          'uniform mat3 u_Place;',
+          'out vec2 v_Uv;',
+          'void main() {',
+          '  v_Uv = a_TexCoord;',
+          '  vec3 at = u_Place * vec3(a_TexCoord.x - 0.5, 0.5 - a_TexCoord.y, 1.0);',
+          '  gl_Position = vec4(at.xy, 0.0, 1.0);',
+          '}'
+        ].join('\n');
+        var sampleLines = [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'uniform sampler2D u_Texture;',
+          'uniform vec4 u_Tint;',
+          'uniform vec4 u_Frame;',
+          'uniform int u_Channels;',
+          'out vec4 color;',
+          'vec4 picture() {',
+          '  vec4 c = texture(u_Texture, u_Frame.xy + v_Uv * u_Frame.zw);',
+          // A texture of one value a pixel is a shade of grey; of two, a shade and its opacity.
+          '  if (u_Channels == 1) c = vec4(c.rrr, 1.0);',
+          '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
+          '  return c * u_Tint;',
+          '}'
+        ];
+        // A picture that bends is drawn as its triangles, each corner where its bones have put it.
+        var meshVertex = [
+          '#version 300 es',
+          'in vec2 a_Spot;',
+          'in vec2 a_Uv;',
+          'uniform mat3 u_Place;',
+          'out vec2 v_Uv;',
+          'void main() {',
+          '  v_Uv = a_Uv;',
+          '  vec3 at = u_Place * vec3(a_Spot, 1.0);',
+          '  gl_Position = vec4(at.xy, 0.0, 1.0);',
+          '}'
+        ].join('\n');
+        // The part of the scene that lies under a rectangle of it, to fill a picture of its own.
+        var grabProgram = link([
+          '#version 300 es',
+          'in vec3 a_Position;',
+          'in vec2 a_TexCoord;',
+          'uniform mat3 u_Place;',
+          'out vec2 v_Uv;',
+          'void main() {',
+          '  v_Uv = (u_Place * vec3(a_TexCoord.x - 0.5, 0.5 - a_TexCoord.y, 1.0)).xy * 0.5 + 0.5;',
+          '  gl_Position = vec4(a_TexCoord * 2.0 - 1.0, 0.0, 1.0);',
+          '}'
+        ].join('\n'), [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'uniform sampler2D u_Texture;',
+          'out vec4 color;',
+          'void main() { color = texture(u_Texture, v_Uv); }'
+        ].join('\n'), 'the player\'s own shader');
+        var placeProgram = link(placeVertex, sampleLines.concat(['void main() { color = picture(); }']).join('\n'), 'the player\'s own shader');
+        var meshProgram = link(meshVertex, sampleLines.concat(['void main() { color = picture(); }']).join('\n'), 'the player\'s own shader');
+        // Blended with what lies under it in one of the ways image editors have; the scene so far
+        // is read from a copy.
+        var blendFragment = sampleLines.concat([
+          'uniform sampler2D u_Scene;',
+          'uniform vec2 u_SceneSize;',
+          'uniform int u_Mode;',
+          'vec3 blend(vec3 A, vec3 B) {'
+        ], BLENDS.map(function (formula, index) {
+          return '  if (u_Mode == ' + (index + 1) + ') return ' + formula + ';';
+        }), [
+          '  return B;',
+          '}',
+          'void main() {',
+          '  vec4 c = picture();',
+          '  vec3 under = texture(u_Scene, gl_FragCoord.xy / u_SceneSize).rgb;',
+          '  color = vec4(mix(under, clamp(blend(under, c.rgb), 0.0, 1.0), clamp(c.a, 0.0, 1.0)), 1.0);',
+          '}'
+        ]).join('\n');
+        var blendProgram = link(placeVertex, blendFragment, 'the player\'s own shader');
+        var meshBlendProgram = link(meshVertex, blendFragment, 'the player\'s own shader');
+
+        // Where a rectangle of the scene lands on the screen, as a matrix for the shader: `origin`
+        // is its middle, counted from the scene's bottom left; `size` its sides after scaling.
+        function placement(origin, size, angle) {
+          var cos = Math.cos(angle), sin = Math.sin(angle);
+          return new Float32Array([
+            2 * cos * size[0] / sceneWidth, -2 * sin * size[0] / sceneHeight, 0,
+            -2 * sin * size[1] / sceneWidth, -2 * cos * size[1] / sceneHeight, 0,
+            2 * origin[0] / sceneWidth - 1, 1 - 2 * origin[1] / sceneHeight, 1
+          ]);
+        }
+
+        var CHANNELS = { rgba: 0, r8: 1, rg88: 2 };
+
+        // Draws a texture onto whatever is bound, placed by `place`.
+        // `how`: 'translucent', 'additive', 'normal' (as it is, over what is there) or a number,
+        // one of the blend modes. `mesh`, if given, is drawn in place of the plain rectangle.
+        function put(source, place, tint, how, mesh) {
+          var program = mesh ? meshProgram : placeProgram;
+          if (typeof how === 'number') {
+            // What is under the picture is read from a copy of the scene.
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, sceneTarget.framebuffer);
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, copyTarget.framebuffer);
+            gl.blitFramebuffer(0, 0, sceneTarget.width, sceneTarget.height, 0, 0, sceneTarget.width, sceneTarget.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+            program = mesh ? meshBlendProgram : blendProgram;
+          }
+          if (!program) return;
+          gl.useProgram(program.program);
+          if (typeof how === 'number') {
+            gl.disable(gl.BLEND);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, copyTarget.texture);
+            gl.uniform1i(program.uniforms.u_Scene.location, 1);
+            gl.uniform2f(program.uniforms.u_SceneSize.location, sceneTarget.width, sceneTarget.height);
+            gl.uniform1i(program.uniforms.u_Mode.location, how);
+          } else if (how === 'normal') {
+            gl.disable(gl.BLEND);
+          } else {
+            gl.enable(gl.BLEND);
+            if (how === 'additive') gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
+            else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+          }
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, source.texture);
+          gl.uniform1i(program.uniforms.u_Texture.location, 0);
+          gl.uniformMatrix3fv(program.uniforms.u_Place.location, false, place);
+          gl.uniform4fv(program.uniforms.u_Tint.location, tint);
+          gl.uniform4fv(program.uniforms.u_Frame.location, source.frame || [0, 0, 1, 1]);
+          gl.uniform1i(program.uniforms.u_Channels.location, CHANNELS[source.channels] || 0);
+          if (mesh) {
+            gl.bindVertexArray(mesh.shape);
+            gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
+            gl.bindVertexArray(null);
+          } else {
+            gl.bindVertexArray(passShape);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          }
+        }
+
+        // The whole of a target, as the matrix that fills it.
+        var FILL = new Float32Array([2, 0, 0, 0, -2, 0, 0, 0, 1]);
+
+        // --- Pictures that bend ---------------------------------------------------
+        //
+        // A puppet is a picture cut into triangles whose corners hang on bones. An animation says
+        // where every bone is in every frame; a corner goes where its bones take it, each by its
+        // weight. Bones and corners live on the flat of the picture, so a bone's place is kept as
+        // six numbers: x' = a·x + c·y + e, y' = b·x + d·y + f.
+
+        function numbersOf(text, kind) {
+          var raw = atob(text || '');
+          var bytes = new Uint8Array(raw.length);
+          for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+          return new kind(bytes.buffer, 0, Math.floor(bytes.length / kind.BYTES_PER_ELEMENT));
+        }
+
+        // First `second`, then `first`.
+        function joined(first, second) {
+          return [first[0] * second[0] + first[2] * second[1], first[1] * second[0] + first[3] * second[1],
+                  first[0] * second[2] + first[2] * second[3], first[1] * second[2] + first[3] * second[3],
+                  first[0] * second[4] + first[2] * second[5] + first[4], first[1] * second[4] + first[3] * second[5] + first[5]];
+        }
+
+        function undone(move) {
+          var det = move[0] * move[3] - move[2] * move[1] || 1;
+          var a = move[3] / det, b = -move[1] / det, c = -move[2] / det, d = move[0] / det;
+          return [a, b, c, d, -(a * move[4] + c * move[5]), -(b * move[4] + d * move[5])];
+        }
+
+        function buildPuppet(said, layers, name) {
+          var corners = numbersOf(said.corners, Float32Array);
+          var triangles = numbersOf(said.triangles, Uint16Array);
+          var count = Math.floor(corners.length / 12);
+          var bones = (said.bones || []).map(function (bone) {
+            var matrix = bone.matrix || [];
+            return { parent: number(bone.parent, -1), rest: [matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13]] };
+          });
+          if (!count || !triangles.length || !bones.length) return null;
+          // Where every bone is at rest, from the picture and not from its parent; and the way back.
+          function atRest(index, depth) {
+            var bone = bones[index];
+            if (!bone.whole) {
+              var parent = bones[bone.parent];
+              bone.whole = parent && depth < 64 ? joined(atRest(bone.parent, depth + 1), bone.rest) : bone.rest;
+            }
+            return bone.whole;
+          }
+          bones.forEach(function (bone, index) { bone.back = undone(atRest(index, 0)); });
+
+          // The animation that plays: the first of the layers the scene has switched on.
+          var playing = null;
+          (layers || []).forEach(function (layer) {
+            if (flag(layer.visible, true) === false) return;
+            var animation = (said.animations || []).filter(function (each) { return each.id === number(layer.animation, -1); })[0];
+            if (!animation) return;
+            if (playing) {
+              note('“' + name + '” plays several animations at once; only the first is played');
+              return;
+            }
+            playing = { frames: numbersOf(animation.frames, Float32Array), frameCount: animation.frameCount, length: animation.length,
+                        rate: animation.fps * number(layer.rate, 1), mode: animation.mode };
+          });
+
+          var places = new Float32Array(count * 2);
+          var texture = new Float32Array(count * 2);
+          for (var corner = 0; corner < count; corner++) {
+            places[corner * 2] = corners[corner * 12];
+            places[corner * 2 + 1] = corners[corner * 12 + 1];
+            texture[corner * 2] = corners[corner * 12 + 2];
+            texture[corner * 2 + 1] = corners[corner * 12 + 3];
+          }
+          var shape = gl.createVertexArray();
+          gl.bindVertexArray(shape);
+          var placeBuffer = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, placeBuffer);
+          gl.bufferData(gl.ARRAY_BUFFER, places, gl.DYNAMIC_DRAW);
+          gl.enableVertexAttribArray(5);
+          gl.vertexAttribPointer(5, 2, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+          gl.bufferData(gl.ARRAY_BUFFER, texture, gl.STATIC_DRAW);
+          gl.enableVertexAttribArray(6);
+          gl.vertexAttribPointer(6, 2, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+          gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
+          gl.bindVertexArray(null);
+
+          var puppet = { shape: shape, count: triangles.length, moving: !!playing };
+          // Puts every corner where the bones are at a moment.
+          puppet.pose = function (seconds) {
+            if (!playing) return;
+            var at = seconds * playing.rate;
+            if (playing.mode === 'mirror') {
+              at = at % (playing.length * 2);
+              if (at > playing.length) at = playing.length * 2 - at;
+            } else if (playing.mode === 'single') {
+              at = Math.min(at, playing.length);
+            } else {
+              at = at % playing.length;
+            }
+            var before = Math.min(Math.floor(at), playing.frameCount - 1);
+            var after = Math.min(before + 1, playing.frameCount - 1);
+            var share = at - before;
+            var frames = playing.frames;
+            // Each bone from its parent in this frame: scaled, turned, then moved.
+            bones.forEach(function (bone, index) {
+              var one = (index * playing.frameCount + before) * 9, two = (index * playing.frameCount + after) * 9;
+              function value(part) { return frames[one + part] + (frames[two + part] - frames[one + part]) * share; }
+              var cos = Math.cos(value(5)), sin = Math.sin(value(5));
+              bone.now = [cos * value(6), sin * value(6), -sin * value(7), cos * value(7), value(0), value(1)];
+              bone.done = false;
+            });
+            function whole(index, depth) {
+              var bone = bones[index];
+              if (!bone.done) {
+                var parent = bones[bone.parent];
+                bone.moved = parent && depth < 64 ? joined(whole(bone.parent, depth + 1), bone.now) : bone.now;
+                // From where the corner is at rest to where the bone has taken it.
+                bone.takes = joined(bone.moved, bone.back);
+                bone.done = true;
+              }
+              return bone.moved;
+            }
+            bones.forEach(function (bone, index) { whole(index, 0); });
+            for (var corner = 0; corner < count; corner++) {
+              var base = corner * 12;
+              var x = corners[base], y = corners[base + 1];
+              var newX = 0, newY = 0, total = 0;
+              for (var slot = 0; slot < 4; slot++) {
+                var weight = corners[base + 8 + slot];
+                var bone = bones[corners[base + 4 + slot]];
+                if (!(weight > 0) || !bone) continue;
+                var takes = bone.takes;
+                newX += weight * (takes[0] * x + takes[2] * y + takes[4]);
+                newY += weight * (takes[1] * x + takes[3] * y + takes[5]);
+                total += weight;
+              }
+              places[corner * 2] = total > 0 ? newX / total : x;
+              places[corner * 2 + 1] = total > 0 ? newY / total : y;
+            }
+            gl.bindBuffer(gl.ARRAY_BUFFER, placeBuffer);
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, places);
+          };
+          return puppet;
+        }
+        // --- Pictures ---------------------------------------------------------
+
+        function merged(first, second) {
+          var result = {};
+          [first, second].forEach(function (part) {
+            Object.keys(part || {}).forEach(function (name) { result[name] = part[name]; });
+          });
+          return result;
+        }
+
+        // The frame of an animated texture that shows at a time: its place in the texture.
+        function frameAt(picture, seconds) {
+          var frames = picture.frames;
+          if (!frames || !frames.length) return null;
+          var total = 0;
+          frames.forEach(function (frame) { total += Math.max(frame[1], 0.001); });
+          var at = seconds % total;
+          var chosen = frames[0];
+          for (var i = 0; i < frames.length; i++) {
+            at -= Math.max(frames[i][1], 0.001);
+            if (at < 0) {
+              chosen = frames[i];
+              break;
+            }
+          }
+          var layer = picture.layers[chosen[0]] || picture.layers[0];
+          return { layer: layer, frame: [chosen[2] / layer.width, chosen[3] / layer.height,
+                                         (chosen[4] || chosen[6]) / layer.width, (chosen[7] || chosen[5]) / layer.height] };
+        }
+
+        var byId = {};
+
+        // What every object with a place has: where it is, how large and how turned, how
+        // see-through and of what tint, and whether it shows at all.
+        function placed(object, otherName) {
+          var hangs = object.parent !== undefined && object.parent !== null;
+          var thing = { name: String(plain(object.name) || otherName || object.id || ''), id: object.id, parent: hangs ? object.parent : undefined,
+                        said: object, state: {}, lives: {}, moving: false };
+          thing.lives.origin = live(object.origin, 3, hangs ? 0 : [sceneWidth / 2, sceneHeight / 2, 0], thing);
+          thing.lives.scale = live(object.scale, 3, 1, thing);
+          thing.lives.angles = live(object.angles, 3, 0, thing, 'numbers', 'degrees');
+          thing.lives.alpha = live(object.alpha, 1, 1, thing);
+          thing.lives.color = live(object.color, 3, 1, thing);
+          thing.lives.visible = live(object.visible, 0, true, thing, 'flag');
+          thing.state.parallax = numbers(object.parallaxDepth, 2, 1);
+          // Whatever else of it has a script behind it: the script is run for what it does.
+          Object.keys(object).forEach(function (name) {
+            var value = object[name];
+            if (thing.lives[name] || name === 'text' || name === 'volume' || name === 'pointsize') return;
+            if (value && typeof value === 'object' && typeof value.script === 'string') thing.lives['~' + name] = liveOfAnyKind(value, thing);
+          });
+          Object.keys(thing.lives).forEach(function (name) { thing.state[name] = thing.lives[name].now; });
+          if (object.id !== undefined) byId[String(object.id)] = thing;
+          things.push(thing);
+          return thing;
+        }
+
+        // One more value of an object that may change.
+        function also(thing, name, value) {
+          thing.lives[name] = value;
+          thing.state[name] = value.now;
+        }
+
+        // Where an object stands on the scene. One that hangs on another has its place, size and
+        // turn counted from that one, and is hidden with it.
+        function standing(thing, depth) {
+          var state = thing.state;
+          var own = { origin: state.origin, scale: state.scale, angle: state.angles[2], visible: state.visible !== false };
+          var parent = thing.parent !== undefined && (depth || 0) < 32 ? byId[String(thing.parent)] : null;
+          if (!parent || parent === thing) return own;
+          var up = standing(parent, (depth || 0) + 1);
+          var x = own.origin[0] * up.scale[0], y = own.origin[1] * up.scale[1];
+          var cos = Math.cos(up.angle), sin = Math.sin(up.angle);
+          return { origin: [up.origin[0] + x * cos - y * sin, up.origin[1] + x * sin + y * cos, own.origin[2]],
+                   scale: [own.scale[0] * up.scale[0], own.scale[1] * up.scale[1], own.scale[2]],
+                   angle: own.angle + up.angle, visible: own.visible && up.visible };
+        }
+
+        function wantsReading(value, all) {
+          var script = value.script;
+          return (all && value.bound) || value.changes || !!(script && (script.made === undefined || (script.made && script.made.update)));
+        }
+
+        // Brings an object up to date: every frame what an animation or a script changes, and
+        // with `all` — the wallpaper's settings have changed — everything.
+        function refresh(thing, all) {
+          Object.keys(thing.lives).forEach(function (name) {
+            var value = thing.lives[name];
+            if (!wantsReading(value, all)) return;
+            var script = value.script;
+            // What a script has set by itself meanwhile is what it carries on from.
+            if (script && script.made !== undefined) value.now = thing.state[name];
+            var next = value.read();
+            if (script && script.quiet) {
+              value.now = thing.state[name];
+              return;
+            }
+            if (!same(next, thing.state[name])) {
+              thing.state[name] = next;
+              dirty = true;
+            }
+          });
+          (thing.effects || []).forEach(function (effect) {
+            var touched = false;
+            if (wantsReading(effect.shown, all)) {
+              var before = effect.shown.now;
+              if (effect.shown.read() !== before) touched = true;
+            }
+            effect.passes.forEach(function (pass) {
+              (pass.lives || []).forEach(function (value) {
+                if (!wantsReading(value, all)) return;
+                var before = value.now;
+                if (!same(value.read(), before)) touched = true;
+              });
+            });
+            if (touched) stale(thing);
+          });
+          if (all && thing.settle) thing.settle();
+        }
+
+        // What was drawn of an object once and kept no longer holds.
+        function stale(thing) {
+          dirty = true;
+          if (thing.kept) {
+            release(thing.kept);
+            thing.kept = null;
+          }
+        }
+
+        // The effects on an object, each a list of passes ready to draw.
+        function buildEffects(thing, object) {
+          thing.effects = [];
+          (object.effects || []).forEach(function (use) {
+            // One the scene has switched off for good is not made ready at all, unless the scene
+            // has scripts, which may switch it on.
+            if (use.visible === false && !scripted) return;
+            var fileName = String(plain(use.file) || '');
+            var what = '“' + thing.name + '”, effect ' + fileName.replace(/^effects\//, '').replace(/\/effect\.json$/, '');
+            var effect = json(fileName);
+            if (!effect) {
+              note(what + ': not in the scene, left out');
+              return;
+            }
+            var built = { name: String(plain(use.name) || effect.name || ''), passes: [],
+                          shown: live(use.visible, 0, true, thing, 'flag'), targets: (effect.fbos || []).map(function (target) {
+              return { name: key(target.name), scale: Math.max(1, number(target.scale, 1)) };
+            }) };
+            var whole = true;
+            (effect.passes || []).forEach(function (step, index) {
+              if (!whole) return;
+              if (step.command) {
+                if (step.command === 'copy') built.passes.push({ copy: true, target: key(step.target || ''), source: key(step.source || '') });
+                return;
+              }
+              var chosen = (use.passes || [])[index] || {};
+              var own = ((json(step.material) || {}).passes || [])[0];
+              if (!own) {
+                whole = false;
+                note(what + ': its material is not in the scene, left out');
+                return;
+              }
+              // The textures by slot: what the scene puts there, else what the effect comes with.
+              var names = [];
+              var count = Math.max((own.textures || []).length, (chosen.textures || []).length);
+              for (var slot = 0; slot < count; slot++) {
+                var given = (chosen.textures || [])[slot];
+                names[slot] = given !== null && given !== undefined ? given : ((own.textures || [])[slot] || null);
+              }
+              var pass = buildPass(own.shader, merged(own.combos, chosen.combos),
+                                   merged(own.constantshadervalues, chosen.constantshadervalues), names, what, thing);
+              if (!pass) {
+                whole = false;
+                return;
+              }
+              pass.target = step.target ? key(step.target) : null;
+              pass.binds = (step.bind || []).map(function (bind) { return { name: key(bind.name), slot: number(bind.index, 0) }; });
+              // What is in each slot: a name the effect binds there, a texture, or what the slot
+              // is said to hold when nothing is put there.
+              pass.inputs = [];
+              pass.slots.forEach(function (slot) {
+                var bound = pass.binds.filter(function (bind) { return bind.slot === slot; })[0];
+                var name = bound ? bound.name : (names[slot] || pass.defaults[slot] || null);
+                if (name === null || name === undefined) {
+                  pass.inputs[slot] = slot === 0 ? { previous: true } : { picture: flat(255, 255, 255, 255) };
+                } else if (key(name) === 'previous') {
+                  pass.inputs[slot] = { previous: true };
+                } else if (/^_rt_/.test(key(name))) {
+                  pass.inputs[slot] = { target: key(name) };
+                } else {
+                  pass.inputs[slot] = { picture: texture(name) };
+                }
+              });
+              if (pass.moving) thing.moving = true;
+              built.passes.push(pass);
+            });
+            if (whole && built.passes.length) thing.effects.push(built);
+          });
+        }
+
+        function buildImage(object, layer) {
+          var modelName = String(plain(object.image) || '');
+          var model = json(modelName);
+          layer.kept = null;
+          if (!model) {
+            // Layers Wallpaper Engine has ready-made: one that takes what is under it, to put
+            // effects over the whole scene, and one of a single color.
+            if (/composelayer|fullscreenlayer/.test(key(modelName))) {
+              layer.takesScene = true;
+            } else if (/solidlayer/.test(key(modelName))) {
+              layer.picture = flat(255, 255, 255, 255);
+            } else {
+              note('“' + layer.name + '”: its model ' + modelName + ' is not in the scene');
+              return null;
+            }
+          }
+          var base = (model && (json(model.material) || {}).passes || [])[0] || {};
+          layer.blending = key(base.blending || 'translucent');
+          if (base.textures && base.textures[0]) layer.picture = texture('materials/' + base.textures[0]);
+          if (!layer.picture && !layer.takesScene) {
+            note('“' + layer.name + '” has no picture');
+            return null;
+          }
+          var size = numbers(object.size, 2, 0);
+          if (!(size[0] > 0 && size[1] > 0)) {
+            size = [number(model && model.width, 0) || (layer.picture && layer.picture.width > 1 ? layer.picture.width : sceneWidth),
+                    number(model && model.height, 0) || (layer.picture && layer.picture.height > 1 ? layer.picture.height : sceneHeight)];
+          }
+          layer.size = size;
+          layer.brightness = number(object.brightness, 1);
+          layer.blendMode = number(object.colorBlendMode, 0);
+          if (layer.picture && layer.picture.frames) layer.moving = true;
+          // A picture that bends, if its bones came with the scene and could be read.
+          var bends = model && model.puppet ? puppets[key(model.puppet)] : null;
+          if (bends) {
+            layer.puppet = buildPuppet(bends, object.animationlayers, layer.name);
+            if (layer.puppet && layer.puppet.moving) layer.moving = true;
+          } else if (model && model.puppet) {
+            note('“' + layer.name + '” is a picture that bends, but its bones could not be read; it is shown still');
+          }
+          buildEffects(layer, object);
+          // What takes the scene under it changes whenever anything under it does.
+          if (layer.takesScene) layer.moving = true;
+          layer.draw = function () { drawImage(layer); };
+          return layer;
+        }
+
+        // --- Texts ------------------------------------------------------------
+        //
+        // A text is drawn by the browser into a picture of its own, anew whenever it says
+        // something else, and then put on the scene like any picture.
+
+        var fontFiles = (scene && scene.fonts) || {};
+        var fontsMade = {};
+        var fontsThere = 0; // how many of them have arrived
+        var KNOWN_FONTS = {
+          arial: 'Arial, Helvetica', consolas: 'Consolas, Menlo, Monaco, monospace', couriernew: '"Courier New", Courier, monospace',
+          timesnewroman: '"Times New Roman", Times, serif', verdana: 'Verdana', tahoma: 'Tahoma', georgia: 'Georgia, serif',
+          impact: 'Impact', comicsansms: '"Comic Sans MS"', trebuchetms: '"Trebuchet MS"', segoeui: '"Segoe UI", -apple-system',
+          calibri: 'Calibri, "Helvetica Neue"', lucidaconsole: '"Lucida Console", Menlo, monospace'
+        };
+
+        // The font a text names, for the browser: one of the scene's own files, or one of the
+        // system's by the name Wallpaper Engine has for it.
+        function fontOf(name) {
+          var id = key(String(name || ''));
+          var file = fontFiles[id];
+          if (file) {
+            if (!fontsMade[id]) {
+              fontsMade[id] = 'wallaero-font-' + (Object.keys(fontsMade).length + 1);
+              try {
+                var face = new FontFace(fontsMade[id], 'url("' + encodeURI(file) + '")');
+                document.fonts.add(face);
+                face.load().then(function () {
+                  fontsThere++;
+                  changed();
+                }, function () { note('the font ' + name + ' cannot be loaded'); });
+              } catch (error) {
+                note('the font ' + name + ' cannot be loaded');
+              }
+            }
+            return '"' + fontsMade[id] + '", -apple-system, sans-serif';
+          }
+          var plainName = id.replace(/^systemfont_/, '').replace(/[^a-z0-9 ]/g, '');
+          return (KNOWN_FONTS[plainName] || '"' + plainName + '"') + ', -apple-system, sans-serif';
+        }
+
+        function buildText(object, thing) {
+          thing.kept = null;
+          thing.blending = 'translucent';
+          thing.brightness = 1;
+          thing.blendMode = number(object.colorBlendMode, 0);
+          thing.ownColor = true; // the color is in the picture already
+          also(thing, 'text', live(object.text, 0, '', thing, 'text'));
+          also(thing, 'pointsize', live(object.pointsize, 1, 32, thing));
+          // What a script has told the text to look like, in place of what the scene says.
+          thing.own = {};
+          function said(name) {
+            return thing.own[name] !== undefined ? thing.own[name] : object[name];
+          }
+          var paper = document.createElement('canvas');
+          var pen = paper.getContext('2d');
+          var entry = { texture: newTexture(true, true), width: 1, height: 1 };
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+          thing.picture = { layers: [entry], width: 1, height: 1, channels: 'rgba', frames: null, ready: true };
+          // The box the scene gives the text, which says where its edges are held.
+          var given = numbers(object.size, 2, 0);
+          thing.size = given[0] > 0 ? given : [1, 1];
+          var shown = null;
+
+          function hex(parts) {
+            return 'rgb(' + parts.slice(0, 3).map(function (part) { return Math.round(Math.max(0, Math.min(1, part)) * 255); }).join(',') + ')';
+          }
+
+          // Draws the text into its picture, if it says or looks other than what is there.
+          thing.settle = function () {
+            var state = thing.state;
+            var padding = number(said('padding'), 0);
+            var across = key(plain(said('horizontalalign')) || 'center'), down = key(plain(said('verticalalign')) || 'center');
+            var background = flag(said('opaquebackground'), false) ? numbers(said('backgroundcolor'), 3, 0) : null;
+            var family = fontOf(plain(said('font')));
+            var widest = flag(said('limitwidth'), false) ? number(said('maxwidth'), 0) : 0;
+            var rows = flag(said('limitrows'), false) ? Math.max(1, number(said('maxrows'), 1)) : 0;
+            var asked = [state.text, state.pointsize[0], state.color.join(), scale, padding, across, down, String(background), family, fontsThere, widest, rows].join('\u0001');
+            if (asked === shown) return;
+            shown = asked;
+            // Wallpaper Engine sizes a font by the height of its line, from the top of its tallest
+            // letter to the bottom of its lowest: four units of the scene to a point.
+            pen.font = '100px ' + family;
+            var whole = pen.measureText('M');
+            var tall = (whole.fontBoundingBoxAscent + whole.fontBoundingBoxDescent) / 100;
+            var letter = Math.max(1, state.pointsize[0] * 4 / (tall > 0.7 && tall < 2.5 ? tall : 1.17));
+            var font = letter + 'px ' + family;
+            pen.font = font;
+            var lines = String(state.text).split('\n');
+            if (widest > 0) {
+              // Lines longer than the scene allows are broken between words.
+              var broken = [];
+              lines.forEach(function (line) {
+                var current = '';
+                line.split(' ').forEach(function (word) {
+                  var longer = current ? current + ' ' + word : word;
+                  if (current && pen.measureText(longer).width > widest) {
+                    broken.push(current);
+                    current = word;
+                  } else {
+                    current = longer;
+                  }
+                });
+                broken.push(current);
+              });
+              lines = broken;
+            }
+            if (rows > 0) lines = lines.slice(0, rows);
+            var widths = lines.map(function (line) { return pen.measureText(line).width; });
+            var row = letter * 0.84;
+            var advance = Math.max(1, state.pointsize[0] * 4); // from one line to the next
+            var width = Math.max.apply(null, widths.concat([1])) + padding * 2;
+            var height = row + (lines.length - 1) * advance + padding * 2;
+            paper.width = Math.max(1, Math.min(8192, Math.ceil(width * scale)));
+            paper.height = Math.max(1, Math.min(8192, Math.ceil(height * scale)));
+            pen.setTransform(paper.width / width, 0, 0, paper.height / height, 0, 0);
+            pen.clearRect(0, 0, width, height);
+            if (background) {
+              pen.fillStyle = hex(background);
+              pen.fillRect(0, 0, width, height);
+            }
+            pen.font = font;
+            pen.fillStyle = hex(state.color);
+            pen.textBaseline = 'middle';
+            lines.forEach(function (line, index) {
+              var x = across === 'left' ? padding : (across === 'right' ? width - padding - widths[index] : (width - widths[index]) / 2);
+              pen.fillText(line, x, padding + row / 2 + index * advance);
+            });
+            gl.bindTexture(gl.TEXTURE_2D, entry.texture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, paper);
+            entry.width = paper.width;
+            entry.height = paper.height;
+            // The text grows from the edge it is aligned to; in the middle, from its middle.
+            var box = given[0] > 0 ? given : [width, height];
+            thing.shift = [across === 'left' ? (width - box[0]) / 2 : (across === 'right' ? (box[0] - width) / 2 : 0),
+                           down === 'top' ? (box[1] - height) / 2 : (down === 'bottom' ? (height - box[1]) / 2 : 0)];
+            thing.size = [width, height];
+            stale(thing);
+          };
+          buildEffects(thing, object);
+          thing.draw = function () {
+            thing.settle();
+            drawImage(thing);
+          };
+          return thing;
+        }
+
+        // How far the scene is moved for an object as the pointer moves: the nearer an object is
+        // said to be, the further.
+        function shifted(thing) {
+          if (!eye.on) return [0, 0];
+          var depth = thing.state.parallax;
+          return [-eye.x * depth[0] * eye.amount * sceneWidth, eye.y * depth[1] * eye.amount * sceneHeight];
+        }
+
+        function drawImage(layer) {
+          var state = layer.state;
+          var stands = standing(layer);
+          if (!stands.visible) return;
+          var nominal = layer.size;
+          var width = nominal[0] * scale, height = nominal[1] * scale;
+          var moved = shifted(layer);
+          var origin = [stands.origin[0] + moved[0] + (layer.shift ? layer.shift[0] * stands.scale[0] : 0),
+                        stands.origin[1] + moved[1] + (layer.shift ? layer.shift[1] * stands.scale[1] : 0)];
+          var size = [nominal[0] * stands.scale[0], nominal[1] * stands.scale[1]];
+          var angle = stands.angle;
+          var bright = layer.brightness;
+          var tint = layer.ownColor ? [1, 1, 1, Math.max(0, Math.min(1, state.alpha[0]))]
+                   : [state.color[0] * bright, state.color[1] * bright, state.color[2] * bright, Math.max(0, Math.min(1, state.alpha[0]))];
+          var how = layer.blendMode > 0 && layer.blendMode !== 9 ? layer.blendMode :
+                    (layer.blendMode === 9 || layer.blending === 'additive' ? 'additive' : (layer.blending === 'normal' ? 'normal' : 'translucent'));
+          var place = placement(origin, size, angle);
+          // A picture that bends is drawn as its triangles, whose corners are counted in the
+          // picture's own pixels from its middle.
+          var mesh = layer.puppet || null;
+          if (mesh) {
+            mesh.pose(time);
+            place = placement(origin, [stands.scale[0], stands.scale[1]], angle);
+          }
+          var effects = layer.effects.filter(function (effect) { return effect.shown.now; });
+
+          // The picture as it comes: a frame of it, if it is animated.
+          var source = null;
+          if (layer.picture) {
+            var shown = frameAt(layer.picture, time);
+            var first = shown ? shown.layer : layer.picture.layers[0];
+            source = { texture: first.texture, frame: shown ? shown.frame : null, channels: layer.picture.channels,
+                       resolution: [first.width, first.height, first.width, first.height] };
+          }
+          if (!effects.length && source) {
+            put(source, place, tint, how, mesh);
+            return;
+          }
+          // One that does not move is drawn once and kept.
+          if (layer.kept) {
+            put({ texture: layer.kept.texture }, place, tint, how, mesh);
+            return;
+          }
+
+          var spare = [acquire(width, height), acquire(width, height)];
+          spare.forEach(function (target) {
+            target.nominalWidth = nominal[0];
+            target.nominalHeight = nominal[1];
+          });
+          var held = null;
+          var resolution = [nominal[0], nominal[1], nominal[0], nominal[1]];
+          function next() {
+            return spare[0] === held ? spare[1] : spare[0];
+          }
+          if (layer.takesScene) {
+            // What of the scene lies under the layer, wherever the layer is and however turned.
+            held = next();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, held.framebuffer);
+            gl.viewport(0, 0, held.width, held.height);
+            gl.disable(gl.BLEND);
+            if (grabProgram) {
+              gl.useProgram(grabProgram.program);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, sceneTarget.texture);
+              gl.uniform1i(grabProgram.uniforms.u_Texture.location, 0);
+              gl.uniformMatrix3fv(grabProgram.uniforms.u_Place.location, false, place);
+              gl.bindVertexArray(passShape);
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            }
+            source = { texture: held.texture, resolution: resolution };
+          } else if (source.frame || source.channels !== 'rgba') {
+            // Made plain first — the one frame, in full color — as the effects expect it.
+            held = next();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, held.framebuffer);
+            gl.viewport(0, 0, held.width, held.height);
+            put(source, FILL, [1, 1, 1, 1], 'normal');
+            source = { texture: held.texture, resolution: resolution };
+          }
+
+          var previous = source;
+          effects.forEach(function (effect) {
+            var named = {};
+            effect.targets.forEach(function (wanted) {
+              var target = acquire(width / wanted.scale, height / wanted.scale);
+              target.nominalWidth = nominal[0] / wanted.scale;
+              target.nominalHeight = nominal[1] / wanted.scale;
+              named[wanted.name] = target;
+            });
+            function input(from) {
+              if (from.picture) {
+                var first = from.picture.layers[0];
+                return { texture: first.texture, resolution: [first.width, first.height, first.width, first.height] };
+              }
+              if (from.target && named[from.target]) {
+                var target = named[from.target];
+                return { texture: target.texture, resolution: [target.nominalWidth, target.nominalHeight, target.nominalWidth, target.nominalHeight] };
+              }
+              if (from.target === '_rt_fullframebuffer') {
+                return { texture: sceneTarget.texture, resolution: [sceneWidth, sceneHeight, sceneWidth, sceneHeight] };
+              }
+              // What the picture has become so far, also under the names Wallpaper Engine has for it.
+              return previous;
+            }
+            effect.passes.forEach(function (pass) {
+              if (pass.copy) {
+                var into = named[pass.target];
+                var from = named[pass.source];
+                if (!into) return;
+                gl.bindFramebuffer(gl.FRAMEBUFFER, into.framebuffer);
+                gl.viewport(0, 0, into.width, into.height);
+                put(from ? { texture: from.texture } : previous, FILL, [1, 1, 1, 1], 'normal');
+                return;
+              }
+              var target = pass.target ? named[pass.target] : next();
+              if (!target) return;
+              drawPass(pass, target, pass.inputs.map(input));
+              if (!pass.target) {
+                held = target;
+                previous = { texture: target.texture, resolution: resolution };
+              }
+            });
+            Object.keys(named).forEach(function (name) { release(named[name]); });
+          });
+
+          gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+          gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+          put({ texture: previous.texture }, place, tint, how, mesh);
+          if (!layer.moving && held && loading === 0) {
+            layer.kept = held;
+            release(spare[0] === held ? spare[1] : spare[0]);
+          } else {
+            spare.forEach(release);
+          }
+        }
+
+        // --- Particles --------------------------------------------------------
+        //
+        // A system of particles is said in three lists: emitters, which make particles; initializers,
+        // which give each new one its size, color, speed and time to live; and operators, which
+        // change it as it lives. They are played here on the processor, and all the particles of a
+        // system are drawn at once.
+
+        var particleProgram = link([
+          '#version 300 es',
+          'in vec2 a_TexCoord;',
+          'in vec4 a_Place;',  // where its middle is on the scene, its size and how far it is turned
+          'in vec4 a_Color;',
+          'in vec4 a_Frame;',  // where in the texture its picture is
+          'uniform mat2 u_Linear;',
+          'uniform vec2 u_Scene;',
+          'out vec2 v_Uv;',
+          'out vec4 v_Color;',
+          'void main() {',
+          '  vec2 corner = vec2(a_TexCoord.x - 0.5, 0.5 - a_TexCoord.y);',
+          '  float c = cos(a_Place.w);',
+          '  float s = sin(a_Place.w);',
+          '  vec2 at = a_Place.xy + u_Linear * (vec2(corner.x * c - corner.y * s, corner.x * s + corner.y * c) * a_Place.z);',
+          '  gl_Position = vec4(2.0 * at.x / u_Scene.x - 1.0, 1.0 - 2.0 * at.y / u_Scene.y, 0.0, 1.0);',
+          '  v_Uv = a_Frame.xy + a_TexCoord * a_Frame.zw;',
+          '  v_Color = a_Color;',
+          '}'
+        ].join('\n'), [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'in vec4 v_Color;',
+          'uniform sampler2D u_Texture;',
+          'uniform int u_Channels;',
+          'uniform float u_Bright;',
+          'out vec4 color;',
+          'void main() {',
+          '  vec4 c = texture(u_Texture, v_Uv);',
+          '  if (u_Channels == 1) c = vec4(1.0, 1.0, 1.0, c.r);',
+          '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
+          '  color = vec4(c.rgb * v_Color.rgb * u_Bright, c.a * v_Color.a);',
+          '}'
+        ].join('\n'), 'the player\'s own shader');
+        var FLOATS = 12; // to a particle, for the shader
+
+        function mix(from, to, share) {
+          return from + (to - from) * share;
+        }
+
+        // A color written "r g b", by Wallpaper Engine from 0 to 255 in some places and from 0 to
+        // 1 in others; here from 0 to 1.
+        function color(value, fallback) {
+          var parts = numbers(value, 3, fallback);
+          var large = parts[0] > 1.5 || parts[1] > 1.5 || parts[2] > 1.5;
+          return large ? parts.map(function (part) { return part / 255; }) : parts;
+        }
+
+        // What gives a new particle one of its properties; null for one not known here.
+        function initializer(said, system) {
+          var exponent = number(said.exponent, 1);
+          function pick(least, most) {
+            return mix(least, most, exponent === 1 ? Math.random() : Math.pow(Math.random(), exponent));
+          }
+          var least, most;
+          switch (key(said.name)) {
+            case 'lifetimerandom':
+              least = number(said.min, 1);
+              most = number(said.max, 1);
+              return function (particle) { particle.life = Math.max(0.01, pick(least, most)); };
+            case 'sizerandom':
+              least = number(said.min, 20);
+              most = number(said.max, 20);
+              return function (particle) { particle.size = pick(least, most); };
+            case 'alpharandom':
+              least = number(said.min, 1);
+              most = number(said.max, 1);
+              return function (particle) { particle.alpha = pick(least, most); };
+            case 'velocityrandom':
+              least = numbers(said.min, 3, 0);
+              most = numbers(said.max, 3, 0);
+              return function (particle) {
+                particle.vx += pick(least[0], most[0]);
+                particle.vy += pick(least[1], most[1]);
+                particle.vz += pick(least[2], most[2]);
+              };
+            case 'colorrandom':
+              least = color(said.min, 255);
+              most = color(said.max, 255);
+              return function (particle) {
+                // One of the colors between the two, not each part of it on its own.
+                var share = pick(0, 1);
+                particle.red = mix(least[0], most[0], share);
+                particle.green = mix(least[1], most[1], share);
+                particle.blue = mix(least[2], most[2], share);
+              };
+            case 'rotationrandom':
+              least = numbers(said.min, 3, 0)[2];
+              most = numbers(said.max, 3, 0)[2];
+              return function (particle) { particle.angle = pick(least, most); };
+            case 'angularvelocityrandom':
+              least = numbers(said.min, 3, 0)[2];
+              most = numbers(said.max, 3, 0)[2];
+              return function (particle) { particle.spin = pick(least, most); };
+            case 'turbulentvelocityrandom':
+              // A speed in a direction that wanders around `forward`, the more the larger the scale.
+              var forward = numbers(said.forward, 3, [0, 1, 0]);
+              var heading = Math.atan2(forward[1], forward[0]);
+              var spread = number(said.scale, 1) * Math.PI / 2;
+              least = number(said.speedmin, 100);
+              most = number(said.speedmax, 250);
+              return function (particle) {
+                var wander = (smoothNoise(system.age * number(said.timescale, 1) * 2, particle.seed * 50, 256, 11) - 0.5) * 2 * spread;
+                var speed = mix(least, most, Math.random());
+                particle.vx += Math.cos(heading + wander) * speed;
+                particle.vy += Math.sin(heading + wander) * speed;
+              };
+            default:
+              note('“' + system.name + '”: what sets up a particle by “' + said.name + '” is not played');
+              return null;
+          }
+        }
+
+        // How far a change that runs from `start` to `end` of a particle's life has got.
+        function ramp(share, start, end) {
+          return end <= start ? (share >= end ? 1 : 0) : Math.max(0, Math.min(1, (share - start) / (end - start)));
+        }
+
+        // What changes a particle as it lives; null for one not known here.
+        function operator(said, system) {
+          var start = number(said.starttime, 0), end = number(said.endtime, 1);
+          // The wave of an oscillation at a moment of a particle's life, from −1 to 1. Each
+          // particle has its own pace and start, drawn once from its own number.
+          function wave(particle, share, salt) {
+            var pace = mix(number(said.frequencymin, 0), number(said.frequencymax, 10), hash(particle.id, salt, 1));
+            var shift = mix(number(said.phasemin, 0), number(said.phasemax, Math.PI * 2), hash(particle.id, salt, 2));
+            return Math.sin(Math.PI * 2 * pace * share + shift);
+          }
+          switch (key(said.name)) {
+            case 'movement':
+              var gravity = numbers(said.gravity, 3, 0);
+              var drag = number(said.drag, 0);
+              return function (particle, seconds) {
+                var keep = Math.max(0, 1 - drag * seconds);
+                particle.vx = (particle.vx + gravity[0] * seconds) * keep;
+                particle.vy = (particle.vy + gravity[1] * seconds) * keep;
+                particle.vz = (particle.vz + gravity[2] * seconds) * keep;
+                particle.x += particle.vx * seconds;
+                particle.y += particle.vy * seconds;
+                particle.z += particle.vz * seconds;
+              };
+            case 'angularmovement':
+              var force = numbers(said.force, 3, 0)[2];
+              var slowing = number(said.drag, 0);
+              return function (particle, seconds) {
+                particle.spin = (particle.spin + force * seconds) * Math.max(0, 1 - slowing * seconds);
+                particle.angle += particle.spin * seconds;
+              };
+            case 'alphafade':
+              var fadeIn = number(said.fadeintime, 0.5), fadeOut = number(said.fadeouttime, 0.5);
+              return function (particle, seconds, share) {
+                if (fadeIn > 0 && share < fadeIn) particle.alphaNow *= share / fadeIn;
+                if (fadeOut < 1 && share > fadeOut) particle.alphaNow *= (1 - share) / (1 - fadeOut);
+              };
+            case 'sizechange':
+              var sizeFrom = number(said.startvalue, 1), sizeTo = number(said.endvalue, 0);
+              return function (particle, seconds, share) { particle.sizeNow *= mix(sizeFrom, sizeTo, ramp(share, start, end)); };
+            case 'alphachange':
+              var alphaFrom = number(said.startvalue, 1), alphaTo = number(said.endvalue, 0);
+              return function (particle, seconds, share) { particle.alphaNow *= mix(alphaFrom, alphaTo, ramp(share, start, end)); };
+            case 'colorchange':
+              var colorFrom = color(said.startvalue, 1), colorTo = color(said.endvalue, 1);
+              return function (particle, seconds, share) {
+                var done = ramp(share, start, end);
+                particle.redNow *= mix(colorFrom[0], colorTo[0], done);
+                particle.greenNow *= mix(colorFrom[1], colorTo[1], done);
+                particle.blueNow *= mix(colorFrom[2], colorTo[2], done);
+              };
+            case 'oscillatealpha':
+              var alphaLow = number(said.scalemin, 0), alphaHigh = number(said.scalemax, 1);
+              return function (particle, seconds, share) { particle.alphaNow *= mix(alphaLow, alphaHigh, 0.5 + 0.5 * wave(particle, share, 31)); };
+            case 'oscillatesize':
+              var sizeLow = number(said.scalemin, 0.8), sizeHigh = number(said.scalemax, 1.2);
+              return function (particle, seconds, share) { particle.sizeNow *= mix(sizeLow, sizeHigh, 0.5 + 0.5 * wave(particle, share, 37)); };
+            case 'oscillateposition':
+              var mask = numbers(said.mask, 3, [1, 1, 0]);
+              var swingLow = number(said.scalemin, 1), swingHigh = number(said.scalemax, 1);
+              return function (particle, seconds, share) {
+                var swing = mix(swingLow, swingHigh, hash(particle.id, 43, 3)) * wave(particle, share, 41);
+                particle.shiftX += mask[0] * swing;
+                particle.shiftY += mask[1] * swing;
+              };
+            case 'turbulence':
+              // A push that changes smoothly from place to place and with time.
+              var grain = number(said.scale, 0.01), pace = number(said.timescale, 1);
+              var pushLow = number(said.speedmin, 100), pushHigh = number(said.speedmax, 200);
+              var along = numbers(said.mask, 3, [1, 1, 0]);
+              return function (particle, seconds) {
+                var push = mix(pushLow, pushHigh, hash(particle.id, 47, 4)) * seconds;
+                var at = system.age * pace;
+                particle.vx += along[0] * push * (smoothNoise(particle.x * grain + at, particle.y * grain, 4096, 5) - 0.5) * 2;
+                particle.vy += along[1] * push * (smoothNoise(particle.x * grain, particle.y * grain + at, 4096, 6) - 0.5) * 2;
+              };
+            default:
+              note('“' + system.name + '”: what changes a particle by “' + said.name + '” is not played');
+              return null;
+          }
+        }
+
+        function buildParticles(object, system) {
+          var fileName = String(plain(object.particle) || '');
+          var said = json(fileName);
+          var name = system.name;
+          if (!said) {
+            note('“' + name + '”: its particles, ' + fileName + ', are not in the scene');
+            return null;
+          }
+          var material = ((json(said.material) || {}).passes || [])[0] || {};
+          var over = object.instanceoverride || {};
+          system.moving = true;
+          system.age = 0;
+          system.particles = [];
+          system.made = 0;
+          system.most = Math.max(1, Math.min(20000, Math.round(number(said.maxcount, 100) * number(over.count, 1))));
+          system.picture = texture('materials/' + ((material.textures || [])[0] || 'particle/dot'));
+          system.additive = key(material.blending || 'translucent') === 'additive';
+          system.bright = number((material.constantshadervalues || {}).ui_editor_properties_overbright, 1);
+          // Further away is smaller: the particles have depth, and are drawn as seen by an eye.
+          system.perspective = (number(said.flags, 0) & 4) !== 0;
+          // What the scene changes of the particles where it uses them; a setting of the
+          // wallpaper may stand behind each.
+          system.settle = function () {
+            system.rate = number(over.rate, 1);
+            system.sizeBy = number(over.size, 1);
+            system.alphaBy = number(over.alpha, 1);
+            system.speedBy = number(over.speed, 1);
+            system.lifeBy = number(over.lifetime, 1);
+            system.tint = over.colorn !== undefined ? color(over.colorn, 1) : [1, 1, 1];
+          };
+          system.settle();
+          system.emitters = (said.emitter || []).map(function (emitter) {
+            return {
+              box: key(emitter.name) === 'boxrandom',
+              origin: numbers(emitter.origin, 3, 0), directions: numbers(emitter.directions, 3, 1),
+              least: numbers(emitter.distancemin, 3, 0), most: numbers(emitter.distancemax, 3, 256),
+              sign: numbers(emitter.sign, 3, 0),
+              rate: number(emitter.rate, 5), burst: number(emitter.instantaneous, 0),
+              speedLeast: number(emitter.speedmin, 0), speedMost: number(emitter.speedmax, 0),
+              lasts: number(emitter.duration, 0), waits: number(emitter.delay, 0), owed: 0
+            };
+          });
+          system.initializers = (said.initializer || []).map(function (each) { return initializer(each, system); }).filter(Boolean);
+          system.operators = (said.operator || []).map(function (each) { return operator(each, system); }).filter(Boolean);
+          (said.renderer || []).forEach(function (renderer) {
+            if (key(renderer.name) !== 'sprite') note('“' + name + '”: particles drawn as “' + renderer.name + '” are drawn as plain sprites');
+          });
+          system.data = new Float32Array(system.most * FLOATS);
+          system.buffer = gl.createBuffer();
+          system.shape = gl.createVertexArray();
+          gl.bindVertexArray(system.shape);
+          gl.bindBuffer(gl.ARRAY_BUFFER, passBuffer);
+          gl.enableVertexAttribArray(1);
+          gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 12);
+          gl.bindBuffer(gl.ARRAY_BUFFER, system.buffer);
+          gl.bufferData(gl.ARRAY_BUFFER, system.data.byteLength, gl.DYNAMIC_DRAW);
+          for (var attribute = 0; attribute < 3; attribute++) {
+            gl.enableVertexAttribArray(2 + attribute);
+            gl.vertexAttribPointer(2 + attribute, 4, gl.FLOAT, false, FLOATS * 4, attribute * 16);
+            gl.vertexAttribDivisor(2 + attribute, 1);
+          }
+          gl.bindVertexArray(null);
+
+          function make(emitter) {
+            var particle = { id: ++system.made, seed: Math.random(), age: 0, life: 1, size: 20, alpha: 1, red: 1, green: 1, blue: 1,
+                             angle: 0, spin: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+            var away = [0, 0, 0];
+            var axis;
+            if (emitter.box) {
+              for (axis = 0; axis < 3; axis++) {
+                var side = emitter.sign[axis] > 0 ? 1 : (emitter.sign[axis] < 0 ? -1 : (Math.random() < 0.5 ? -1 : 1));
+                away[axis] = side * mix(emitter.least[axis], emitter.most[axis], Math.random()) * emitter.directions[axis];
+              }
+            } else {
+              // Any direction, as far as somewhere between the least and the most.
+              var turn = Math.random() * Math.PI * 2, rise = Math.random() * 2 - 1, flat = Math.sqrt(1 - rise * rise);
+              var toward = [Math.cos(turn) * flat, Math.sin(turn) * flat, rise];
+              var far = mix(emitter.least[0], emitter.most[0], Math.random());
+              for (axis = 0; axis < 3; axis++) {
+                if (emitter.sign[axis] !== 0) toward[axis] = Math.abs(toward[axis]) * (emitter.sign[axis] > 0 ? 1 : -1);
+                away[axis] = toward[axis] * far * emitter.directions[axis];
+              }
+            }
+            particle.x = emitter.origin[0] + away[0];
+            particle.y = emitter.origin[1] + away[1];
+            particle.z = emitter.origin[2] + away[2];
+            var speed = mix(emitter.speedLeast, emitter.speedMost, Math.random());
+            var length = Math.sqrt(away[0] * away[0] + away[1] * away[1] + away[2] * away[2]);
+            if (speed !== 0 && length > 0) {
+              particle.vx = away[0] / length * speed;
+              particle.vy = away[1] / length * speed;
+              particle.vz = away[2] / length * speed;
+            }
+            system.initializers.forEach(function (set) { set(particle); });
+            particle.vx *= system.speedBy;
+            particle.vy *= system.speedBy;
+            particle.vz *= system.speedBy;
+            particle.life *= system.lifeBy;
+            system.particles.push(particle);
+          }
+
+          system.step = function (seconds) {
+            system.age += seconds;
+            system.emitters.forEach(function (emitter) {
+              if (system.age < emitter.waits) return;
+              if (emitter.burst > 0) {
+                for (var first = 0; first < emitter.burst && system.particles.length < system.most; first++) make(emitter);
+                emitter.burst = 0;
+              }
+              if (emitter.lasts > 0 && system.age > emitter.waits + emitter.lasts) return;
+              emitter.owed += emitter.rate * system.rate * seconds;
+              while (emitter.owed >= 1) {
+                emitter.owed -= 1;
+                if (system.particles.length < system.most) make(emitter);
+              }
+            });
+            var alive = [];
+            system.particles.forEach(function (particle) {
+              particle.age += seconds;
+              if (particle.age >= particle.life) return;
+              particle.alphaNow = particle.sizeNow = particle.redNow = particle.greenNow = particle.blueNow = 1;
+              particle.shiftX = particle.shiftY = 0;
+              var share = particle.age / particle.life;
+              system.operators.forEach(function (change) { change(particle, seconds, share); });
+              alive.push(particle);
+            });
+            system.particles = alive;
+          };
+
+          // How far the eye is from the scene, for particles with depth.
+          var away = (sceneHeight / 2) / Math.tan(number(general.perspectiveoverridefov, number(general.fov, 50)) * Math.PI / 360);
+
+          system.draw = function () {
+            if (!particleProgram || !system.particles.length) return;
+            var stands = standing(system);
+            if (!stands.visible) return;
+            var state = system.state;
+            var moved = shifted(system);
+            var originX = stands.origin[0] + moved[0], originY = stands.origin[1] + moved[1];
+            // Its own directions on the scene: turned, then stretched.
+            var cos = Math.cos(stands.angle), sin = Math.sin(stands.angle);
+            var linear = [cos * stands.scale[0], sin * stands.scale[0], -sin * stands.scale[1], cos * stands.scale[1]];
+            var see = system.alphaBy * Math.max(0, Math.min(1, state.alpha[0]));
+            var data = system.data;
+            var count = Math.min(system.particles.length, system.most);
+            var layer = system.picture.layers[0];
+            for (var i = 0; i < count; i++) {
+              var particle = system.particles[i];
+              var localX = particle.x + particle.shiftX, localY = particle.y + particle.shiftY;
+              var x = originX + linear[0] * localX + linear[2] * localY;
+              var y = originY + linear[1] * localX + linear[3] * localY;
+              var near = 1;
+              if (system.perspective) {
+                near = away / Math.max(away * 0.2, away - particle.z * stands.scale[2]);
+                x = sceneWidth / 2 + (x - sceneWidth / 2) * near;
+                y = sceneHeight / 2 + (y - sceneHeight / 2) * near;
+              }
+              var at = i * FLOATS;
+              data[at] = x;
+              data[at + 1] = y;
+              data[at + 2] = particle.size * particle.sizeNow * system.sizeBy * near;
+              data[at + 3] = particle.angle;
+              data[at + 4] = particle.red * particle.redNow * system.tint[0] * state.color[0];
+              data[at + 5] = particle.green * particle.greenNow * system.tint[1] * state.color[1];
+              data[at + 6] = particle.blue * particle.blueNow * system.tint[2] * state.color[2];
+              data[at + 7] = Math.max(0, particle.alpha * particle.alphaNow * see);
+              data[at + 8] = 0;
+              data[at + 9] = 0;
+              data[at + 10] = 1;
+              data[at + 11] = 1;
+            }
+            gl.useProgram(particleProgram.program);
+            gl.enable(gl.BLEND);
+            if (system.additive) gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
+            else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, layer.texture);
+            gl.uniform1i(particleProgram.uniforms.u_Texture.location, 0);
+            gl.uniform1i(particleProgram.uniforms.u_Channels.location, CHANNELS[system.picture.channels] || 0);
+            gl.uniform1f(particleProgram.uniforms.u_Bright.location, system.bright);
+            gl.uniformMatrix2fv(particleProgram.uniforms.u_Linear.location, false, new Float32Array(linear));
+            gl.uniform2f(particleProgram.uniforms.u_Scene.location, sceneWidth, sceneHeight);
+            gl.bindVertexArray(system.shape);
+            gl.bindBuffer(gl.ARRAY_BUFFER, system.buffer);
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, count * FLOATS));
+            gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
+            gl.bindVertexArray(null);
+          };
+
+          // A system begins as if it had been running for a while already.
+          var warm = Math.min(60, Math.max(0, number(said.starttime, 0)));
+          for (var played = 0; played < warm; played += 1 / 20) system.step(1 / 20);
+          return system;
+        }
+
+        // --- Sounds -----------------------------------------------------------
+
+        var players = [];
+
+        // A sound of the scene plays as the page's own sound would: the app decides whether it is
+        // heard and how loud, as for any wallpaper, and the scene how loud next to its other sounds.
+        function buildSound(object, thing) {
+          var list = (Array.isArray(object.sound) ? object.sound : [object.sound]).map(function (name) {
+            return soundFiles[key(String(plain(name) || ''))];
+          }).filter(Boolean);
+          var name = thing.name;
+          if (!list.length) {
+            note('“' + name + '”: its sound is not in the scene');
+            return null;
+          }
+          also(thing, 'volume', live(object.volume, 1, 1, thing));
+          var mode = key(plain(object.playbackmode) || 'loop');
+          var least = number(object.mintime, 0), most = number(object.maxtime, 0);
+          var audio = document.createElement('audio');
+          var index = 0;
+          var timer = 0;
+          var wanted = !flag(object.startsilent, false); // until a script says otherwise
+          var loud = -1;
+          audio.style.display = 'none';
+          audio.preload = 'auto';
+          audio.loop = mode === 'loop' && list.length === 1;
+
+          function start() {
+            var started = audio.play();
+            if (started && started['catch']) started['catch'](function () {});
+          }
+          audio.addEventListener('ended', function () {
+            if (stopped) return;
+            if (mode === 'single') {
+              wanted = false;
+              return;
+            }
+            // The next one, or any one after a pause, as the scene says.
+            index = mode === 'random' ? Math.floor(Math.random() * list.length) : (index + 1) % list.length;
+            timer = setTimeout(function () {
+              audio.src = encodeURI(list[index]);
+              if (wanted && standing(thing).visible) start();
+            }, mode === 'random' ? mix(least, most, Math.random()) * 1000 : 0);
+          });
+          audio.addEventListener('error', function () { note('“' + name + '”: this web engine cannot play ' + list[index].replace(/^.*\./, '.') + ' sound'); });
+          if (mode === 'random') index = Math.floor(Math.random() * list.length);
+
+          // Plays while the scene shows the object and nothing has stopped it, as loud as the
+          // scene says: a share of what the app lets the wallpaper have.
+          thing.settle = function () {
+            var share = Math.max(0, Math.min(1, thing.state.volume[0]));
+            if (share !== loud) {
+              loud = share;
+              audio.wallaeroShare = share;
+              var host = window.__wallaeroHost;
+              if (host && host.apply) host.apply({});
+              else audio.volume = share;
+            }
+            var sounds = wanted && standing(thing).visible;
+            if (sounds && audio.paused && !audio.ended) start();
+            if (!sounds && !audio.paused) audio.pause();
+          };
+          thing.sound = {
+            play: function () {
+              wanted = true;
+              if (audio.ended) audio.currentTime = 0;
+              thing.settle();
+            },
+            pause: function () {
+              wanted = false;
+              thing.settle();
+            },
+            stop: function () {
+              wanted = false;
+              thing.settle();
+              try {
+                audio.currentTime = 0;
+              } catch (error) {}
+            },
+            isPlaying: function () { return !audio.paused && !audio.ended; }
+          };
+          audio.src = encodeURI(list[index]);
+          document.body.appendChild(audio);
+          players.push({ audio: audio, stop: function () { clearTimeout(timer); audio.pause(); audio.remove(); } });
+          thing.draw = thing.settle;
+          thing.settle();
+          return thing;
+        }
+
+        // --- Building ---------------------------------------------------------
+
+        var listening = false;
+
+        // The sound the Mac plays, for the shaders and scripts that draw by it; asked for once one
+        // of them wants it, and heard for as long as the canvas is on the page.
+        function listen() {
+          if (listening || typeof window.wallpaperRegisterAudioListener !== 'function') return;
+          listening = true;
+          var host = window.__wallaeroHost;
+          if (host) host.owner = canvas;
+          window.wallpaperRegisterAudioListener(function (levels) { spectrum = levels; });
+          if (host) host.owner = null;
+        }
+
+        var all = (description.objects || []).filter(function (object) { return object && typeof object === 'object'; });
+        if (!(sceneWidth > 0 && sceneHeight > 0)) {
+          // A scene may leave its size to its first picture.
+          var first = all.filter(function (object) { return object.image; })[0];
+          var firstSize = first ? numbers(first.size, 2, 0) : [0, 0];
+          sceneWidth = firstSize[0] > 0 ? firstSize[0] : 1920;
+          sceneHeight = firstSize[1] > 0 ? firstSize[1] : 1080;
+        }
+        // A scene with scripts may show what it has hidden; in any other, what is hidden for good
+        // is left out.
+        var scripted = /"script"\s*:/.test(files['scene.json'] || '');
+        function idle() {}
+
+        all.forEach(function (object) {
+          var hidden = object.visible === false;
+          if (hidden && !scripted) return;
+          var make = object.image ? buildImage : (object.particle ? buildParticles : (object.sound ? buildSound :
+                     (object.text !== undefined ? buildText : null)));
+          var thing = placed(object, String(plain(object.image) || plain(object.particle) || (object.sound ? 'sound' : (make ? 'text' : 'group'))));
+          thing.draw = idle;
+          objects.push(thing);
+          if (!make) {
+            // Something with only a place holds the objects that hang on it together.
+            if (!hidden && (object.model || object.light || object.camera)) {
+              note('“' + thing.name + '” is ' + (object.model ? 'a 3D model' : (object.light ? 'a light' : 'a camera')) + ', which is not played');
+            }
+            return;
+          }
+          function finish() {
+            var built = null;
+            try {
+              built = make(object, thing);
+            } catch (error) {
+              note('“' + thing.name + '”: ' + error.message);
+            }
+            if (!built) {
+              thing.draw = idle;
+              thing.step = null;
+            }
+            return built;
+          }
+          if (thing.state.visible || (!object.image && !object.particle)) {
+            finish();
+          } else {
+            // A picture that is hidden is made ready when it first shows: its files are not
+            // loaded and its shaders not made for nothing.
+            thing.draw = function () {
+              if (!standing(thing).visible) return;
+              thing.draw = idle;
+              if (!finish()) return;
+              gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+              gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+              thing.draw();
+            };
+          }
+        });
+
+        // Whether anything of the scene is another picture every frame.
+        function isMoving() {
+          return objects.some(function (object) {
+            // What changes by itself over time, also whether the object shows.
+            if (Object.keys(object.lives).some(function (name) { return object.lives[name].changes; })) return true;
+            if (!standing(object).visible) return false;
+            return object.moving || (object.effects || []).some(function (effect) { return effect.shown.changes; });
+          });
+        }
+
+        // Whether the scene has to be looked at every frame, though it may not have to be drawn:
+        // a script that runs every frame, something it asked to be called for, the scene still
+        // coming to rest after the pointer.
+        function isLively() {
+          return timers.length > 0 || audioBuffers.length > 0 || eye.settling || scripts.some(function (script) {
+            return script.made === undefined || !!(script.made && script.made.update && !(script.failures > 3));
+          });
+        }
+
+        // --- Moving with the pointer ---------------------------------------------------------
+        //
+        // A scene may be looked at as through a window: as the pointer moves, what is said to be
+        // near moves more than what is far. `eye` is where the scene is looked at from, from the
+        // middle, and follows the pointer with a delay.
+
+        var eye = { on: false, amount: 0, x: 0, y: 0, settling: false };
+
+        function look(seconds) {
+          eye.on = flag(general.cameraparallax, false);
+          if (!eye.on) {
+            eye.settling = false;
+            return;
+          }
+          eye.amount = number(general.cameraparallaxamount, 0.5);
+          var reach = number(general.cameraparallaxmouseinfluence, 0.5);
+          var delay = Math.max(0, number(general.cameraparallaxdelay, 0.1));
+          var toX = (Math.max(0, Math.min(1, pointer[0])) - 0.5) * reach, toY = (Math.max(0, Math.min(1, pointer[1])) - 0.5) * reach;
+          var share = delay > 0 ? 1 - Math.exp(-seconds / delay) : 1;
+          var x = eye.x + (toX - eye.x) * share, y = eye.y + (toY - eye.y) * share;
+          eye.settling = Math.abs(toX - x) + Math.abs(toY - y) > 0.0002;
+          if (!eye.settling) {
+            x = toX;
+            y = toY;
+          }
+          if (x !== eye.x || y !== eye.y) {
+            eye.x = x;
+            eye.y = y;
+            dirty = true;
+          }
+        }
+
+        // --- Glow -----------------------------------------------------------------
+        //
+        // A scene may glow where it is bright (bloom): what is brighter than a threshold is taken
+        // out small, blurred and added back over the scene.
+
+        var fillVertex = [
+          '#version 300 es',
+          'in vec3 a_Position;',
+          'in vec2 a_TexCoord;',
+          'out vec2 v_Uv;',
+          'void main() {',
+          '  v_Uv = a_TexCoord;',
+          '  gl_Position = vec4(a_TexCoord * 2.0 - 1.0, 0.0, 1.0);',
+          '}'
+        ].join('\n');
+        var brightProgram = link(fillVertex, [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'uniform sampler2D u_Texture;',
+          'uniform vec2 u_Texel;',
+          'uniform float u_Threshold;',
+          'uniform float u_Strength;',
+          'out vec4 color;',
+          'void main() {',
+          '  vec3 c = (texture(u_Texture, v_Uv + u_Texel * vec2(-1.0, -1.0)).rgb + texture(u_Texture, v_Uv + u_Texel * vec2(1.0, -1.0)).rgb +',
+          '            texture(u_Texture, v_Uv + u_Texel * vec2(-1.0, 1.0)).rgb + texture(u_Texture, v_Uv + u_Texel * vec2(1.0, 1.0)).rgb) * 0.25;',
+          '  float over = max(0.0, dot(c, vec3(0.2126, 0.7152, 0.0722)) - u_Threshold);',
+          '  color = vec4(c * over * u_Strength, 1.0);',
+          '}'
+        ].join('\n'), 'the player\'s own shader');
+        var blurProgram = link(fillVertex, [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'uniform sampler2D u_Texture;',
+          'uniform vec2 u_Step;',
+          'out vec4 color;',
+          'void main() {',
+          '  vec3 c = texture(u_Texture, v_Uv).rgb * 0.2270270270;',
+          '  c += (texture(u_Texture, v_Uv + u_Step * 1.3846153846).rgb + texture(u_Texture, v_Uv - u_Step * 1.3846153846).rgb) * 0.3162162162;',
+          '  c += (texture(u_Texture, v_Uv + u_Step * 3.2307692308).rgb + texture(u_Texture, v_Uv - u_Step * 3.2307692308).rgb) * 0.0702702703;',
+          '  color = vec4(c, 1.0);',
+          '}'
+        ].join('\n'), 'the player\'s own shader');
+
+        function glow() {
+          var strength = number(general.bloomstrength, 2), threshold = number(general.bloomthreshold, 0.65);
+          if (!brightProgram || !blurProgram || !(strength > 0)) return;
+          var quarter = acquire(sceneTarget.width / 4, sceneTarget.height / 4);
+          var small = [acquire(sceneTarget.width / 8, sceneTarget.height / 8), acquire(sceneTarget.width / 8, sceneTarget.height / 8)];
+          function fill(target, program, source) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+            gl.viewport(0, 0, target.width, target.height);
+            gl.useProgram(program.program);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, source.texture);
+            gl.uniform1i(program.uniforms.u_Texture.location, 0);
+          }
+          gl.disable(gl.BLEND);
+          gl.bindVertexArray(passShape);
+          fill(quarter, brightProgram, sceneTarget);
+          gl.uniform2f(brightProgram.uniforms.u_Texel.location, 1 / sceneTarget.width, 1 / sceneTarget.height);
+          gl.uniform1f(brightProgram.uniforms.u_Threshold.location, threshold);
+          gl.uniform1f(brightProgram.uniforms.u_Strength.location, strength);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          fill(small[0], blurProgram, quarter);
+          gl.uniform2f(blurProgram.uniforms.u_Step.location, 1 / small[0].width, 0);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          fill(small[1], blurProgram, small[0]);
+          gl.uniform2f(blurProgram.uniforms.u_Step.location, 0, 1 / small[0].height);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+          gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+          var tint = numbers(general.bloomtint, 3, 1);
+          put({ texture: small[1].texture }, FILL, [tint[0], tint[1], tint[2], 1], 'additive');
+          release(quarter);
+          small.forEach(release);
+        }
+
+        // --- Size -------------------------------------------------------------
+
+        // The scene is drawn as large as it shows on the screen, and no larger than it is.
+        function resize() {
+          var density = window.devicePixelRatio || 1;
+          var shown = Math.max(window.innerWidth * density / sceneWidth, window.innerHeight * density / sceneHeight);
+          var wanted = Math.max(0.05, Math.min(1, shown || 1));
+          var width = Math.max(1, Math.round(sceneWidth * wanted)), height = Math.max(1, Math.round(sceneHeight * wanted));
+          if (sceneTarget && canvas.width === width && canvas.height === height) return;
+          var again = !!sceneTarget;
+          scale = wanted;
+          canvas.width = width;
+          canvas.height = height;
+          // Everything drawn at the old size goes.
+          objects.forEach(function (object) {
+            if (object.kept) {
+              gl.deleteFramebuffer(object.kept.framebuffer);
+              gl.deleteTexture(object.kept.texture);
+              object.kept = null;
+            }
+          });
+          [sceneTarget, copyTarget].forEach(release);
+          forgetTargets();
+          sceneTarget = acquire(width, height);
+          copyTarget = acquire(width, height);
+          redraw = true;
+          if (again) tellScripts('resizeScreen', new Vec2(width, height));
+        }
+
+        // --- Drawing ----------------------------------------------------------
+
+        var frames = 0;
+
+        function draw() {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+          gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+          gl.disable(gl.BLEND);
+          gl.clearColor(clear[0], clear[1], clear[2], 1);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          objects.forEach(function (object) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+            gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+            object.draw();
+          });
+          if (flag(general.bloom, false)) glow();
+          // Onto the canvas, turned over: the scene is kept with its top row first.
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, sceneTarget.framebuffer);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+          gl.blitFramebuffer(0, 0, sceneTarget.width, sceneTarget.height, 0, sceneTarget.height, sceneTarget.width, 0, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+          frames++;
+        }
+
+        var asked = 0;
+        var before = 0;
+
+        function wake() {
+          if (!asked && !stopped) asked = requestAnimationFrame(frame);
+        }
+
+        function frame(now) {
+          asked = 0;
+          if (stopped) return;
+          // The speed the app plays the wallpaper at; a long gap, as after a pause, counts as none.
+          var host = window.__wallaeroHost;
+          var passed = before ? Math.min(0.1, Math.max(0, (now - before) / 1000)) * ((host && host.rate) || 1) : 0;
+          before = now;
+          frameTime = passed;
+          time += passed;
+          resize();
+          serveScripts();
+          look(passed);
+          things.forEach(function (thing) { refresh(thing, false); });
+          // A script nothing has asked for by now belongs to something that could not be made.
+          scripts.forEach(function (script) {
+            if (script.made === undefined) script.made = null;
+          });
+          objects.forEach(function (object) {
+            if (object.step && passed > 0 && standing(object).visible) object.step(passed);
+          });
+          // Drawn anew only when it would come out another picture: a scene whose scripts only
+          // wait, or whose clock still shows the same minute, is left as it is.
+          var moving = isMoving();
+          var must = moving || redraw || dirty || loading > 0;
+          redraw = false;
+          dirty = false;
+          if (must) draw();
+          pointerBefore = pointer.slice();
+          // A scene in which nothing moves is drawn once it is all there, and then left alone.
+          if (moving || loading > 0 || redraw || dirty || isLively()) {
+            wake();
+          } else {
+            before = 0;
+          }
+        }
+
+        // --- The mouse --------------------------------------------------------------
+
+        // Where the pointer is over the scene, from 0 to 1 from its top left corner: the scene is
+        // fitted to the screen by the page, cut or with bars.
+        function point(event) {
+          var box = canvas.getBoundingClientRect();
+          var fit = canvas.style.objectFit || 'cover';
+          var by = fit === 'contain' ? Math.min(box.width / sceneWidth, box.height / sceneHeight)
+                 : Math.max(box.width / sceneWidth, box.height / sceneHeight);
+          var width = fit === 'fill' ? box.width : sceneWidth * by, height = fit === 'fill' ? box.height : sceneHeight * by;
+          var kept = (canvas.style.objectPosition || '50% 50%').split(/\s+/).map(parseFloat);
+          var left = box.left + (box.width - width) * (isFinite(kept[0]) ? kept[0] : 50) / 100;
+          var top = box.top + (box.height - height) * (isFinite(kept[1]) ? kept[1] : 50) / 100;
+          pointer = [(event.clientX - left) / width, (event.clientY - top) / height];
+        }
+        // What the mouse does is told to the scripts; whatever they change by it is then drawn.
+        function mouse(kind) {
+          return function (event) {
+            point(event);
+            if (kind === 'down') pressed = true;
+            if (kind === 'up') pressed = false;
+            tellPointer(kind);
+            if (dirty || eye.on) wake();
+          };
+        }
+        var mice = { pointermove: mouse('move'), pointerdown: mouse('down'), pointerup: mouse('up') };
+        Object.keys(mice).forEach(function (name) { window.addEventListener(name, mice[name], true); });
+        window.addEventListener('resize', changed);
+
+        // The graphics chip may take everything back — when the Mac is short of memory, or the
+        // web engine's own helper starts anew. Then the scene is built again from the start.
+        function lost(event) {
+          event.preventDefault();
+        }
+        function restored() {
+          if (!stopped) window.WallaeroEngine.play(canvas, scene, properties);
+        }
+        canvas.addEventListener('webglcontextlost', lost);
+        canvas.addEventListener('webglcontextrestored', restored);
+
+        resize();
+        wake();
+
+        var player = {
+          // `again` when the same canvas is about to be drawn on anew: what it has is then kept.
+          stop: function (again) {
+            if (stopped) return;
+            tellScripts('destroy');
+            stopped = true;
+            if (asked) cancelAnimationFrame(asked);
+            Object.keys(mice).forEach(function (name) { window.removeEventListener(name, mice[name], true); });
+            window.removeEventListener('resize', changed);
+            canvas.removeEventListener('webglcontextlost', lost);
+            canvas.removeEventListener('webglcontextrestored', restored);
+            players.forEach(function (each) { each.stop(); });
+            var lose = again ? null : gl.getExtension('WEBGL_lose_context');
+            if (lose) lose.loseContext();
+          },
+          // The wallpaper's settings, by the names the scene has for them: those that are now set
+          // to something else show at once.
+          setProperties: function (settings) {
+            var other = {};
+            var any = false;
+            Object.keys(settings || {}).forEach(function (name) {
+              if (properties[name] === settings[name]) return;
+              properties[name] = settings[name];
+              other[name] = forScripts(settings[name]);
+              any = true;
+            });
+            if (!any || stopped) return;
+            clear = numbers(general.clearcolor, 3, 0);
+            things.forEach(function (thing) { refresh(thing, true); });
+            tellScripts('applyUserProperties', other);
+            changed();
+          },
+          // What was made of the scene, for whoever looks into why it shows as it does.
+          report: function () {
+            return JSON.stringify({
+              scene: sceneWidth + '×' + sceneHeight, drawn: canvas.width + '×' + canvas.height, frames: frames,
+              seconds: Math.round(time * 10) / 10, moving: isMoving(), lively: isLively(), loading: loading,
+              scripts: scripts.filter(function (script) { return script.made; }).length + ' of ' + scripts.length,
+              objects: objects.map(function (object) {
+                return object.name + (standing(object).visible ? '' : ' (hidden)') +
+                       (object.effects ? ' (' + object.effects.length + ' effects' +
+                         (object.effects.some(function (effect) { return !effect.shown.now; })
+                           ? ', ' + object.effects.filter(function (effect) { return !effect.shown.now; }).length + ' off' : '') +
+                         (object.kept ? ', kept' : '') + ')' : '') +
+                       (object.particles ? ' (' + object.particles.length + ' particles)' : '') +
+                       (object.own ? ' (text “' + String(object.state.text).slice(0, 40) + '”)' : '');
+              }),
+              notes: notes
+            }, null, 1);
+          }
+        };
+        return player;
+      }
+
+      var current = null;
+      window.WallaeroEngine = {
+        // Draws a scene on a canvas until told to stop. One scene plays at a time. `settings` are
+        // the wallpaper's own, by the names the scene has for them.
+        play: function (canvas, scene, settings) {
+          if (current) current.stop(current.canvas === canvas);
+          notes = [];
+          current = play(canvas, scene, settings);
+          current.canvas = canvas;
+          return current;
+        },
+        report: function () { return current && current.report ? current.report() : JSON.stringify({ notes: notes }); },
+        // The translation of a shader alone, for whoever wants to see or check it.
+        translate: translate,
+        annotations: annotations,
+        // The way a value changes over time, and a script made ready: also for checking.
+        curve: curveOf,
+        script: compileScript
+      };
+    })();
+
+    """#
+}

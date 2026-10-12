@@ -106,6 +106,27 @@ struct BinaryReader {
         uint32().map { Int(Int32(bitPattern: $0)) }
     }
 
+    /// A number with a fraction, in four bytes.
+    mutating func float() -> Double? {
+        float32().map(Double.init)
+    }
+
+    mutating func float32() -> Float? {
+        uint32().map { Float(bitPattern: $0) }
+    }
+
+    mutating func uint16() -> UInt16? {
+        guard let two = bytes(2) else { return nil }
+        return UInt16(two[two.startIndex]) | UInt16(two[two.startIndex + 1]) << 8
+    }
+
+    /// Passes over bytes that are not wanted; false if there are not that many.
+    mutating func skip(_ count: Int) -> Bool {
+        guard count >= 0, count <= data.count - offset else { return false }
+        offset += count
+        return true
+    }
+
     /// A text with its length before it.
     mutating func text() -> String? {
         guard let length = uint32(), length <= 4096, let raw = bytes(Int(length)) else { return nil }

@@ -36,6 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.run()
             return
         }
+        if let request = ScreenshotMode.engineTest {
+            ScreenshotMode.runEngineTest(request)
+            app.run()
+            return
+        }
         if let seconds = ScreenshotMode.coverTestSeconds {
             ScreenshotMode.coverTest(seconds)
             app.run()
@@ -275,8 +280,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Says which of the wallpapers just added are scenes of Wallpaper Engine that came as
-    /// their pictures alone, so that a still wallpaper is not taken for a fault.
+    /// Says which of the wallpapers just added are scenes of Wallpaper Engine with something
+    /// in them that is not played, so that what stands still or is missing is not taken for a fault.
     private func presentImportNotices() {
         let notices = importer.notices
         importer.notices = []
@@ -284,7 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.alertStyle = .informational
         let explanation = NSLocalizedString(
-            "Only the pictures of a Wallpaper Engine scene are brought over: they became the background and layers, which you can change in the editor. Effects, particles and sound are not.",
+            "3D models and lights of a Wallpaper Engine scene are not played and are left out, and a picture whose bones cannot be read stands still.",
             comment: "Import notice"
         )
         if notices.count == 1 {

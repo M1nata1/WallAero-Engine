@@ -255,6 +255,7 @@
 "Properties" = "Свойства";
 "Scene" = "Сцена";
 "Web Page" = "Веб-страница";
+"Wallpaper Engine Scene" = "Сцена Wallpaper Engine";
 
 /* Search and tags */
 "Tags" = "Теги";
@@ -275,6 +276,6 @@
 "This Wallpaper Engine scene has no pictures that could be read." = "В этой сцене Wallpaper Engine нет картинок, которые удалось прочитать.";
 "“%@” was added in part" = "Обои «%@» добавлены частично";
 "Some wallpapers were added in part" = "Некоторые обои добавлены частично";
-"Only the pictures of a Wallpaper Engine scene are brought over: they became the background and layers, which you can change in the editor. Effects, particles and sound are not." = "Из сцены Wallpaper Engine переносятся только картинки: они стали фоном и слоями, которые можно менять в редакторе. Эффекты, частицы и звук не переносятся.";
+"3D models and lights of a Wallpaper Engine scene are not played and are left out, and a picture whose bones cannot be read stands still." = "3D-модели и источники света в сценах Wallpaper Engine не поддерживаются и пропущены, а картинка, кости которой не удалось прочитать, стоит неподвижно.";
 "The archive could not be unpacked." = "Не удалось распаковать архив.";
 "The archive has no wallpaper in it: no web page, video or picture." = "В архиве нет обоев: ни веб-страницы, ни видео, ни картинки.";

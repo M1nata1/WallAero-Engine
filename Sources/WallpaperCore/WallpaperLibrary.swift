@@ -167,7 +167,9 @@ public final class WallpaperLibrary: ObservableObject {
     /// Brings in a wallpaper made for Wallpaper Engine. A web page becomes a scene with the page
     /// as its background and the page's own settings as its variables: it is set up in the
     /// wallpaper's settings and takes layers in the editor like any scene. One of Wallpaper
-    /// Engine's own scenes becomes a scene made of its pictures; what else it had is noted in
+    /// Engine's own scenes becomes a scene too, with the whole of it — pictures, effects,
+    /// particles, texts, sounds, scripts — as the background, played by the page, and with the
+    /// settings it makes use of as its variables; what of it is not played is noted in
     /// `leftOutOnImport`. A video is taken as any video is.
     @discardableResult
     public func importWallpaperEngineProject(_ project: WallpaperEngineProject, fallbackName: String? = nil) async throws -> Wallpaper {
@@ -199,22 +201,28 @@ public final class WallpaperLibrary: ObservableObject {
             let id = UUID()
             let folder = webURL.appendingPathComponent(id.uuidString, isDirectory: true)
             let source = project.folder
+            let variables = project.variables
             let leftOut: WallpaperEngineScene.LeftOut
             do {
                 // Unpacking the pictures takes a while; the app stays responsive meanwhile.
                 leftOut = try await Task.detached(priority: .userInitiated) {
                     guard let package = WallpaperEnginePackage(folder: source) else { throw ImportError.unreadable }
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    let converted = try WallpaperEngineScene.convert(package, into: folder)
-                    try SceneProject.create(at: folder, scene: converted.scene)
-                    return converted.leftOut
+                    let leftOut = try WallpaperEngineScene.export(package, into: folder)
+                    let source = "\(WallpaperEngineScene.folderName)/\(WallpaperEngineScene.filesName)"
+                    // Every wallpaper comes with a scheme color and may come with settings left
+                    // from an older version of itself; only what the scene uses is offered.
+                    let used = WallpaperEngineScene.settingNames(in: package, among: variables.compactMap(\.property))
+                    let offered = variables.filter { $0.property.map(used.contains) == true }
+                    try SceneProject.create(at: folder, scene: WallpaperScene(background: .init(kind: .engine, source: source),
+                                                                              variables: offered))
+                    return leftOut
                 }.value
             } catch {
                 try? FileManager.default.removeItem(at: folder)
                 throw error
             }
-            // The preview that came with the wallpaper shows it with its effects, which it has
-            // not here. The app draws the scene as it is instead, as for any page without one.
+            // The app draws the thumbnail itself: the preview that comes with a scene is small.
             let item = addScene(id, named: name, preview: nil)
             if !leftOut.isEmpty {
                 leftOutOnImport[id] = leftOut
@@ -250,6 +258,27 @@ public final class WallpaperLibrary: ObservableObject {
         return item
     }
 
+    /// Brings in every wallpaper of an archive or a folder that holds several. Those that
+    /// cannot be brought in are passed over as long as one can; if none can, the first one's
+    /// reason is thrown.
+    private func importWallpaperEngineProjects(_ projects: [WallpaperEngineProject], fallbackName: String) async throws -> [Wallpaper] {
+        var added: [Wallpaper] = []
+        var firstError: Error?
+        for project in projects {
+            do {
+                // One wallpaper alone is named after the archive when it has no title of its own;
+                // each of several after its own folder.
+                added.append(try await importWallpaperEngineProject(project, fallbackName: projects.count == 1 ? fallbackName : nil))
+            } catch {
+                firstError = firstError ?? error
+            }
+        }
+        if added.isEmpty, let firstError {
+            throw firstError
+        }
+        return added
+    }
+
     /// Brings in whatever is at `url`: an archive, the folder of a wallpaper made for Wallpaper
     /// Engine, a folder with a web page, or a video or picture. Returns what was added.
     /// - Parameter languages: the languages to name a Wallpaper Engine wallpaper's settings in.
@@ -261,8 +290,9 @@ public final class WallpaperLibrary: ObservableObject {
         }
         if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
             // The wallpaper's own folder, or the one an archive of it was unpacked into.
-            if let project = WallpaperEngineProject.find(in: url, languages: languages) {
-                return [try await importWallpaperEngineProject(project, fallbackName: url.lastPathComponent)]
+            let projects = WallpaperEngineProject.all(in: url, languages: languages)
+            if !projects.isEmpty {
+                return try await importWallpaperEngineProjects(projects, fallbackName: url.lastPathComponent)
             }
             return [try importWebProject(at: url)]
         }
@@ -283,8 +313,9 @@ public final class WallpaperLibrary: ObservableObject {
         // The archive's own name is the wallpaper's when nothing inside names it.
         let name = archive.deletingPathExtension().lastPathComponent
 
-        if let project = WallpaperEngineProject.find(in: unpacked, languages: languages) {
-            return [try await importWallpaperEngineProject(project, fallbackName: name)]
+        let projects = WallpaperEngineProject.all(in: unpacked, languages: languages)
+        if !projects.isEmpty {
+            return try await importWallpaperEngineProjects(projects, fallbackName: name)
         }
         let inside = (try? files.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         if let page = ([unpacked] + inside).first(where: { WebProject(folder: $0) != nil }) {

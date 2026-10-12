@@ -9,8 +9,9 @@ public struct WallpaperEngineProject: Equatable, Sendable {
         case web
         /// A video file.
         case video
-        /// One of Wallpaper Engine's own scenes: pictures on a canvas, in `scene.pkg`. Its
-        /// pictures become the background and the layers of a scene, see `WallpaperEngineScene`.
+        /// One of Wallpaper Engine's own scenes: pictures on a canvas, in `scene.pkg`. It is
+        /// played as the background of a scene, see `WallpaperEngineScene`, with its settings
+        /// as the scene's variables.
         case scene
         /// Anything else, by the name the project gives it: an application. These need
         /// Wallpaper Engine itself to draw them.
@@ -26,7 +27,8 @@ public struct WallpaperEngineProject: Equatable, Sendable {
     public let file: String?
     /// The preview picture that came with the wallpaper, relative to the folder.
     public let previewFile: String?
-    /// The page's own settings — the project's `general.properties` — as variables of a scene.
+    /// The wallpaper's own settings — the project's `general.properties` — as variables of a
+    /// scene. A page or a scene of Wallpaper Engine's has them; a video has none.
     public let variables: [WallpaperScene.Variable]
 
     /// Reads the folder; nil when it holds no Wallpaper Engine project.
@@ -72,26 +74,25 @@ public struct WallpaperEngineProject: Equatable, Sendable {
         title = (project["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         previewFile = inside(project["preview"])
         let general = project["general"] as? [String: Any] ?? [:]
-        variables = kind == .web
+        variables = kind == .web || kind == .scene
             ? Self.variables(properties: general["properties"] as? [String: Any] ?? [:],
                              localization: general["localization"] as? [String: Any] ?? [:],
                              languages: languages)
             : []
     }
 
-    /// The project in a folder: the folder's own, or that of a folder right inside it. An
-    /// archive of a wallpaper has it in a folder, next to files of the site it came from.
-    public static func find(in folder: URL, languages: [String] = Locale.preferredLanguages) -> WallpaperEngineProject? {
+    /// The projects in a folder: the folder's own, or those of the folders right inside it. An
+    /// archive of a wallpaper has it in a folder, next to files of the site it came from, and
+    /// may have more than one wallpaper, each in a folder of its own.
+    public static func all(in folder: URL, languages: [String] = Locale.preferredLanguages) -> [WallpaperEngineProject] {
         if let project = WallpaperEngineProject(folder: folder, languages: languages) {
-            return project
+            return [project]
         }
         let inside = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil,
                                                                    options: [.skipsHiddenFiles])) ?? []
         return inside
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-            .lazy
             .compactMap { WallpaperEngineProject(folder: $0, languages: languages) }
-            .first
     }
 
     // MARK: - Settings

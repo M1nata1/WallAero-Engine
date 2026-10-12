@@ -10,6 +10,8 @@ import Foundation
 ///     media/       – the background and the pictures the layers use
 ///     page/        – the web page that is the background, if the scene has one: a wallpaper
 ///                    made for Wallpaper Engine, brought in with all its files
+///     engine/      – one of Wallpaper Engine's own scenes as the background, if the scene
+///                    has one; then `engine.js`, generated, is the player that draws it
 ///
 /// The generated files are rewritten whenever the app has a newer version of them, so scenes keep
 /// up with the app; anything hand-made belongs in the custom files or in a code layer.
@@ -79,7 +81,12 @@ public enum SceneProject {
     @discardableResult
     public static func refreshGeneratedFiles(in folder: URL) throws -> Bool {
         var changed = false
-        for (name, content) in [(entryFileName, indexHTML), ("runtime.js", runtime)] {
+        var generated = [(entryFileName, indexHTML), ("runtime.js", runtime)]
+        // The player of Wallpaper Engine's scenes is large, and only scenes that hold one get it.
+        if FileManager.default.fileExists(atPath: folder.appendingPathComponent(WallpaperEngineScene.folderName).path) {
+            generated.append((WallpaperEngineRuntime.fileName, WallpaperEngineRuntime.script))
+        }
+        for (name, content) in generated {
             let url = folder.appendingPathComponent(name)
             if (try? String(contentsOf: url, encoding: .utf8)) != content {
                 try content.write(to: url, atomically: true, encoding: .utf8)
@@ -304,6 +311,12 @@ public enum SceneProject {
           } else if (bg.kind === 'image' && bg.source) {
             media = document.createElement('img');
             media.src = bg.source;
+          } else if (bg.kind === 'engine' && bg.source) {
+            // One of Wallpaper Engine's own scenes: a canvas, and the player that draws on it.
+            // The scene's files come as a script, then the player; both are asked for while
+            // the page is still loading, so that the page counts as loaded once they are.
+            media = document.createElement('canvas');
+            startEngine(media, bg.source);
           } else if (bg.kind === 'page' && bg.source) {
             // A web page of its own, a wallpaper made for Wallpaper Engine. It runs in a frame,
             // so its styles and scripts and the scene's keep out of each other's way.
@@ -347,6 +360,45 @@ public enum SceneProject {
         if (number(bg.saturation, 100) !== 100) filters.push('saturate(' + number(bg.saturation, 100) + '%)');
         if (number(bg.hue, 0) !== 0) filters.push('hue-rotate(' + number(bg.hue, 0) + 'deg)');
         media.style.filter = filters.join(' ');
+      }
+
+      // --- A scene of Wallpaper Engine's as the background ---------------------
+
+      var enginePlayer = null;
+
+      function loadScript(source, then) {
+        var script = document.createElement('script');
+        script.onload = then;
+        script.onerror = function () { console.error('WallAero: cannot load ' + source); };
+        script.src = encodeURI(source);
+        document.head.appendChild(script);
+      }
+
+      function startEngine(canvas, source) {
+        if (enginePlayer) enginePlayer.stop();
+        enginePlayer = null;
+        loadScript(source, function () {
+          loadScript('engine.js', function () {
+            // The canvas may have been replaced by another background meanwhile.
+            if (!canvas.isConnected || !window.WallaeroEngine) return;
+            enginePlayer = window.WallaeroEngine.play(canvas, window.wallaeroEngineScene, engineSettings());
+          });
+        });
+      }
+
+      // The scene's variables that stand for settings of Wallpaper Engine's scene, by the
+      // names that scene has for them and in the form Wallpaper Engine hands them over.
+      function engineSettings() {
+        var settings = {};
+        ((scene && scene.variables) || []).forEach(function (variable) {
+          if (variable && typeof variable.property === 'string' && variable.property) settings[variable.property] = pageValue(variable);
+        });
+        return settings;
+      }
+
+      // Tells the player the settings; those it had otherwise show at once.
+      function tellEngine() {
+        if (enginePlayer && enginePlayer.setProperties) enginePlayer.setProperties(engineSettings());
       }
 
       // --- A page as the background -----------------------------------------
@@ -560,6 +612,7 @@ public enum SceneProject {
         var variablesChanged = showVariables(scene.variables);
         showBackground(scene.background || {});
         tellPage(false);
+        tellEngine();
         showLayers(scene.layers || []);
         restartClock();
         if (variablesChanged) {
@@ -570,7 +623,7 @@ public enum SceneProject {
       }
 
       window.wallaero = {
-        version: 3,
+        version: 4,
         setScene: setScene,
         tokens: tokens,
         get scene() { return scene; },

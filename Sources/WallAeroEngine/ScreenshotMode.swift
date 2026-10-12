@@ -274,7 +274,7 @@ enum ScreenshotMode {
                             print("  layer “\(layer.name)”: \(layer.kind.rawValue) \(layer.source) at \(layer.x), \(layer.y), \(layer.width) wide, turned \(layer.rotation), opacity \(layer.opacity), \(layer.blendMode)\(layer.isVisible ? "" : ", hidden")")
                         }
                         if let leftOut = library.leftOutOnImport[item.id] {
-                            print("  left out: \(leftOut.effects) effects, \(leftOut.particles) particles, \(leftOut.sounds) sounds, \(leftOut.others) others")
+                            print("  not played: \(leftOut.animations) pictures that bend, \(leftOut.objects) objects of other kinds")
                         }
                         for variable in scene.variables {
                             let value: String
@@ -639,6 +639,73 @@ enum ScreenshotMode {
                 start += length
             }
             return false
+        }
+    }
+
+    // MARK: - A scene of Wallpaper Engine's
+
+    /// `--engine-test <scene folder> <picture.png> [--after <seconds>] [--size <w> <h>] [--eval-at
+    /// <seconds> <JavaScript>]… [--eval-end <JavaScript>]` shows a scene in a window nothing
+    /// covers, lets it play for a while and takes a picture of it; then it prints what the
+    /// player of Wallpaper Engine's scenes has to report — what it drew, what it left out and
+    /// why — and what the script comes to. A script given with `--eval-at` runs that many
+    /// seconds in: to change a setting, or to move the pointer.
+    static var engineTest: (folder: URL, output: URL)? {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--engine-test"), index + 2 < arguments.count else { return nil }
+        return (URL(fileURLWithPath: arguments[index + 1], isDirectory: true), URL(fileURLWithPath: arguments[index + 2]))
+    }
+
+    static func runEngineTest(_ request: (folder: URL, output: URL)) {
+        NSApp.setActivationPolicy(.accessory)
+        let arguments = CommandLine.arguments
+        var size = NSSize(width: 960, height: 540)
+        if let index = arguments.firstIndex(of: "--size"), index + 2 < arguments.count,
+           let width = Double(arguments[index + 1]), let height = Double(arguments[index + 2]) {
+            size = NSSize(width: width, height: height)
+        }
+        let seconds = values(of: "--after").last.flatMap(Double.init) ?? 3
+        guard let project = WebProject(folder: request.folder) else {
+            print("no page in \(request.folder.path)")
+            exit(1)
+        }
+        let view = WebWallpaperView(frame: NSRect(origin: .zero, size: size))
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: 40, y: 40), size: size), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        window.contentView = view
+        window.orderFrontRegardless()
+        view.frameRate = values(of: "--fps").last.flatMap(Int.init) ?? 0
+        view.setPlaying(true, rate: 1)
+        view.show(project, watchingForChanges: false)
+        Task {
+            await view.waitUntilLoaded()
+            for (index, argument) in arguments.enumerated() where argument == "--eval-at" && index + 2 < arguments.count {
+                guard let moment = Double(arguments[index + 1]) else { continue }
+                let script = arguments[index + 2]
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64(max(0, moment) * 1_000_000_000))
+                    let value = await view.value(of: script)
+                    print("eval at \(moment) s: \(value.map { "\($0)" } ?? "nothing")")
+                }
+            }
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            if let image = await view.snapshot() {
+                let bitmap = NSBitmapImageRep(cgImage: image)
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: request.output)
+                print("wrote \(request.output.path) (\(image.width)×\(image.height))")
+            } else {
+                print("no picture could be taken")
+            }
+            let report = await view.value(of: "window.WallaeroEngine && window.WallaeroEngine.report ? window.WallaeroEngine.report() : 'no player on the page'")
+            print(report as? String ?? "nothing reported")
+            for script in values(of: "--eval-end") {
+                let value = await view.value(of: script)
+                print("eval: \(value.map { "\($0)" } ?? "nothing")")
+            }
+            exit(0)
         }
     }
 

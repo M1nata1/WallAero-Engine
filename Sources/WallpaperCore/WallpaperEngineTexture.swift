@@ -19,15 +19,62 @@ enum WallpaperEngineTexture {
         case rgba8888 = 0, dxt5 = 4, dxt3 = 6, dxt1 = 7, rg88 = 8, r8 = 9
     }
 
+    /// What the pixels of a texture stand for. A scene's shaders are written knowing it.
+    enum Channels: String {
+        /// Red, green, blue and opacity.
+        case color = "rgba"
+        /// One value a pixel, in the red channel: a mask.
+        case single = "r8"
+        /// Two values a pixel, in red and green: a direction, or a shade of grey and its opacity.
+        case double = "rg88"
+    }
+
+    /// One picture of a texture that holds several, or a part of one: a frame of an animation.
+    struct Frame: Equatable {
+        /// Which of the texture's pictures the frame is in.
+        var picture: Int
+        /// How long it is shown, in seconds.
+        var duration: Double
+        /// Where in that picture it is, in pixels; the two sides of it are given as vectors,
+        /// so that a frame may lie turned on its side.
+        var x: Double, y: Double
+        var width: Double, widthY: Double
+        var heightX: Double, height: Double
+    }
+
+    /// A texture read.
+    struct Texture {
+        /// Its pictures, cut out of their canvases: one, or the sheets of an animation.
+        var pictures: [Picture]
+        var channels: Channels
+        /// Whether the picture ends at its edges rather than repeating, and whether it is drawn
+        /// smoothed when stretched.
+        var isClamped: Bool
+        var isSmooth: Bool
+        var frames: [Frame]
+    }
+
+    struct Picture {
+        var image: CGImage
+        /// The PNG or JPEG file the texture held, when it held one of the very picture: it
+        /// can be written out as it is, which loses nothing and takes no time.
+        var file: (data: Data, fileExtension: String)?
+    }
+
+    /// The full-size picture of a texture; all a still wallpaper needs of it.
     static func image(from data: Data) -> CGImage? {
+        texture(from: data, onlyFirstPicture: true)?.pictures.first?.image
+    }
+
+    static func texture(from data: Data, onlyFirstPicture: Bool = false) -> Texture? {
         var reader = BinaryReader(data)
         guard reader.textToZero()?.hasPrefix("TEXV") == true, reader.textToZero()?.hasPrefix("TEXI") == true,
-              let format = reader.int32(), reader.int32() != nil, // what the picture is for; not needed to read it
+              let format = reader.int32(), let flags = reader.int32(),
               let canvasWidth = reader.int32(), let canvasHeight = reader.int32(),
               let width = reader.int32(), let height = reader.int32(), reader.uint32() != nil,
               let container = reader.textToZero(), container.hasPrefix("TEXB"),
               let version = Int(container.dropFirst(4)), (1...4).contains(version),
-              let imageCount = reader.int32(), imageCount >= 1
+              let imageCount = reader.int32(), (1...4096).contains(imageCount)
         else {
             return nil
         }
@@ -39,56 +86,114 @@ enum WallpaperEngineTexture {
             isPictureFile = kind != -1
         }
         if version >= 4 {
+            // A video in place of a picture is not read.
             guard let isVideo = reader.int32(), isVideo == 0 else { return nil }
         }
-        guard let mipmapCount = reader.int32(), mipmapCount >= 1 else { return nil }
-        if version >= 4 {
-            // Three more fields before each picture: two numbers, a text, a number.
-            guard reader.int32() != nil, reader.int32() != nil, reader.text() != nil, reader.int32() != nil else { return nil }
-        }
-        guard let storedWidth = reader.int32(), let storedHeight = reader.int32() else { return nil }
-        var isCompressed = false
-        var unpackedSize = 0
-        if version >= 2 {
-            guard let flag = reader.int32(), let size = reader.int32() else { return nil }
-            isCompressed = flag == 1
-            unpackedSize = size
-        }
-        guard let storedSize = reader.int32(), var pixels = reader.bytes(storedSize) else { return nil }
-
         let sides = 1...longestSide
-        guard sides.contains(storedWidth), sides.contains(storedHeight) else { return nil }
-        if isCompressed {
-            guard unpackedSize > 0, unpackedSize <= storedWidth * storedHeight * 4 || isPictureFile,
-                  unpackedSize <= longestSide * longestSide * 4,
-                  let unpacked = unpackedLZ4(pixels, size: unpackedSize)
-            else {
-                return nil
-            }
-            pixels = unpacked
-        }
+        var pictures: [Picture] = []
+        for index in 0..<imageCount {
+            guard let mipmapCount = reader.int32(), (1...64).contains(mipmapCount) else { return nil }
+            for mipmap in 0..<mipmapCount {
+                if version >= 4 {
+                    // Three more fields before each picture: two numbers, a text, a number.
+                    guard reader.int32() != nil, reader.int32() != nil, reader.text() != nil, reader.int32() != nil else { return nil }
+                }
+                guard let storedWidth = reader.int32(), let storedHeight = reader.int32() else { return nil }
+                var isCompressed = false
+                var unpackedSize = 0
+                if version >= 2 {
+                    guard let flag = reader.int32(), let size = reader.int32() else { return nil }
+                    isCompressed = flag == 1
+                    unpackedSize = size
+                }
+                guard let storedSize = reader.int32(), storedSize >= 0 else { return nil }
+                // Only the full-size picture is wanted; the smaller copies after it are passed over.
+                guard mipmap == 0, !(onlyFirstPicture && index > 0) else {
+                    guard reader.skip(storedSize) else { return nil }
+                    continue
+                }
+                guard var pixels = reader.bytes(storedSize), sides.contains(storedWidth), sides.contains(storedHeight) else { return nil }
+                if isCompressed {
+                    guard unpackedSize > 0, unpackedSize <= storedWidth * storedHeight * 4 || isPictureFile,
+                          unpackedSize <= longestSide * longestSide * 4,
+                          let unpacked = unpackedLZ4(pixels, size: unpackedSize)
+                    else {
+                        return nil
+                    }
+                    pixels = unpacked
+                }
 
-        let whole: CGImage?
-        if isPictureFile {
-            whole = CGImageSourceCreateWithData(pixels as CFData, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
-        } else {
-            guard let format = Format(rawValue: format),
-                  let rgba = rgba(from: pixels, format: format, width: storedWidth, height: storedHeight)
-            else {
-                return nil
+                let whole: CGImage?
+                if isPictureFile {
+                    whole = CGImageSourceCreateWithData(pixels as CFData, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+                } else {
+                    guard let format = Format(rawValue: format),
+                          let rgba = rgba(from: pixels, format: format, width: storedWidth, height: storedHeight)
+                    else {
+                        return nil
+                    }
+                    whole = cgImage(rgba: rgba, width: storedWidth, height: storedHeight)
+                }
+                guard let whole else { return nil }
+                // The picture itself is the top left part of the canvas. The sizes the file gives
+                // are those of the first picture; they hold for this one as long as it is as
+                // large as the canvas.
+                if index == 0, sides.contains(width), sides.contains(height),
+                   whole.width == canvasWidth, whole.height == canvasHeight,
+                   width <= whole.width, height <= whole.height, width != whole.width || height != whole.height,
+                   let cut = whole.cropping(to: CGRect(x: 0, y: 0, width: width, height: height)) {
+                    pictures.append(Picture(image: cut, file: nil))
+                } else {
+                    pictures.append(Picture(image: whole, file: isPictureFile ? fileKind(of: pixels).map { (pixels, $0) } : nil))
+                }
             }
-            whole = cgImage(rgba: rgba, width: storedWidth, height: storedHeight)
+            if onlyFirstPicture { break }
         }
-        guard let whole else { return nil }
-        // The picture itself is the top left part of the canvas. The sizes the file gives are
-        // those of the full picture; they hold for this one as long as it is the full canvas.
-        guard sides.contains(width), sides.contains(height),
-              whole.width == canvasWidth, whole.height == canvasHeight,
-              width <= whole.width, height <= whole.height, width != whole.width || height != whole.height
+        guard !pictures.isEmpty else { return nil }
+        let channels: Channels
+        switch Format(rawValue: format) {
+        case .r8 where !isPictureFile: channels = .single
+        case .rg88 where !isPictureFile: channels = .double
+        default: channels = .color
+        }
+        // Bits of the flags: 1 for "not smoothed", 2 for "ends at its edges", 4 for an animation.
+        return Texture(pictures: pictures, channels: channels, isClamped: flags & 2 != 0, isSmooth: flags & 1 == 0,
+                       frames: onlyFirstPicture ? [] : frames(&reader, pictureCount: pictures.count))
+    }
+
+    /// The frames of an animated texture, which follow its pictures; none if it has none or
+    /// they cannot be read.
+    private static func frames(_ reader: inout BinaryReader, pictureCount: Int) -> [Frame] {
+        guard !reader.isAtEnd, let mark = reader.textToZero(), mark.hasPrefix("TEXS"), let version = Int(mark.dropFirst(4)),
+              let count = reader.int32(), (1...100_000).contains(count)
         else {
-            return whole
+            return []
         }
-        return whole.cropping(to: CGRect(x: 0, y: 0, width: width, height: height)) ?? whole
+        if version >= 3 {
+            // The size of the whole animation; the frames say the same.
+            guard reader.int32() != nil, reader.int32() != nil else { return [] }
+        }
+        var frames: [Frame] = []
+        for _ in 0..<count {
+            guard let picture = reader.int32(), let duration = reader.float() else { return [] }
+            var numbers: [Double] = []
+            for _ in 0..<6 {
+                // The first version wrote whole numbers, the later ones fractions.
+                guard let number = version == 1 ? reader.int32().map(Double.init) : reader.float() else { return [] }
+                numbers.append(number)
+            }
+            guard (0..<pictureCount).contains(picture), duration.isFinite, numbers.allSatisfy(\.isFinite) else { return [] }
+            frames.append(Frame(picture: picture, duration: duration, x: numbers[0], y: numbers[1], width: numbers[2],
+                                widthY: numbers[3], heightX: numbers[4], height: numbers[5]))
+        }
+        return frames
+    }
+
+    /// Whether the bytes are a PNG or a JPEG file, by how they begin.
+    private static func fileKind(of data: Data) -> String? {
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "png" }
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) { return "jpg" }
+        return nil
     }
 
     // MARK: - Pixels
@@ -126,13 +231,12 @@ enum WallpaperEngineTexture {
             }
             return rgba
         case .rg88:
-            // Two bytes a pixel: a shade of grey and its opacity.
+            // Two bytes a pixel, kept as red and green: a scene's shaders read them so.
             guard pixels.count >= count * 2 else { return nil }
             var rgba = Data(capacity: count * 4)
             pixels.withUnsafeBytes { (source: UnsafeRawBufferPointer) in
                 for index in 0..<count {
-                    let value = source[index * 2]
-                    rgba.append(contentsOf: [value, value, value, source[index * 2 + 1]])
+                    rgba.append(contentsOf: [source[index * 2], source[index * 2 + 1], 0, 255])
                 }
             }
             return rgba

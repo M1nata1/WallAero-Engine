@@ -27,8 +27,8 @@ final class ImportCoordinator: ObservableObject {
     @Published private(set) var jobs: [Job] = []
     /// Errors of the last batch, published once the whole batch is done.
     @Published var failures: [Failure] = []
-    /// Scenes of Wallpaper Engine in the last batch that came without their effects, published
-    /// once the whole batch is done.
+    /// Scenes of Wallpaper Engine in the last batch with something in them that is not played,
+    /// published once the whole batch is done.
     @Published var notices: [Notice] = []
     /// The latest successfully imported wallpaper, so the library can select it.
     @Published private(set) var lastImportedID: UUID?

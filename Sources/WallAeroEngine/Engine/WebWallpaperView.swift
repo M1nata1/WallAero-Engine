@@ -404,7 +404,10 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
           media.playbackRate = rate;
         }
         if (media.muted !== host.muted) media.muted = host.muted;
-        if (media.volume !== host.volume) media.volume = host.volume;
+        // A sound of a Wallpaper Engine scene has a loudness of its own next to the scene's
+        // other sounds; it gets that share of the wallpaper's volume.
+        var volume = host.volume * (typeof media.wallaeroShare === 'number' ? media.wallaeroShare : 1);
+        if (media.volume !== volume) media.volume = volume;
         // A muted video whose audio track is still enabled keeps the audio hardware running,
         // and with it the Mac awake. Switching the track off lets both rest.
         if (media.audioTracks) {
@@ -466,7 +469,9 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
           autoplaying.add(media);
           applyTo(media);
         },
-        pointer: function (kind, x, y) { pointer(kind, x, y); }
+        pointer: function (kind, x, y) { pointer(kind, x, y); },
+        // The speed the wallpaper plays at, for what on the page keeps its own time.
+        get rate() { return host.playing === false ? 0 : host.rate; }
       };
       // The pointer. A wallpaper lies under the desktop's icons, so the web engine gets no
       // mouse for it; the app says where the pointer is over the desktop and when its button

@@ -29,10 +29,11 @@ private struct BackgroundInspector: View {
 
     var body: some View {
         Section("Background") {
-            if background.kind == .page {
-                // The page is the wallpaper itself, brought in whole; there is no other to pick.
+            if background.kind == .page || background.kind == .engine {
+                // The page, or the scene, is the wallpaper itself, brought in whole; there is
+                // no other to pick.
                 LabeledContent("Kind") {
-                    Text("Web Page")
+                    Text(background.kind == .page ? "Web Page" : "Wallpaper Engine Scene")
                 }
             } else {
                 Picker("Kind", selection: kind) {
@@ -51,6 +52,8 @@ private struct BackgroundInspector: View {
                         Button("Choose…") { model.chooseBackground(background.kind) }
                     }
                 }
+            }
+            if background.isFitted {
                 Picker("Scaling", selection: $background.fit) {
                     Text("Fill Screen").tag(WallpaperScene.Background.Fit.cover)
                     Text("Fit to Screen").tag(WallpaperScene.Background.Fit.contain)

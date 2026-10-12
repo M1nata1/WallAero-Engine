@@ -50,6 +50,9 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
             /// A web page of its own, kept in the scene's folder — a wallpaper made for
             /// Wallpaper Engine, for one. It draws itself; the scene's layers go on top of it.
             case page
+            /// One of Wallpaper Engine's own scenes, laid out in the scene's folder and played
+            /// by the page; see `WallpaperEngineScene`. The scene's layers go on top of it.
+            case engine
         }
 
         public enum Fit: String, Codable, CaseIterable, Sendable {
@@ -94,9 +97,13 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
             self.hue = hue
         }
 
-        /// Whether the background is a video or a picture, which has to be fitted to the
-        /// screen. A color has nothing to fit, and a page lays itself out.
+        /// Whether the background is a video or a picture: a file that can be chosen.
         public var isMedia: Bool { kind == .video || kind == .image }
+
+        /// Whether the background has a size of its own and so has to be fitted to the screen:
+        /// a video, a picture, a scene of Wallpaper Engine's. A color has nothing to fit, and a
+        /// page lays itself out.
+        public var isFitted: Bool { isMedia || kind == .engine }
 
         public init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
