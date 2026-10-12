@@ -46,7 +46,8 @@ xattr -dr com.apple.quarantine "/Applications/WallAero Engine.app"
 - **Multiple displays:** one wallpaper on every screen or a different one on each; you can also turn it off on a single display.
 - **Energy saving:** playback pauses when the desktop is completely covered by windows or a full-screen app, while displays sleep and while the screen is locked. Optionally also on battery power and in Low Power Mode. Video never keeps the display awake.
 - **Scenes and an editor:** turn any video or picture into a scene and shape it in a visual editor: a clock and the date, text, pictures, shapes, background effects, and layers with your own HTML, CSS and JavaScript. See [Scenes](#scenes).
-- **Web wallpapers:** a folder with an `index.html` is shown as a wallpaper. Web wallpapers made for Wallpaper Engine work too.
+- **Wallpaper Engine wallpapers:** add a web wallpaper made for Wallpaper Engine as the `.zip` it was downloaded in. Its own settings show in the wallpaper's settings, and it opens in the editor like any scene. See [Web wallpapers](#web-wallpapers).
+- **Web wallpapers:** a folder with an `index.html` is shown as a wallpaper.
 - **Reacting to sound:** an equalizer in a scene moves to whatever your Mac is playing: a song in any app, a video in the browser. See [Reacting to sound](#reacting-to-sound).
 - **Your own music:** every wallpaper can have music of its own, played in place of its sound. Pick a folder in the wallpaper's settings: its subfolders and `.m3u` files become playlists. With no folder chosen, the sound comes from the video. See [Music](#music).
 - **Cursors:** Windows cursor packs (`.ani`, `.cur`) replace the pointer across the whole system, animation included. Which file becomes which pointer is read from the pack's `install.inf`. See [Cursors](#cursors).
@@ -150,11 +151,16 @@ About thirty times a second the listener gets 128 numbers from 0 to 1: 64 bands 
 
 ### Web wallpapers
 
-A folder with an `index.html` in it can be added to the library as a wallpaper: drag it into the window. Web wallpapers made for Wallpaper Engine (a folder with a `project.json`) are added the same way; the title, the preview and the default values of the settings are taken from it.
+A wallpaper made for Wallpaper Engine is added the way it was downloaded: click + and choose its `.zip` archive, or drag the archive into the window. Its unpacked folder, the one with `project.json` in it, is added the same way.
 
-- Wallpaper Engine's Scene and Video wallpapers are not supported: the former are stored in a closed format, the latter are easier to add as plain videos.
+- **A web wallpaper** becomes a scene with the page as its background. The page's own settings — colors, sliders, switches, lists — show in the wallpaper's settings, named in the app's language when the wallpaper has a translation, and a change shows on the desktop at once. In the editor you can put layers of your own over the page: a clock, a text, a picture.
+- **A video wallpaper** is added as a plain video.
+- **Wallpaper Engine's own scenes** are stored in a closed format and cannot be opened.
 - Audio visualizers follow the sound your Mac is playing, see [Reacting to sound](#reacting-to-sound). The rest of Wallpaper Engine's media API (the track's title, cover and position) is not there.
+- A wallpaper lies under the desktop's icons and windows, so it does not react to the mouse.
 - Scenes and web wallpapers use more energy and memory than plain video: they are drawn by the web engine built into macOS. Plain videos keep taking the direct route. While paused, the page stands completely still.
+
+Any other folder with an `index.html` in it, or an archive of one, is added the same way and shown as it is.
 
 ## Cursors
 

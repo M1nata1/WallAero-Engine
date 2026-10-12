@@ -52,7 +52,7 @@
 "MP4, MOV, M4V, GIF, APNG, WebP, HEIC, PNG and JPEG are supported." = "Поддерживаются MP4, MOV, M4V, GIF, APNG, WebP, HEIC, PNG и JPEG.";
 "Choose Files…" = "Выбрать файлы…";
 "Drop to Add" = "Отпустите, чтобы добавить";
-"Choose videos, GIFs or pictures. Folders are searched too." = "Выберите видео, GIF или изображения. Можно выбрать и папку.";
+"Choose videos, GIFs, pictures or a .zip archive with a wallpaper. Folders are searched too." = "Выберите видео, GIF, изображения или архив .zip с обоями. Можно выбрать и папку.";
 "Add" = "Добавить";
 
 /* Settings */
@@ -265,3 +265,9 @@
 "New Category…" = "Новая категория…";
 "Find" = "Найти";
 "Nothing Found" = "Ничего не найдено";
+
+/* Wallpapers made for Wallpaper Engine, and archives */
+"Scheme color" = "Цвет схемы";
+"This Wallpaper Engine wallpaper is of the “%@” kind. Only web pages and videos can be opened." = "Это обои Wallpaper Engine типа «%@». Открываются только веб-страницы и видео.";
+"The archive could not be unpacked." = "Не удалось распаковать архив.";
+"The archive has no wallpaper in it: no web page, video or picture." = "В архиве нет обоев: ни веб-страницы, ни видео, ни картинки.";

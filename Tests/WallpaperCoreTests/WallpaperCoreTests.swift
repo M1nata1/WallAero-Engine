@@ -764,6 +764,210 @@ final class WebProjectTests: XCTestCase {
     }
 }
 
+@MainActor
+final class WallpaperEngineTests: XCTestCase {
+    private var root: URL!
+    /// The folder of a wallpaper as Wallpaper Engine keeps it.
+    private var wallpaper: URL { root.appendingPathComponent("3808790239") }
+
+    override func setUpWithError() throws {
+        root = try TestMedia.directory()
+        addTeardownBlock { [root] in try? FileManager.default.removeItem(at: root!) }
+        try FileManager.default.createDirectory(at: wallpaper, withIntermediateDirectories: true)
+    }
+
+    private func write(_ text: String, to name: String) throws {
+        try text.write(to: wallpaper.appendingPathComponent(name), atomically: true, encoding: .utf8)
+    }
+
+    /// A page with settings of every kind, named in two languages.
+    private func writePage() throws {
+        try write("<html></html>", to: "index.html")
+        try TestMedia.writePNG(to: wallpaper.appendingPathComponent("preview.png"), size: CGSize(width: 8, height: 8))
+        try write(#"""
+        {"file": "index.html", "type": "web", "title": "Koi Pond", "preview": "preview.png", "general": {
+          "localization": {
+            "en-us": {"ui_count": "Number of Koi", "ui_weather": "Weather", "ui_clear": "Clear", "ui_rain": "Rain", "ui_accent": "Accent"},
+            "ru-ru": {"ui_count": "Количество карпов"}
+          },
+          "properties": {
+            "note":     {"order": 0, "type": "text", "text": "Just a heading"},
+            "weather":  {"order": 4, "type": "combo", "text": "ui_weather", "value": 1,
+                         "options": [{"label": "ui_clear", "value": 0}, {"label": "ui_rain", "value": 1}]},
+            "accent":   {"order": 1, "type": "color", "text": "ui_accent", "value": "0.18 0.55 0.96"},
+            "fishCount": {"order": 2, "type": "slider", "text": "ui_count", "value": 66, "min": 10, "max": 200},
+            "fish-size": {"order": 3, "type": "slider", "text": "<h3>Fish&nbsp;size</h3>", "value": 1.45, "min": 0.5, "max": 3,
+                          "fraction": true, "precision": 2},
+            "density":  {"order": 5, "type": "combo", "text": "Density", "value": "2",
+                         "options": [{"label": "Small", "value": "1"}, {"label": "Large", "value": "2"}]},
+            "shy":      {"order": 6, "type": "bool", "text": "Shy", "value": false},
+            "motto":    {"order": 7, "type": "textinput", "text": "Motto", "value": "hello"}
+          }}}
+        """#, to: "project.json")
+    }
+
+    func testThePagesSettingsBecomeVariables() throws {
+        try writePage()
+        let project = try XCTUnwrap(WallpaperEngineProject(folder: wallpaper, languages: ["ru-KZ", "en-KZ"]))
+        XCTAssertEqual(project.kind, .web)
+        XCTAssertEqual(project.title, "Koi Pond")
+        XCTAssertEqual(project.file, "index.html")
+        XCTAssertEqual(project.previewFile, "preview.png")
+
+        // In the order the project gives; the heading has no value and is left out.
+        let variables = project.variables
+        XCTAssertEqual(variables.map(\.property), ["accent", "fishCount", "fish-size", "weather", "density", "shy", "motto"])
+        // The name the page knows a setting by is kept as it is; the scene's own key is made plain.
+        XCTAssertEqual(variables.map(\.key), ["accent", "fishCount", "fish_size", "weather", "density", "shy", "motto"])
+        XCTAssertEqual(variables.map(\.kind), [.color, .number, .number, .choice, .choice, .toggle, .text])
+        // Russian where the wallpaper has it, English where it has not, the text itself without its HTML otherwise.
+        XCTAssertEqual(variables.map(\.title), ["Accent", "Количество карпов", "Fish size", "Weather", "Density", "Shy", "Motto"])
+
+        XCTAssertEqual(variables[0].color, "#2E8CF5")
+        XCTAssertEqual([variables[1].number, variables[1].minimum, variables[1].maximum, variables[1].step], [66, 10, 200, 1])
+        XCTAssertEqual([variables[2].number, variables[2].minimum, variables[2].maximum, variables[2].step], [1.45, 0.5, 3, 0.01])
+        XCTAssertEqual(variables[3].options, ["Clear", "Rain"])
+        XCTAssertEqual(variables[3].values, [.number(0), .number(1)])
+        XCTAssertEqual(variables[3].text, "Rain")
+        XCTAssertEqual(variables[4].values, [.text("1"), .text("2")])
+        XCTAssertEqual(variables[4].text, "Large")
+        XCTAssertFalse(variables[5].isOn)
+        XCTAssertEqual(variables[6].text, "hello")
+    }
+
+    func testAnOptionsValueKeepsItsKindInTheSceneFile() throws {
+        var variable = WallpaperScene.Variable(kind: .choice, title: "Weather", key: "weather")
+        variable.property = "weather"
+        variable.options = ["Clear", "Rain", "Auto"]
+        variable.values = [.number(0), .text("1"), .flag(true)]
+        let scene = WallpaperScene(variables: [variable])
+        let data = try SceneProject.encoded(scene, readable: false)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(#""values":[0,"1",true]"#))
+        XCTAssertEqual(try JSONDecoder().decode(WallpaperScene.self, from: data), scene)
+
+        // A scene written before variables could stand for a page's settings.
+        let old = #"{"variables": [{"kind": "number", "key": "gain", "title": "Gain", "number": 3}]}"#
+        let read = try JSONDecoder().decode(WallpaperScene.self, from: Data(old.utf8))
+        XCTAssertNil(read.variables[0].property)
+        XCTAssertNil(read.variables[0].values)
+    }
+
+    func testAPageIsImportedAsASceneWithThePageBehindIt() async throws {
+        try writePage()
+        try write("body {}", to: "style.css")
+        let library = WallpaperLibrary(rootURL: root.appendingPathComponent("Library"))
+        let added = try await library.importItem(at: wallpaper, languages: ["en"])
+        let item = try XCTUnwrap(added.first)
+        XCTAssertEqual(added.count, 1)
+        XCTAssertEqual(item.name, "Koi Pond")
+        XCTAssertEqual(item.sourceFormat, "SCENE")
+        XCTAssertNotNil(item.thumbnailFileName, "the preview that came with it")
+        XCTAssertTrue(library.isScene(item))
+
+        let folder = library.projectURL(for: item)
+        let scene = try SceneProject.read(from: folder)
+        XCTAssertEqual(scene.background.kind, .page)
+        XCTAssertEqual(scene.background.source, "page/index.html")
+        XCTAssertFalse(scene.background.isMedia)
+        XCTAssertEqual(scene.variables.count, 7)
+        // The whole wallpaper came along, next to the scene's own files.
+        for name in ["page/index.html", "page/style.css", "page/project.json", "index.html", "runtime.js", "scene.json"] {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path), name)
+        }
+
+        // What the wallpaper's settings change is kept, the page's side of a variable with it.
+        var changed = scene.variables
+        changed[1].number = 12
+        let stored = try SceneProject.storeValues(of: changed, in: folder)
+        XCTAssertEqual(stored.variables[1].number, 12)
+        XCTAssertEqual(stored.variables[1].property, "fishCount")
+        XCTAssertEqual(stored.variables[3].values, [.number(0), .number(1)])
+    }
+
+    func testAnArchiveOfAWallpaperIsUnpackedAndImported() async throws {
+        try writePage()
+        // As the sites pack them: the wallpaper in a folder, their own files next to it.
+        try "from a site".write(to: root.appendingPathComponent("source.url"), atomically: true, encoding: .utf8)
+        let archive = root.appendingPathComponent("3808790239_SITE.zip")
+        try zip([wallpaper, root.appendingPathComponent("source.url")], into: archive)
+
+        let library = WallpaperLibrary(rootURL: root.appendingPathComponent("Library"))
+        let added = try await library.importItem(at: archive, languages: ["en"])
+        XCTAssertEqual(added.map(\.name), ["Koi Pond"])
+        XCTAssertEqual(try SceneProject.read(from: library.projectURL(for: added[0])).background.kind, .page)
+
+        // The folder such an archive was unpacked into is taken the same way.
+        let unpacked = root.appendingPathComponent("Unpacked")
+        try FileManager.default.createDirectory(at: unpacked, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: wallpaper, to: unpacked.appendingPathComponent("3808790239"))
+        try "from a site".write(to: unpacked.appendingPathComponent("EN.txt"), atomically: true, encoding: .utf8)
+        let again = try await library.importItem(at: unpacked, languages: ["en"])
+        XCTAssertEqual(again.map(\.name), ["Koi Pond"])
+
+        let nothing = root.appendingPathComponent("notes.zip")
+        try zip([root.appendingPathComponent("source.url")], into: nothing)
+        do {
+            _ = try await library.importItem(at: nothing)
+            XCTFail("an archive without a wallpaper was taken")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .emptyArchive)
+        }
+        XCTAssertEqual(library.items.count, 2)
+    }
+
+    func testWallpaperEnginesOwnScenesAreRefusedByName() async throws {
+        try write("PKGV0001", to: "scene.pkg")
+        try write(#"{"file": "scene.pkg", "type": "Scene", "title": "Rain"}"#, to: "project.json")
+        XCTAssertEqual(WallpaperEngineProject(folder: wallpaper)?.kind, .other("scene"))
+        let library = WallpaperLibrary(rootURL: root.appendingPathComponent("Library"))
+        do {
+            _ = try await library.importItem(at: wallpaper)
+            XCTFail("a Wallpaper Engine scene was taken")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .unsupportedWallpaperEngineKind("scene"))
+        }
+        XCTAssertTrue(library.items.isEmpty)
+    }
+
+    func testNamesThatLeadOutOfTheFolderAreNotFollowed() throws {
+        XCTAssertTrue(Archive.staysInside("3808790239/src/app.js"))
+        XCTAssertTrue(Archive.staysInside("a..b/file"))
+        XCTAssertFalse(Archive.staysInside("../outside.txt"))
+        XCTAssertFalse(Archive.staysInside("folder/../../outside.txt"))
+        XCTAssertFalse(Archive.staysInside("/etc/hosts"))
+
+        try "<html></html>".write(to: root.appendingPathComponent("outside.html"), atomically: true, encoding: .utf8)
+        try write(#"{"file": "../outside.html", "type": "web"}"#, to: "project.json")
+        XCTAssertNil(try XCTUnwrap(WallpaperEngineProject(folder: wallpaper)).file)
+
+        // A project.json of some other tool is not a wallpaper.
+        try write(#"{"name": "my-app", "version": "1.0"}"#, to: "project.json")
+        XCTAssertNil(WallpaperEngineProject(folder: wallpaper))
+    }
+
+    func testWallpaperEngineWritesAColorAsThreeNumbers() {
+        XCTAssertEqual(WallpaperEngineProject.hexColor("1 0 0"), "#FF0000")
+        XCTAssertEqual(WallpaperEngineProject.hexColor("0.18 0.55 0.96"), "#2E8CF5")
+        XCTAssertEqual(WallpaperEngineProject.hexColor("2 -1 0.5"), "#FF0080")
+        XCTAssertNil(WallpaperEngineProject.hexColor("blue"))
+    }
+
+    private func zip(_ sources: [URL], into archive: URL) throws {
+        let staging = root.appendingPathComponent("zip-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        for source in sources {
+            try FileManager.default.copyItem(at: source, to: staging.appendingPathComponent(source.lastPathComponent))
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-c", "-k", staging.path, archive.path]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        try FileManager.default.removeItem(at: staging)
+    }
+}
+
 final class SpectrumAnalyzerTests: XCTestCase {
     private let analyzer = SpectrumAnalyzer(sampleRate: 48_000)
     private let frame = 1.0 / 30

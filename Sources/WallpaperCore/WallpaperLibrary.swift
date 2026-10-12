@@ -159,6 +159,121 @@ public final class WallpaperLibrary: ObservableObject {
         return item
     }
 
+    // MARK: - Wallpaper Engine and archives
+
+    /// Brings in a wallpaper made for Wallpaper Engine. A web page becomes a scene with the page
+    /// as its background and the page's own settings as its variables: it is set up in the
+    /// wallpaper's settings and takes layers in the editor like any scene. A video is taken as
+    /// any video is. Wallpaper Engine's own scenes cannot be shown and are refused.
+    @discardableResult
+    public func importWallpaperEngineProject(_ project: WallpaperEngineProject, fallbackName: String? = nil) async throws -> Wallpaper {
+        let name = project.title ?? fallbackName ?? project.folder.lastPathComponent
+        switch project.kind {
+        case .other(let kind):
+            throw ImportError.unsupportedWallpaperEngineKind(kind)
+        case .video:
+            guard let file = project.file else { throw ImportError.unreadable }
+            let item = try await importFile(at: project.folder.appendingPathComponent(file))
+            rename(item.id, to: name)
+            return self.item(withID: item.id) ?? item
+        case .web:
+            guard let file = project.file else { throw ImportError.noWebPage }
+            let id = UUID()
+            let folder = webURL.appendingPathComponent(id.uuidString, isDirectory: true)
+            let page = folder.appendingPathComponent(SceneProject.pageFolderName, isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try FileManager.default.copyItem(at: project.folder, to: page)
+                let background = WallpaperScene.Background(kind: .page, source: "\(SceneProject.pageFolderName)/\(file)")
+                try SceneProject.create(at: folder, scene: WallpaperScene(background: background, variables: project.variables))
+            } catch {
+                try? FileManager.default.removeItem(at: folder)
+                throw error
+            }
+
+            var thumbnailFileName: String?
+            if let preview = project.previewFile, let image = Thumbnailer.image(at: page.appendingPathComponent(preview)) {
+                thumbnailFileName = "\(id.uuidString).jpg"
+                try? Thumbnailer.writeJPEG(image, to: thumbnailsURL.appendingPathComponent(thumbnailFileName!))
+            }
+            let item = Wallpaper(
+                id: id,
+                name: name,
+                kind: .web,
+                fileName: "\(id.uuidString)/\(SceneProject.entryFileName)",
+                thumbnailFileName: thumbnailFileName,
+                sourceFormat: "SCENE",
+                wasConverted: false,
+                pixelWidth: 0,
+                pixelHeight: 0,
+                duration: nil,
+                // Unknown until the page runs; assume it may make sound, so the sound settings apply.
+                hasAudio: true,
+                fileSize: Self.size(ofFolder: folder)
+            )
+            items.insert(item, at: 0)
+            save()
+            return item
+        }
+    }
+
+    /// Brings in whatever is at `url`: an archive, the folder of a wallpaper made for Wallpaper
+    /// Engine, a folder with a web page, or a video or picture. Returns what was added.
+    /// - Parameter languages: the languages to name a Wallpaper Engine wallpaper's settings in.
+    @discardableResult
+    public func importItem(at url: URL, languages: [String] = Locale.preferredLanguages,
+                           progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> [Wallpaper] {
+        if Archive.isArchive(url) {
+            return try await importArchive(at: url, languages: languages, progress: progress)
+        }
+        if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            // The wallpaper's own folder, or the one an archive of it was unpacked into.
+            if let project = WallpaperEngineProject.find(in: url, languages: languages) {
+                return [try await importWallpaperEngineProject(project, fallbackName: url.lastPathComponent)]
+            }
+            return [try importWebProject(at: url)]
+        }
+        return [try await importFile(at: url, progress: progress)]
+    }
+
+    /// Brings in what a .zip archive holds: a wallpaper made for Wallpaper Engine, a folder with
+    /// a web page, or videos and pictures. Returns what was added, never nothing.
+    @discardableResult
+    public func importArchive(at archive: URL, languages: [String] = Locale.preferredLanguages,
+                              progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> [Wallpaper] {
+        let files = FileManager.default
+        let unpacked = files.temporaryDirectory.appendingPathComponent("WallAeroEngine-\(UUID().uuidString)", isDirectory: true)
+        defer { try? files.removeItem(at: unpacked) }
+        try await Task.detached(priority: .userInitiated) {
+            try Archive.unpack(archive, into: unpacked)
+        }.value
+        // The archive's own name is the wallpaper's when nothing inside names it.
+        let name = archive.deletingPathExtension().lastPathComponent
+
+        if let project = WallpaperEngineProject.find(in: unpacked, languages: languages) {
+            return [try await importWallpaperEngineProject(project, fallbackName: name)]
+        }
+        let inside = (try? files.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        if let page = ([unpacked] + inside).first(where: { WebProject(folder: $0) != nil }) {
+            let item = try importWebProject(at: page)
+            if page == unpacked, WebProject(folder: page)?.title == nil {
+                rename(item.id, to: name)
+            }
+            return [self.item(withID: item.id) ?? item]
+        }
+        let media = (files.enumerator(at: unpacked, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])?
+            .compactMap { $0 as? URL } ?? [])
+            .filter(MediaImporter.canImport)
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        guard !media.isEmpty else { throw ImportError.emptyArchive }
+        var added: [Wallpaper] = []
+        for (index, file) in media.enumerated() {
+            let done = Double(index), count = Double(media.count)
+            added.append(try await importFile(at: file) { progress((done + $0) / count) })
+        }
+        return added
+    }
+
     /// Makes a scene out of a video or picture of the library: a new wallpaper with that media as
     /// its background, ready for layers. The original stays as it is.
     @discardableResult

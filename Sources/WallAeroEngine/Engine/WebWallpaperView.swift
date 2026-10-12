@@ -107,6 +107,10 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
 
         let configuration = WKWebViewConfiguration()
         configuration.mediaTypesRequiringUserActionForPlayback = mediaNeedsUserAction ? .all : []
+        // A page opened from a file may not load the other files of its folder as modules or
+        // fetch them: to the web engine every file is a site of its own. Wallpapers written as
+        // modules need that, and the page can read nothing outside its folder either way.
+        configuration.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         installUserScripts(in: configuration.userContentController, for: project)
         configuration.userContentController.add(MessageRelay { [weak self] in self?.hostMessage($0) }, name: "wallaeroHost")
         if editorScript != nil {
@@ -329,6 +333,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
             source += "\nwindow.wallaeroStill = true;"
         }
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        controller.addUserScript(WKUserScript(source: Self.frameScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         if let editorScript {
             controller.addUserScript(WKUserScript(source: editorScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         }
@@ -397,10 +402,27 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
       ['loadstart', 'loadedmetadata', 'play', 'ratechange'].forEach(function (name) {
         document.addEventListener(name, function (event) { applyTo(event.target); }, true);
       });
+      // A page made for Wallpaper Engine is told when the wallpaper pauses and plays again, so
+      // that it can stop what it does on timers; so is such a page in a frame, as the background
+      // of a scene.
+      var paused = false;
+      function tellPaused() {
+        if ((host.playing === false) === paused) return;
+        paused = !paused;
+        var pages = [window];
+        Array.prototype.forEach.call(document.querySelectorAll('iframe'), function (frame) { pages.push(frame.contentWindow); });
+        pages.forEach(function (page) {
+          try {
+            var listener = page.wallpaperPropertyListener;
+            if (listener && typeof listener.setPaused === 'function') listener.setPaused(paused);
+          } catch (error) {}
+        });
+      }
       window.__wallaeroHost = {
         apply: function (settings) {
           for (var key in settings) host[key] = settings[key];
           applyAll();
+          tellPaused();
         },
         // For a page that knows the app: a video to be played without ever being marked `autoplay`.
         autoplay: function (media) {
@@ -484,6 +506,30 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
       };
       // The rest of what Wallpaper Engine pages call on start-up: there is nothing to tell them
       // here, but the page loads instead of failing.
+      ['wallpaperRegisterMediaStatusListener', 'wallpaperRegisterMediaPropertiesListener',
+       'wallpaperRegisterMediaThumbnailListener', 'wallpaperRegisterMediaPlaybackListener',
+       'wallpaperRegisterMediaTimelineListener'].forEach(function (name) {
+        if (!window[name]) window[name] = function () {};
+      });
+    })();
+    """#
+
+    /// What a page in a frame is given: a scene shows a wallpaper made for Wallpaper Engine in
+    /// one. Such a page asks for the sound like any other; the page on top hears it for it,
+    /// and the listener goes when the frame does.
+    private static let frameScript = #"""
+    (function () {
+      if (window === window.top) return;
+      window.wallpaperRegisterAudioListener = function (listener) {
+        if (typeof listener !== 'function') return;
+        try {
+          var host = window.top.__wallaeroHost;
+          var owner = host.owner;
+          host.owner = window.frameElement;
+          window.top.wallpaperRegisterAudioListener(listener);
+          host.owner = owner;
+        } catch (error) {}
+      };
       ['wallpaperRegisterMediaStatusListener', 'wallpaperRegisterMediaPropertiesListener',
        'wallpaperRegisterMediaThumbnailListener', 'wallpaperRegisterMediaPlaybackListener',
        'wallpaperRegisterMediaTimelineListener'].forEach(function (name) {

@@ -47,6 +47,9 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
     public struct Background: Codable, Equatable, Sendable {
         public enum Kind: String, Codable, CaseIterable, Sendable {
             case video, image, color
+            /// A web page of its own, kept in the scene's folder — a wallpaper made for
+            /// Wallpaper Engine, for one. It draws itself; the scene's layers go on top of it.
+            case page
         }
 
         public enum Fit: String, Codable, CaseIterable, Sendable {
@@ -59,7 +62,7 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
         }
 
         public var kind: Kind
-        /// The video or picture, relative to the wallpaper's folder.
+        /// The video, the picture or the page, relative to the wallpaper's folder.
         public var source: String?
         /// Shown behind the media and wherever it does not reach.
         public var color: String
@@ -90,6 +93,10 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
             self.saturation = saturation
             self.hue = hue
         }
+
+        /// Whether the background is a video or a picture, which has to be fitted to the
+        /// screen. A color has nothing to fit, and a page lays itself out.
+        public var isMedia: Bool { kind == .video || kind == .image }
 
         public init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -287,6 +294,41 @@ extension WallpaperScene {
         public var text: String
         public var options: [String]
 
+        // A scene whose background is a page made for Wallpaper Engine has the page's own
+        // settings among its variables. The page is told their values, each under the name it
+        // knows the setting by, in the form Wallpaper Engine would hand it over.
+        /// That name; nil for a variable of the scene's own.
+        public var property: String?
+        /// For such a choice, what the page is given for each of `options`.
+        public var values: [OptionValue]?
+
+        /// A value of one of the kinds Wallpaper Engine lets an option of a choice have.
+        public enum OptionValue: Codable, Equatable, Sendable {
+            case text(String)
+            case number(Double)
+            case flag(Bool)
+
+            public init(from decoder: Decoder) throws {
+                let value = try decoder.singleValueContainer()
+                if let flag = try? value.decode(Bool.self) {
+                    self = .flag(flag)
+                } else if let number = try? value.decode(Double.self) {
+                    self = .number(number)
+                } else {
+                    self = .text(try value.decode(String.self))
+                }
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var value = encoder.singleValueContainer()
+                switch self {
+                case .text(let text): try value.encode(text)
+                case .number(let number): try value.encode(number)
+                case .flag(let flag): try value.encode(flag)
+                }
+            }
+        }
+
         public init(kind: Kind, title: String, key: String, id: UUID = UUID()) {
             self.id = id
             self.kind = kind
@@ -318,6 +360,8 @@ extension WallpaperScene {
             isOn = values.value(.isOn, or: defaults.isOn)
             text = values.value(.text, or: defaults.text)
             options = values.value(.options, or: defaults.options)
+            property = try? values.decodeIfPresent(String.self, forKey: .property)
+            self.values = try? values.decodeIfPresent([OptionValue].self, forKey: .values)
         }
 
         /// Any text made into a key that CSS, JavaScript and a text layer all accept: Latin

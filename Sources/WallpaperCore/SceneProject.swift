@@ -8,6 +8,8 @@ import Foundation
 ///     custom.css   – the user's own styles, loaded after the scene's
 ///     custom.js    – the user's own script, run after the scene is built
 ///     media/       – the background and the pictures the layers use
+///     page/        – the web page that is the background, if the scene has one: a wallpaper
+///                    made for Wallpaper Engine, brought in with all its files
 ///
 /// The generated files are rewritten whenever the app has a newer version of them, so scenes keep
 /// up with the app; anything hand-made belongs in the custom files or in a code layer.
@@ -15,6 +17,7 @@ public enum SceneProject {
     public static let sceneFileName = "scene.json"
     public static let entryFileName = "index.html"
     public static let mediaFolderName = "media"
+    public static let pageFolderName = "page"
 
     public static func isScene(_ folder: URL) -> Bool {
         FileManager.default.fileExists(atPath: folder.appendingPathComponent(sceneFileName).path)
@@ -153,6 +156,7 @@ public enum SceneProject {
     body { font-family: -apple-system, "Helvetica Neue", sans-serif; cursor: default; -webkit-user-select: none; }
     #wallaero-background, #wallaero-layers { position: fixed; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; }
     .wallaero-media { position: absolute; display: block; }
+    iframe.wallaero-media { border: 0; }
     .wallaero-layer { position: absolute; box-sizing: border-box; }
     .wallaero-content { box-sizing: border-box; width: 100%; height: 100%; }
     .wallaero-text > .wallaero-content { white-space: pre-wrap; overflow-wrap: break-word; height: auto; }
@@ -188,6 +192,8 @@ public enum SceneProject {
       var built = {}; // layer id -> { json, element }
       var clock = null;
       var variables = {}; // key -> value, as set now
+      var pageLoaded = false;
+      var toldPage = {}; // name of a setting of the page -> what the page was last told, as JSON
 
       // A length given for a 1080-pixel-high screen, as a CSS length that follows the screen.
       function px(value) { return ((Number(value) || 0) / 10.8) + 'vh'; }
@@ -298,6 +304,18 @@ public enum SceneProject {
           } else if (bg.kind === 'image' && bg.source) {
             media = document.createElement('img');
             media.src = bg.source;
+          } else if (bg.kind === 'page' && bg.source) {
+            // A web page of its own, a wallpaper made for Wallpaper Engine. It runs in a frame,
+            // so its styles and scripts and the scene's keep out of each other's way.
+            media = document.createElement('iframe');
+            media.setAttribute('scrolling', 'no');
+            pageLoaded = false;
+            media.addEventListener('load', function () {
+              pageLoaded = true;
+              toldPage = {};
+              tellPage(true);
+            });
+            media.src = encodeURI(bg.source);
           }
           if (media) {
             media.className = 'wallaero-media';
@@ -329,6 +347,68 @@ public enum SceneProject {
         if (number(bg.saturation, 100) !== 100) filters.push('saturate(' + number(bg.saturation, 100) + '%)');
         if (number(bg.hue, 0) !== 0) filters.push('hue-rotate(' + number(bg.hue, 0) + 'deg)');
         media.style.filter = filters.join(' ');
+      }
+
+      // --- A page as the background -----------------------------------------
+
+      // A variable that stands for a setting of the page, in the form Wallpaper Engine hands
+      // such a setting over: a color as three numbers from 0 to 1, a choice as the value its
+      // option stands for.
+      function pageValue(variable) {
+        if (variable.kind === 'number') return number(variable.number, 0);
+        if (variable.kind === 'toggle') return variable.isOn !== false;
+        if (variable.kind === 'color') {
+          var hex = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(variable.color || '') || [0, 'ff', 'ff', 'ff'];
+          return [1, 2, 3].map(function (part) { return +(parseInt(hex[part], 16) / 255).toFixed(5); }).join(' ');
+        }
+        var text = String(variable.text || '');
+        if (variable.kind === 'choice' && Array.isArray(variable.values)) {
+          var chosen = (variable.options || []).indexOf(text);
+          if (chosen >= 0 && chosen < variable.values.length) return variable.values[chosen];
+        }
+        return text;
+      }
+
+      // The language as Wallpaper Engine names it: "ru-ru", "en-us".
+      function pageLanguage() {
+        var known = { ru: 'ru-ru', de: 'de-de', fr: 'fr-fr', es: 'es-es', it: 'it-it', pt: 'pt-br', ja: 'ja-jp',
+                      ko: 'ko-kr', zh: 'zh-chs', pl: 'pl-pl', tr: 'tr-tr', uk: 'uk-ua' };
+        return known[String(locale).toLowerCase().split('-')[0]] || 'en-us';
+      }
+
+      // Tells the page its settings the way Wallpaper Engine does: all of them once it has
+      // loaded, and afterwards the ones that changed.
+      function tellPage(all, tries) {
+        var frame = background.firstElementChild;
+        if (!pageLoaded || !frame || frame.tagName !== 'IFRAME' || !scene) return;
+        var listener = null;
+        try {
+          listener = frame.contentWindow.wallpaperPropertyListener;
+        } catch (error) {}
+        if (!listener) {
+          // A page may put its listener up a moment after it has loaded; it is asked for a
+          // few seconds more.
+          tries = tries || 0;
+          if (all && tries < 25) setTimeout(function () { tellPage(true, tries + 1); }, 200);
+          return;
+        }
+        var changed = {};
+        var any = false;
+        (scene.variables || []).forEach(function (variable) {
+          if (!variable || typeof variable.property !== 'string' || !variable.property) return;
+          var value = pageValue(variable);
+          var json = JSON.stringify(value);
+          if (!all && toldPage[variable.property] === json) return;
+          toldPage[variable.property] = json;
+          changed[variable.property] = { value: value };
+          any = true;
+        });
+        try {
+          if (all && typeof listener.applyGeneralProperties === 'function') listener.applyGeneralProperties({ language: pageLanguage() });
+          if (any && typeof listener.applyUserProperties === 'function') listener.applyUserProperties(changed);
+        } catch (error) {
+          console.error('WallAero: the page did not take its settings', error);
+        }
       }
 
       // --- Layers -----------------------------------------------------------
@@ -479,6 +559,7 @@ public enum SceneProject {
         // First of all, so that the layers' scripts find the variables when they start.
         var variablesChanged = showVariables(scene.variables);
         showBackground(scene.background || {});
+        tellPage(false);
         showLayers(scene.layers || []);
         restartClock();
         if (variablesChanged) {
@@ -489,7 +570,7 @@ public enum SceneProject {
       }
 
       window.wallaero = {
-        version: 2,
+        version: 3,
         setScene: setScene,
         tokens: tokens,
         get scene() { return scene; },

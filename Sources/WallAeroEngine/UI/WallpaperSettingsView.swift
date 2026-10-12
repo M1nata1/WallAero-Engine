@@ -130,7 +130,7 @@ struct WallpaperSettingsView: View {
             }
         case .web:
             // A scene fills the screen with its background, and says how in the scene itself.
-            if let scene = scene(of: item), scene.background.kind != .color {
+            if let scene = scene(of: item), scene.background.isMedia {
                 Picker("Scaling", selection: model.fit) {
                     Text(ScalingMode.fill.title).tag(WallpaperScene.Background.Fit.cover)
                     Text(ScalingMode.fit.title).tag(WallpaperScene.Background.Fit.contain)

@@ -12,11 +12,19 @@ enum WebSnapshotter {
     static func render(_ project: WebProject, size: NSSize, forStill: Bool = false) async -> CGImage? {
         let view = WebWallpaperView(frame: NSRect(origin: .zero, size: size))
         view.rendersStill = forStill
-        // A web view draws only inside a window that is ordered in. This one lies far outside
-        // every display, so nothing appears on screen.
-        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -30000, y: -30000), size: size),
+        // A web view draws only inside a window that is ordered in, and a page runs its
+        // animation frames only while its window is on a display: one lying outside every
+        // display stays as it loaded, which for a page that draws itself frame by frame is
+        // blank. So the window is on the main display, and see-through: nothing appears, and
+        // the mouse goes through it.
+        let origin = NSScreen.main?.frame.origin ?? .zero
+        let window = NSWindow(contentRect: NSRect(origin: origin, size: size),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.alphaValue = 0
+        window.hasShadow = false
         window.ignoresMouseEvents = true
         window.collectionBehavior = [.transient, .ignoresCycle]
         window.contentView = view

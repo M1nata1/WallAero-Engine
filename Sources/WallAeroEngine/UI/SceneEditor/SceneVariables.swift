@@ -51,26 +51,33 @@ struct VariableInspector: View {
     let model: SceneEditorModel
 
     var body: some View {
+        // A variable that stands for a setting of the page in the background keeps the kind,
+        // the limits and the options the page gave it: the page knows no others.
+        let isOwn = variable.property == nil
         Section("Variable") {
             TextField("Title", text: $variable.title)
-            KeyField(variable: $variable, model: model)
-            Picker("Kind", selection: $variable.kind) {
-                ForEach(WallpaperScene.Variable.Kind.allCases, id: \.self) { kind in
-                    Text(SceneEditorModel.defaultTitle(for: kind)).tag(kind)
+            if isOwn {
+                KeyField(variable: $variable, model: model)
+                Picker("Kind", selection: $variable.kind) {
+                    ForEach(WallpaperScene.Variable.Kind.allCases, id: \.self) { kind in
+                        Text(SceneEditorModel.defaultTitle(for: kind)).tag(kind)
+                    }
                 }
             }
         }
         Section("Value") {
             VariableValueRow(variable: $variable, title: Text("Value"))
-            switch variable.kind {
-            case .number:
-                LimitField(title: "Minimum", value: $variable.minimum)
-                LimitField(title: "Maximum", value: $variable.maximum)
-                LimitField(title: "Step", value: $variable.step)
-            case .choice:
-                OptionsField(variable: $variable)
-            case .color, .toggle, .text:
-                EmptyView()
+            if isOwn {
+                switch variable.kind {
+                case .number:
+                    LimitField(title: "Minimum", value: $variable.minimum)
+                    LimitField(title: "Maximum", value: $variable.maximum)
+                    LimitField(title: "Step", value: $variable.step)
+                case .choice:
+                    OptionsField(variable: $variable)
+                case .color, .toggle, .text:
+                    EmptyView()
+                }
             }
         }
         Section("In Code") {

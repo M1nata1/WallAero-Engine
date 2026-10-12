@@ -46,6 +46,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.run()
             return
         }
+        if let request = ScreenshotMode.importTest {
+            ScreenshotMode.runImportTest(request)
+            app.run()
+            return
+        }
         if let seconds = ScreenshotMode.soundTestSeconds {
             ScreenshotMode.soundTest(seconds: seconds)
             app.run()
@@ -205,7 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowedContentTypes = MediaImporter.acceptedContentTypes
-        panel.message = NSLocalizedString("Choose videos, GIFs or pictures. Folders are searched too.", comment: "Open panel")
+        panel.message = NSLocalizedString("Choose videos, GIFs, pictures or a .zip archive with a wallpaper. Folders are searched too.", comment: "Open panel")
         panel.prompt = NSLocalizedString("Add", comment: "Open panel button")
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK else { return }

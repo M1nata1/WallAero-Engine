@@ -56,21 +56,22 @@ final class ImportCoordinator: ObservableObject {
             while let job = jobs.first {
                 do {
                     let jobID = job.id
-                    let item: Wallpaper
-                    if Self.isWebProject(job.url) {
-                        item = try library.importWebProject(at: job.url)
-                        if item.thumbnailFileName == nil {
-                            // No preview came with the page; draw one.
-                            await manager.refreshPictures(of: item)
-                        }
-                    } else {
-                        item = try await library.importFile(at: job.url) { [weak self] progress in
-                            Task { @MainActor in self?.setProgress(progress, for: jobID) }
-                        }
+                    let report: @Sendable (Double) -> Void = { [weak self] progress in
+                        Task { @MainActor in self?.setProgress(progress, for: jobID) }
                     }
-                    lastImportedID = item.id
-                    if job.appliesWhenDone || !manager.hasWallpaper {
-                        manager.setWallpaper(item.id, for: .all)
+                    // The settings of a wallpaper made for Wallpaper Engine are named in the
+                    // language the app is shown in.
+                    let languages = Bundle.main.preferredLocalizations
+                    let added = try await library.importItem(at: job.url, languages: languages, progress: report)
+                    for item in added where item.kind == .web && item.thumbnailFileName == nil {
+                        // No preview came with the page; draw one.
+                        await manager.refreshPictures(of: item)
+                    }
+                    if let item = added.last {
+                        lastImportedID = item.id
+                        if job.appliesWhenDone || !manager.hasWallpaper {
+                            manager.setWallpaper(item.id, for: .all)
+                        }
                     }
                 } catch {
                     batchFailures.append(Failure(fileName: job.url.lastPathComponent, message: error.localizedDescription))
@@ -90,18 +91,24 @@ final class ImportCoordinator: ObservableObject {
         jobs[index].progress = progress
     }
 
-    private static func isWebProject(_ url: URL) -> Bool {
-        (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true && WebProject(folder: url) != nil
-    }
-
     /// A folder becomes the importable files inside it; a file is kept as is, so that
     /// unsupported files produce a clear error instead of being silently skipped.
     private static func expand(_ url: URL) -> [URL] {
         let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
         guard isDirectory else { return [url] }
-        // A folder with a page in it is one web wallpaper, not a pile of pictures to look through.
-        if WebProject(folder: url) != nil {
+        // A folder with a page in it, or one of a wallpaper made for Wallpaper Engine, is one
+        // wallpaper, not a pile of pictures to look through.
+        if WebProject(folder: url) != nil || WallpaperEngineProject(folder: url) != nil {
             return [url]
+        }
+        // So is each of the folders inside it that hold such a wallpaper: an unpacked archive
+        // has one, next to files of the site it came from. Their pictures are parts of the
+        // wallpapers, not wallpapers themselves.
+        let inside = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        let wallpapers = inside.filter { WallpaperEngineProject(folder: $0) != nil }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        if !wallpapers.isEmpty {
+            return wallpapers
         }
         guard let enumerator = FileManager.default.enumerator(
             at: url,

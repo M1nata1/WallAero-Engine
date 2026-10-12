@@ -29,12 +29,19 @@ private struct BackgroundInspector: View {
 
     var body: some View {
         Section("Background") {
-            Picker("Kind", selection: kind) {
-                Text("Video").tag(WallpaperScene.Background.Kind.video)
-                Text("Image").tag(WallpaperScene.Background.Kind.image)
-                Text("Color").tag(WallpaperScene.Background.Kind.color)
+            if background.kind == .page {
+                // The page is the wallpaper itself, brought in whole; there is no other to pick.
+                LabeledContent("Kind") {
+                    Text("Web Page")
+                }
+            } else {
+                Picker("Kind", selection: kind) {
+                    Text("Video").tag(WallpaperScene.Background.Kind.video)
+                    Text("Image").tag(WallpaperScene.Background.Kind.image)
+                    Text("Color").tag(WallpaperScene.Background.Kind.color)
+                }
             }
-            if background.kind != .color {
+            if background.isMedia {
                 LabeledContent("File") {
                     HStack(spacing: 8) {
                         Text(fileName(background.source))

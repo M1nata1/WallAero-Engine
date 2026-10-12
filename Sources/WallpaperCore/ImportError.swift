@@ -10,6 +10,12 @@ public enum ImportError: LocalizedError, Equatable {
     case conversionFailed(String)
     /// The folder has no page to show.
     case noWebPage
+    /// A wallpaper made for Wallpaper Engine of a kind that cannot be shown: one of its own
+    /// scenes, an application. Carries the kind as the wallpaper names it.
+    case unsupportedWallpaperEngineKind(String)
+    case unreadableArchive
+    /// The archive unpacks, but has no wallpaper, page, video or picture in it.
+    case emptyArchive
 
     public var errorDescription: String? {
         switch self {
@@ -34,6 +40,18 @@ public enum ImportError: LocalizedError, Equatable {
             )
         case .noWebPage:
             return NSLocalizedString("The folder has no web page to show. It needs an index.html.", comment: "Import error")
+        case .unsupportedWallpaperEngineKind(let kind):
+            return String(
+                format: NSLocalizedString(
+                    "This Wallpaper Engine wallpaper is of the “%@” kind. Only web pages and videos can be opened.",
+                    comment: "Import error; the argument is Wallpaper Engine's name of the kind, such as scene"
+                ),
+                kind
+            )
+        case .unreadableArchive:
+            return NSLocalizedString("The archive could not be unpacked.", comment: "Import error")
+        case .emptyArchive:
+            return NSLocalizedString("The archive has no wallpaper in it: no web page, video or picture.", comment: "Import error")
         case .conversionFailed(let reason):
             return String(
                 format: NSLocalizedString("Conversion failed: %@", comment: "Import error; the argument is the reason"),

@@ -164,6 +164,47 @@ enum ScreenshotMode {
         }
     }
 
+    /// `--import-test <library folder> <file or folder>…` brings files into a library of its
+    /// own, the way adding them in the app does — an archive, a wallpaper made for Wallpaper
+    /// Engine, a page, a video — and says what each became. The library in use is not touched.
+    static var importTest: (library: URL, sources: [URL])? {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--import-test"), index + 2 < arguments.count else { return nil }
+        let sources = arguments[(index + 2)...].prefix { !$0.hasPrefix("-") }.map { URL(fileURLWithPath: $0) }
+        return (URL(fileURLWithPath: arguments[index + 1], isDirectory: true), sources)
+    }
+
+    static func runImportTest(_ request: (library: URL, sources: [URL])) {
+        NSApp.setActivationPolicy(.accessory)
+        let library = WallpaperLibrary(rootURL: request.library)
+        Task {
+            for source in request.sources {
+                do {
+                    let added = try await library.importItem(at: source, languages: Bundle.main.preferredLocalizations)
+                    for item in added {
+                        print("\(source.lastPathComponent) → “\(item.name)” [\(item.sourceFormat)] \(item.fileName), thumbnail: \(item.thumbnailFileName != nil)")
+                        guard library.isScene(item), let scene = try? SceneProject.read(from: library.projectURL(for: item)) else { continue }
+                        print("  background: \(scene.background.kind.rawValue) \(scene.background.source ?? "")")
+                        for variable in scene.variables {
+                            let value: String
+                            switch variable.kind {
+                            case .color: value = variable.color
+                            case .number: value = "\(variable.number) in \(variable.minimum)…\(variable.maximum) by \(variable.step)"
+                            case .toggle: value = variable.isOn ? "on" : "off"
+                            case .text: value = "“\(variable.text)”"
+                            case .choice: value = "“\(variable.text)” of \(variable.options) for \(variable.values.map { "\($0)" } ?? "—")"
+                            }
+                            print("  \(variable.property ?? "—") as \(variable.key): “\(variable.title)” \(variable.kind.rawValue) \(value)")
+                        }
+                    }
+                } catch {
+                    print("\(source.lastPathComponent) → \(error.localizedDescription)")
+                }
+            }
+            exit(0)
+        }
+    }
+
     /// `--toggle-settings`, with `--screenshots`: opens the main window the way the app does,
     /// narrow and without the settings, then shows them at its side and hides them again as the
     /// button in the toolbar would. It takes a picture each time (`toggle-1.png`, …) and prints
@@ -818,7 +859,8 @@ enum ScreenshotMode {
     /// `--scene <scene folder>` the scene is shown in a window and the report says what its page
     /// was really given, also while paused; `--picture <file.png>` saves how it looked at the end,
     /// `--eval <JavaScript>` runs in the page before the listening and `--eval-after <JavaScript>`
-    /// after it, its value printed. `--synthetic` listens to a made-up
+    /// after it, its value printed; `--eval-end <JavaScript>` runs last of all, once the page
+    /// has been paused and set playing again. `--synthetic` listens to a made-up
     /// sound instead of the Mac's — three seconds of silence, four of a tone, three of silence,
     /// three of the tone, then silence — which needs no permission and always goes the same way.
     ///
@@ -917,6 +959,9 @@ enum ScreenshotMode {
                 view.setPlaying(true, rate: 1)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 line("playing again:", page: await heard())
+                for script in values(of: "--eval-end") {
+                    print("eval at the end:", await view.value(of: script) ?? "nil")
+                }
                 view.unload()
                 window?.close()
             }
