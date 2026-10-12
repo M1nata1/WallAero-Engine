@@ -30,6 +30,9 @@ public final class WallpaperLibrary: ObservableObject {
     @Published public private(set) var items: [Wallpaper] = []
     /// The category of each tag that was given one, by the tag in lower case.
     @Published public private(set) var tagCategories: [String: String] = [:]
+    /// What the scenes brought in from Wallpaper Engine since the app started had that could
+    /// not be brought with them, by the wallpaper each became.
+    public private(set) var leftOutOnImport: [UUID: WallpaperEngineScene.LeftOut] = [:]
 
     public let rootURL: URL
     public let mediaURL: URL
@@ -163,8 +166,9 @@ public final class WallpaperLibrary: ObservableObject {
 
     /// Brings in a wallpaper made for Wallpaper Engine. A web page becomes a scene with the page
     /// as its background and the page's own settings as its variables: it is set up in the
-    /// wallpaper's settings and takes layers in the editor like any scene. A video is taken as
-    /// any video is. Wallpaper Engine's own scenes cannot be shown and are refused.
+    /// wallpaper's settings and takes layers in the editor like any scene. One of Wallpaper
+    /// Engine's own scenes becomes a scene made of its pictures; what else it had is noted in
+    /// `leftOutOnImport`. A video is taken as any video is.
     @discardableResult
     public func importWallpaperEngineProject(_ project: WallpaperEngineProject, fallbackName: String? = nil) async throws -> Wallpaper {
         let name = project.title ?? fallbackName ?? project.folder.lastPathComponent
@@ -190,31 +194,60 @@ public final class WallpaperLibrary: ObservableObject {
                 try? FileManager.default.removeItem(at: folder)
                 throw error
             }
-
-            var thumbnailFileName: String?
-            if let preview = project.previewFile, let image = Thumbnailer.image(at: page.appendingPathComponent(preview)) {
-                thumbnailFileName = "\(id.uuidString).jpg"
-                try? Thumbnailer.writeJPEG(image, to: thumbnailsURL.appendingPathComponent(thumbnailFileName!))
+            return addScene(id, named: name, preview: project.previewFile.map(page.appendingPathComponent))
+        case .scene:
+            let id = UUID()
+            let folder = webURL.appendingPathComponent(id.uuidString, isDirectory: true)
+            let source = project.folder
+            let leftOut: WallpaperEngineScene.LeftOut
+            do {
+                // Unpacking the pictures takes a while; the app stays responsive meanwhile.
+                leftOut = try await Task.detached(priority: .userInitiated) {
+                    guard let package = WallpaperEnginePackage(folder: source) else { throw ImportError.unreadable }
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    let converted = try WallpaperEngineScene.convert(package, into: folder)
+                    try SceneProject.create(at: folder, scene: converted.scene)
+                    return converted.leftOut
+                }.value
+            } catch {
+                try? FileManager.default.removeItem(at: folder)
+                throw error
             }
-            let item = Wallpaper(
-                id: id,
-                name: name,
-                kind: .web,
-                fileName: "\(id.uuidString)/\(SceneProject.entryFileName)",
-                thumbnailFileName: thumbnailFileName,
-                sourceFormat: "SCENE",
-                wasConverted: false,
-                pixelWidth: 0,
-                pixelHeight: 0,
-                duration: nil,
-                // Unknown until the page runs; assume it may make sound, so the sound settings apply.
-                hasAudio: true,
-                fileSize: Self.size(ofFolder: folder)
-            )
-            items.insert(item, at: 0)
-            save()
+            // The preview that came with the wallpaper shows it with its effects, which it has
+            // not here. The app draws the scene as it is instead, as for any page without one.
+            let item = addScene(id, named: name, preview: nil)
+            if !leftOut.isEmpty {
+                leftOutOnImport[id] = leftOut
+            }
             return item
         }
+    }
+
+    /// Adds the scene in the folder named after `id` to the top of the list.
+    private func addScene(_ id: UUID, named name: String, preview: URL?) -> Wallpaper {
+        var thumbnailFileName: String?
+        if let preview, let image = Thumbnailer.image(at: preview) {
+            thumbnailFileName = "\(id.uuidString).jpg"
+            try? Thumbnailer.writeJPEG(image, to: thumbnailsURL.appendingPathComponent(thumbnailFileName!))
+        }
+        let item = Wallpaper(
+            id: id,
+            name: name,
+            kind: .web,
+            fileName: "\(id.uuidString)/\(SceneProject.entryFileName)",
+            thumbnailFileName: thumbnailFileName,
+            sourceFormat: "SCENE",
+            wasConverted: false,
+            pixelWidth: 0,
+            pixelHeight: 0,
+            duration: nil,
+            // Unknown until the page runs; assume it may make sound, so the sound settings apply.
+            hasAudio: true,
+            fileSize: Self.size(ofFolder: webURL.appendingPathComponent(id.uuidString, isDirectory: true))
+        )
+        items.insert(item, at: 0)
+        save()
+        return item
     }
 
     /// Brings in whatever is at `url`: an archive, the folder of a wallpaper made for Wallpaper

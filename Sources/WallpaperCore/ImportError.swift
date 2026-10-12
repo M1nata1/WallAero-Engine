@@ -10,9 +10,11 @@ public enum ImportError: LocalizedError, Equatable {
     case conversionFailed(String)
     /// The folder has no page to show.
     case noWebPage
-    /// A wallpaper made for Wallpaper Engine of a kind that cannot be shown: one of its own
-    /// scenes, an application. Carries the kind as the wallpaper names it.
+    /// A wallpaper made for Wallpaper Engine of a kind that cannot be shown: an application.
+    /// Carries the kind as the wallpaper names it.
     case unsupportedWallpaperEngineKind(String)
+    /// One of Wallpaper Engine's own scenes with no picture in it that could be read.
+    case noPicturesInScene
     case unreadableArchive
     /// The archive unpacks, but has no wallpaper, page, video or picture in it.
     case emptyArchive
@@ -43,11 +45,13 @@ public enum ImportError: LocalizedError, Equatable {
         case .unsupportedWallpaperEngineKind(let kind):
             return String(
                 format: NSLocalizedString(
-                    "This Wallpaper Engine wallpaper is of the “%@” kind. Only web pages and videos can be opened.",
-                    comment: "Import error; the argument is Wallpaper Engine's name of the kind, such as scene"
+                    "This Wallpaper Engine wallpaper is of the “%@” kind. Only web pages, scenes and videos can be opened.",
+                    comment: "Import error; the argument is Wallpaper Engine's name of the kind, such as application"
                 ),
                 kind
             )
+        case .noPicturesInScene:
+            return NSLocalizedString("This Wallpaper Engine scene has no pictures that could be read.", comment: "Import error")
         case .unreadableArchive:
             return NSLocalizedString("The archive could not be unpacked.", comment: "Import error")
         case .emptyArchive:

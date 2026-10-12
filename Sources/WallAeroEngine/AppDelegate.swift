@@ -118,6 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.presentImportFailures() }
             .store(in: &cancellables)
+        importer.$notices
+            .filter { !$0.isEmpty }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.presentImportNotices() }
+            .store(in: &cancellables)
 
         if let url = ScreenshotMode.desktopPictureURL {
             ScreenshotMode.pictureDesktop(of: manager, to: url)
@@ -256,6 +261,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = failures.prefix(8)
                 .map { "\($0.fileName): \($0.message)" }
                 .joined(separator: "\n\n")
+        }
+        if let window = windows.visibleWindow {
+            alert.beginSheetModal(for: window)
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
+    }
+
+    /// Says which of the wallpapers just added are scenes of Wallpaper Engine that came as
+    /// their pictures alone, so that a still wallpaper is not taken for a fault.
+    private func presentImportNotices() {
+        let notices = importer.notices
+        importer.notices = []
+        guard let first = notices.first else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        let explanation = NSLocalizedString(
+            "Only the pictures of a Wallpaper Engine scene are brought over: they became the background and layers, which you can change in the editor. Effects, particles and sound are not.",
+            comment: "Import notice"
+        )
+        if notices.count == 1 {
+            alert.messageText = String(format: NSLocalizedString("“%@” was added in part", comment: "Import notice title"), first.name)
+            alert.informativeText = explanation
+        } else {
+            alert.messageText = NSLocalizedString("Some wallpapers were added in part", comment: "Import notice title")
+            alert.informativeText = notices.prefix(8).map(\.name).joined(separator: "\n") + "\n\n" + explanation
         }
         if let window = windows.visibleWindow {
             alert.beginSheetModal(for: window)

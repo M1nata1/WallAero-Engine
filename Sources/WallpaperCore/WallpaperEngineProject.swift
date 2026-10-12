@@ -9,8 +9,11 @@ public struct WallpaperEngineProject: Equatable, Sendable {
         case web
         /// A video file.
         case video
-        /// Anything else, by the name the project gives it: one of Wallpaper Engine's own
-        /// scenes, an application. These need Wallpaper Engine itself to draw them.
+        /// One of Wallpaper Engine's own scenes: pictures on a canvas, in `scene.pkg`. Its
+        /// pictures become the background and the layers of a scene, see `WallpaperEngineScene`.
+        case scene
+        /// Anything else, by the name the project gives it: an application. These need
+        /// Wallpaper Engine itself to draw them.
         case other(String)
     }
 
@@ -51,6 +54,8 @@ public struct WallpaperEngineProject: Equatable, Sendable {
             kind = .web
         case "video":
             kind = .video
+        case "scene":
+            kind = .scene
         case "":
             // Old projects do not say; the file does.
             switch (file as NSString?)?.pathExtension.lowercased() {

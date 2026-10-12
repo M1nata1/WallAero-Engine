@@ -17,16 +17,26 @@ final class ImportCoordinator: ObservableObject {
         let message: String
     }
 
+    /// A wallpaper that was added, but not all of it.
+    struct Notice: Identifiable {
+        let id = UUID()
+        let name: String
+    }
+
     /// Pending and running imports; the first one is in progress.
     @Published private(set) var jobs: [Job] = []
     /// Errors of the last batch, published once the whole batch is done.
     @Published var failures: [Failure] = []
+    /// Scenes of Wallpaper Engine in the last batch that came without their effects, published
+    /// once the whole batch is done.
+    @Published var notices: [Notice] = []
     /// The latest successfully imported wallpaper, so the library can select it.
     @Published private(set) var lastImportedID: UUID?
 
     private let library: WallpaperLibrary
     private let manager: WallpaperManager
     private var batchFailures: [Failure] = []
+    private var batchNotices: [Notice] = []
     private var isRunning = false
 
     init(library: WallpaperLibrary, manager: WallpaperManager) {
@@ -67,6 +77,7 @@ final class ImportCoordinator: ObservableObject {
                         // No preview came with the page; draw one.
                         await manager.refreshPictures(of: item)
                     }
+                    batchNotices += added.filter { library.leftOutOnImport[$0.id] != nil }.map { Notice(name: $0.name) }
                     if let item = added.last {
                         lastImportedID = item.id
                         if job.appliesWhenDone || !manager.hasWallpaper {
@@ -82,6 +93,10 @@ final class ImportCoordinator: ObservableObject {
             if !batchFailures.isEmpty {
                 failures = batchFailures
                 batchFailures = []
+            }
+            if !batchNotices.isEmpty {
+                notices = batchNotices
+                batchNotices = []
             }
         }
     }

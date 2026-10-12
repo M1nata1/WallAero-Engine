@@ -268,6 +268,10 @@
 
 /* Wallpapers made for Wallpaper Engine, and archives */
 "Scheme color" = "Цвет схемы";
-"This Wallpaper Engine wallpaper is of the “%@” kind. Only web pages and videos can be opened." = "Это обои Wallpaper Engine типа «%@». Открываются только веб-страницы и видео.";
+"This Wallpaper Engine wallpaper is of the “%@” kind. Only web pages, scenes and videos can be opened." = "Это обои Wallpaper Engine типа «%@». Открываются только веб-страницы, сцены и видео.";
+"This Wallpaper Engine scene has no pictures that could be read." = "В этой сцене Wallpaper Engine нет картинок, которые удалось прочитать.";
+"“%@” was added in part" = "Обои «%@» добавлены частично";
+"Some wallpapers were added in part" = "Некоторые обои добавлены частично";
+"Only the pictures of a Wallpaper Engine scene are brought over: they became the background and layers, which you can change in the editor. Effects, particles and sound are not." = "Из сцены Wallpaper Engine переносятся только картинки: они стали фоном и слоями, которые можно менять в редакторе. Эффекты, частицы и звук не переносятся.";
 "The archive could not be unpacked." = "Не удалось распаковать архив.";
 "The archive has no wallpaper in it: no web page, video or picture." = "В архиве нет обоев: ни веб-страницы, ни видео, ни картинки.";

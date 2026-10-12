@@ -270,6 +270,12 @@ enum ScreenshotMode {
                         print("\(source.lastPathComponent) → “\(item.name)” [\(item.sourceFormat)] \(item.fileName), thumbnail: \(item.thumbnailFileName != nil)")
                         guard library.isScene(item), let scene = try? SceneProject.read(from: library.projectURL(for: item)) else { continue }
                         print("  background: \(scene.background.kind.rawValue) \(scene.background.source ?? "")")
+                        for layer in scene.layers {
+                            print("  layer “\(layer.name)”: \(layer.kind.rawValue) \(layer.source) at \(layer.x), \(layer.y), \(layer.width) wide, turned \(layer.rotation), opacity \(layer.opacity), \(layer.blendMode)\(layer.isVisible ? "" : ", hidden")")
+                        }
+                        if let leftOut = library.leftOutOnImport[item.id] {
+                            print("  left out: \(leftOut.effects) effects, \(leftOut.particles) particles, \(leftOut.sounds) sounds, \(leftOut.others) others")
+                        }
                         for variable in scene.variables {
                             let value: String
                             switch variable.kind {

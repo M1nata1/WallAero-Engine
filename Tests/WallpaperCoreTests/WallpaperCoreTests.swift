@@ -1,4 +1,5 @@
 import AVFoundation
+import Compression
 import ImageIO
 import UniformTypeIdentifiers
 import XCTest
@@ -915,16 +916,16 @@ final class WallpaperEngineTests: XCTestCase {
         XCTAssertEqual(library.items.count, 2)
     }
 
-    func testWallpaperEnginesOwnScenesAreRefusedByName() async throws {
-        try write("PKGV0001", to: "scene.pkg")
-        try write(#"{"file": "scene.pkg", "type": "Scene", "title": "Rain"}"#, to: "project.json")
-        XCTAssertEqual(WallpaperEngineProject(folder: wallpaper)?.kind, .other("scene"))
+    func testKindsThatNeedWallpaperEngineItselfAreRefusedByName() async throws {
+        try write("MZ", to: "clock.exe")
+        try write(#"{"file": "clock.exe", "type": "Application", "title": "Clock"}"#, to: "project.json")
+        XCTAssertEqual(WallpaperEngineProject(folder: wallpaper)?.kind, .other("application"))
         let library = WallpaperLibrary(rootURL: root.appendingPathComponent("Library"))
         do {
             _ = try await library.importItem(at: wallpaper)
-            XCTFail("a Wallpaper Engine scene was taken")
+            XCTFail("an application was taken")
         } catch {
-            XCTAssertEqual(error as? ImportError, .unsupportedWallpaperEngineKind("scene"))
+            XCTAssertEqual(error as? ImportError, .unsupportedWallpaperEngineKind("application"))
         }
         XCTAssertTrue(library.items.isEmpty)
     }
@@ -965,6 +966,303 @@ final class WallpaperEngineTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
         try FileManager.default.removeItem(at: staging)
+    }
+}
+
+/// Wallpaper Engine's own scenes: the package they come in, their pictures, and what becomes of
+/// them. The files are put together here the way Wallpaper Engine writes them.
+@MainActor
+final class WallpaperEngineSceneTests: XCTestCase {
+    private var root: URL!
+    private var wallpaper: URL { root.appendingPathComponent("1257978685") }
+
+    override func setUpWithError() throws {
+        root = try TestMedia.directory()
+        addTeardownBlock { [root] in try? FileManager.default.removeItem(at: root!) }
+        try FileManager.default.createDirectory(at: wallpaper, withIntermediateDirectories: true)
+    }
+
+    private func number(_ value: Int) -> Data {
+        withUnsafeBytes(of: UInt32(truncatingIfNeeded: value).littleEndian) { Data($0) }
+    }
+
+    private func text(_ value: String) -> Data {
+        number(value.utf8.count) + Data(value.utf8)
+    }
+
+    /// A `scene.pkg`: the names with the place of each file, then the files.
+    private func package(_ files: [(name: String, data: Data)]) -> Data {
+        var list = text("PKGV0001") + number(files.count)
+        var offset = 0
+        for file in files {
+            list += text(file.name) + number(offset) + number(file.data.count)
+            offset += file.data.count
+        }
+        return files.reduce(list) { $0 + $1.data }
+    }
+
+    /// A `.tex`: a picture of `width` by `height` in the corner of a canvas, every pixel of it
+    /// `color` and the rest of the canvas see-through black.
+    private func texture(width: Int, height: Int, canvas: Int, color: [UInt8], version: Int = 2, packed: Bool = true) -> Data {
+        var pixels = Data(count: canvas * canvas * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                pixels.replaceSubrange(((y * canvas + x) * 4)..<((y * canvas + x) * 4 + 4), with: color)
+            }
+        }
+        return texture(pixels: pixels, format: 0, width: width, height: height, canvas: canvas, version: version, packed: packed)
+    }
+
+    private func texture(pixels: Data, format: Int, width: Int, height: Int, canvas: Int, version: Int = 2,
+                         packed: Bool = false, pictureFile: Bool = false) -> Data {
+        var file = Data("TEXV0005\0TEXI0001\0".utf8)
+        for value in [format, 2, canvas, canvas, width, height, 0] {
+            file += number(value)
+        }
+        file += Data("TEXB000\(version)\0".utf8) + number(1)
+        if version >= 3 {
+            file += number(pictureFile ? 13 : -1)
+        }
+        file += number(1) + number(canvas) + number(canvas)
+        var stored = pixels
+        if version >= 2 {
+            if packed {
+                stored = lz4(pixels)
+            }
+            file += number(packed ? 1 : 0) + number(pixels.count)
+        }
+        return file + number(stored.count) + stored
+    }
+
+    private func lz4(_ data: Data) -> Data {
+        var packed = Data(count: data.count + 1024)
+        let capacity = packed.count
+        let written = packed.withUnsafeMutableBytes { target in
+            data.withUnsafeBytes { source in
+                compression_encode_buffer(target.bindMemory(to: UInt8.self).baseAddress!, capacity,
+                                          source.bindMemory(to: UInt8.self).baseAddress!, data.count, nil, COMPRESSION_LZ4_RAW)
+            }
+        }
+        XCTAssertGreaterThan(written, 0)
+        return packed.prefix(written)
+    }
+
+    /// The color of a pixel, counted from the top left.
+    private func pixel(_ image: CGImage, _ x: Int, _ y: Int) throws -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: 4)
+        let context = try XCTUnwrap(CGContext(data: &bytes, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                              space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: -x, y: -(image.height - 1 - y), width: image.width, height: image.height))
+        return bytes
+    }
+
+    /// The files of a picture: the object's model, its material and the texture.
+    private func picture(_ name: String, texture: Data, blending: String = "translucent") -> [(name: String, data: Data)] {
+        [("models/\(name).json", Data(#"{"autosize": true, "material": "materials/\#(name).json"}"#.utf8)),
+         ("materials/\(name).json", Data(#"{"passes": [{"blending": "\#(blending)", "shader": "genericimage2", "textures": ["\#(name)"]}]}"#.utf8)),
+         ("materials/\(name).tex", texture)]
+    }
+
+    // MARK: - The package
+
+    func testAPackageGivesItsFilesByName() throws {
+        let data = package([("scene.json", Data(#"{"objects": []}"#.utf8)), ("materials/Sky.tex", Data([1, 2, 3]))])
+        let read = try XCTUnwrap(WallpaperEnginePackage(data: data))
+        XCTAssertEqual(read.names, ["scene.json", "materials/Sky.tex"])
+        XCTAssertEqual(read.data(named: "materials/Sky.tex"), Data([1, 2, 3]))
+        // Wallpaper Engine is a Windows program: neither the case nor the slash matters.
+        XCTAssertEqual(read.data(named: #"Materials\sky.tex"#), Data([1, 2, 3]))
+        XCTAssertNotNil(read.json(named: "scene.json")?["objects"])
+        XCTAssertNil(read.data(named: "missing.json"))
+    }
+
+    func testAPackageThatNamesPlacesPastItsEndIsNotRead() {
+        XCTAssertNil(WallpaperEnginePackage(data: Data("not a package".utf8)))
+        XCTAssertNil(WallpaperEnginePackage(data: text("PKGV0001") + number(1) + text("a.json") + number(0) + number(500)))
+        XCTAssertNil(WallpaperEnginePackage(data: text("PKGV0001") + number(3) + text("a.json") + number(0) + number(0)))
+        XCTAssertNil(WallpaperEnginePackage(data: text("PKGV0001") + number(1) + number(1_000_000)))
+        XCTAssertNil(WallpaperEnginePackage(data: text("ZIPV0001") + number(0)))
+    }
+
+    func testASceneNotYetPackedIsReadFromItsFolder() throws {
+        try #"{"objects": []}"#.write(to: wallpaper.appendingPathComponent("scene.json"), atomically: true, encoding: .utf8)
+        try "outside".write(to: root.appendingPathComponent("outside.txt"), atomically: true, encoding: .utf8)
+        let read = try XCTUnwrap(WallpaperEnginePackage(folder: wallpaper))
+        XCTAssertNotNil(read.json(named: "scene.json"))
+        XCTAssertNil(read.data(named: "../outside.txt"))
+        XCTAssertNil(WallpaperEnginePackage(folder: root), "no scene here")
+    }
+
+    // MARK: - Pictures
+
+    func testAPictureIsUnpackedAndCutOutOfItsCanvas() throws {
+        for (version, packed) in [(1, false), (2, false), (2, true), (3, true)] {
+            let file = texture(width: 6, height: 3, canvas: 8, color: [255, 0, 0, 255], version: version, packed: packed)
+            let image = try XCTUnwrap(WallpaperEngineTexture.image(from: file), "version \(version), packed: \(packed)")
+            XCTAssertEqual([image.width, image.height], [6, 3])
+            XCTAssertEqual(try pixel(image, 5, 2), [255, 0, 0, 255])
+        }
+    }
+
+    func testAPictureKeepsItsSeeThroughPixelsAndIsNotTurnedOver() throws {
+        var pixels = Data(count: 4 * 4 * 4)
+        pixels.replaceSubrange(0..<4, with: [0, 255, 0, 255]) // the top left pixel
+        let image = try XCTUnwrap(WallpaperEngineTexture.image(from: texture(pixels: pixels, format: 0, width: 4, height: 4, canvas: 4)))
+        XCTAssertEqual(try pixel(image, 0, 0), [0, 255, 0, 255])
+        XCTAssertEqual(try pixel(image, 0, 3), [0, 0, 0, 0])
+    }
+
+    func testAPictureKeptAsAFileOfAUsualKindIsRead() throws {
+        let png = root.appendingPathComponent("inside.png")
+        try TestMedia.writePNG(to: png, size: CGSize(width: 8, height: 8))
+        let file = texture(pixels: try Data(contentsOf: png), format: 0, width: 8, height: 8, canvas: 8, version: 3, pictureFile: true)
+        let image = try XCTUnwrap(WallpaperEngineTexture.image(from: file))
+        XCTAssertEqual([image.width, image.height], [8, 8])
+    }
+
+    func testPixelsPackedForAGraphicsCardAreUnpacked() throws {
+        // One square of four by four: red and blue, each pixel's two bits picking red, blue
+        // or one of the two colors between them, a row at a time.
+        let colors: [UInt8] = [0x00, 0xF8, 0x1F, 0x00, 0b00_00_00_00, 0b01_01_01_01, 0b10_10_10_10, 0b11_11_11_11]
+        let plain = try XCTUnwrap(WallpaperEngineTexture.rgba(from: Data(colors), format: 7, width: 4, height: 4))
+        XCTAssertEqual(Array(plain[0..<4]), [255, 0, 0, 255])
+        XCTAssertEqual(Array(plain[16..<20]), [0, 0, 255, 255])
+        XCTAssertEqual(Array(plain[32..<36]), [170, 0, 85, 255])
+        XCTAssertEqual(Array(plain[48..<52]), [85, 0, 170, 255])
+
+        // The same with the opacity before it: four bits a pixel, or two levels and a pick.
+        let fourBits = Data([0xF0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF] + colors)
+        let sharp = try XCTUnwrap(WallpaperEngineTexture.rgba(from: fourBits, format: 6, width: 4, height: 4))
+        XCTAssertEqual(Array(sharp[0..<8]), [255, 0, 0, 0, 255, 0, 0, 255])
+        let levels = Data([255, 0, 0b0000_1000, 0, 0, 0, 0, 0] + colors)
+        let smooth = try XCTUnwrap(WallpaperEngineTexture.rgba(from: levels, format: 4, width: 4, height: 4))
+        XCTAssertEqual(Array(smooth[0..<8]), [255, 0, 0, 255, 255, 0, 0, 0])
+
+        XCTAssertNil(WallpaperEngineTexture.rgba(from: Data(colors.prefix(5)), format: 7, width: 4, height: 4))
+    }
+
+    func testAPictureThatLiesAboutItsSizeIsNotRead() {
+        XCTAssertNil(WallpaperEngineTexture.image(from: Data("TEXV0005\0TEXI0001\0".utf8)))
+        XCTAssertNil(WallpaperEngineTexture.image(from: Data("PNG".utf8)))
+        // Says its pixels take a hundred times the room they have.
+        var short = texture(width: 4, height: 4, canvas: 4, color: [1, 2, 3, 255], packed: false)
+        short.removeLast(40)
+        XCTAssertNil(WallpaperEngineTexture.image(from: short))
+        let huge = texture(pixels: Data(count: 16), format: 0, width: 4, height: 4, canvas: 60_000)
+        XCTAssertNil(WallpaperEngineTexture.image(from: huge))
+        XCTAssertNil(WallpaperEngineTexture.unpackedLZ4(Data([0xFF, 0xFF, 0xFF]), size: 64))
+    }
+
+    // MARK: - The scene
+
+    private let sceneJSON = #"""
+    {"general": {"clearcolor": "0.1 0.2 0.3", "orthogonalprojection": {"width": 200, "height": 100}},
+     "objects": [
+       {"id": 1, "name": "Sky", "image": "models/Sky.json", "origin": "100.0 50.0 0.0", "size": "200 100", "scale": "1 1 1",
+        "angles": "0 0 0", "visible": true, "effects": [{"file": "effects/nitro/effect.json"}, {"file": "effects/godrays/effect.json"}]},
+       {"id": 2, "name": "Moon", "image": "models/Moon.json", "origin": "150.0 75.0 0.0", "size": "20 20", "scale": "2 2 1",
+        "angles": "0 0 1.5707963", "alpha": {"user": "moonalpha", "value": 0.5}, "visible": {"user": "moon", "value": false}},
+       {"id": 3, "name": "Rays", "image": "models/util/composelayer.json", "effects": [{"file": "effects/godrays/effect.json"},
+        {"file": "effects/blur/effect.json", "visible": false}]},
+       {"id": 4, "name": "Snow", "particle": "particles/snow.json"},
+       {"id": 5, "name": "Wind", "sound": ["sounds/wind.mp3"]},
+       {"id": 6, "name": "Title", "text": {"value": "Hello"}}
+     ]}
+    """#
+
+    private func scenePackage() -> Data {
+        package([("scene.json", Data(sceneJSON.utf8))]
+            + picture("Sky", texture: texture(width: 200, height: 100, canvas: 256, color: [0, 0, 255, 255]))
+            + picture("Moon", texture: texture(width: 20, height: 20, canvas: 32, color: [255, 255, 0, 255]), blending: "additive"))
+    }
+
+    func testTheSceneBecomesABackgroundAndLayers() throws {
+        let folder = root.appendingPathComponent("Scene")
+        let converted = try WallpaperEngineScene.convert(try XCTUnwrap(WallpaperEnginePackage(data: scenePackage())), into: folder)
+        let scene = converted.scene
+
+        // The picture that fills the canvas at the bottom is the background.
+        XCTAssertEqual(scene.background.kind, .image)
+        XCTAssertEqual(scene.background.source, "media/background.png")
+        XCTAssertEqual(scene.background.color, "#1A334D")
+        let background = try XCTUnwrap(Thumbnailer.image(at: folder.appendingPathComponent("media/background.png"), maxPixelSize: 400))
+        XCTAssertEqual([background.width, background.height], [200, 100])
+        XCTAssertEqual(try pixel(background, 199, 99), [0, 0, 255, 255])
+
+        // The other one is a layer where it was: three quarters across, a quarter down from
+        // the top — Wallpaper Engine counts from the bottom — and twice its size.
+        XCTAssertEqual(scene.layers.count, 1)
+        let moon = scene.layers[0]
+        XCTAssertEqual(moon.kind, .image)
+        XCTAssertEqual(moon.name, "Moon")
+        XCTAssertEqual(moon.source, "media/picture-2.png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent(moon.source).path))
+        XCTAssertEqual([moon.x, moon.y, moon.width], [75, 25, 20])
+        XCTAssertEqual(moon.rotation, -90, accuracy: 0.001)
+        XCTAssertEqual(moon.opacity, 50)
+        XCTAssertFalse(moon.isVisible)
+        XCTAssertEqual(moon.blendMode, "plus-lighter")
+
+        // Two effects on the sky and one that is on in the layer made for effects; the snow,
+        // the wind and the text.
+        XCTAssertEqual(converted.leftOut, .init(effects: 3, particles: 1, sounds: 1, others: 1))
+    }
+
+    func testAPictureThatDoesNotFillTheCanvasStaysALayer() throws {
+        let json = #"{"general": {"orthogonalprojection": {"width": 200, "height": 100}}, "objects": [{"name": "Moon", "image": "models/Moon.json", "origin": "100 50 0", "size": "20 20"}]}"#
+        let data = package([("scene.json", Data(json.utf8))]
+            + picture("Moon", texture: texture(width: 20, height: 20, canvas: 32, color: [255, 255, 0, 255])))
+        let converted = try WallpaperEngineScene.convert(try XCTUnwrap(WallpaperEnginePackage(data: data)), into: root.appendingPathComponent("Scene"))
+        XCTAssertEqual(converted.scene.background.kind, .color)
+        XCTAssertEqual(converted.scene.layers.map(\.name), ["Moon"])
+        XCTAssertEqual([converted.scene.layers[0].x, converted.scene.layers[0].y, converted.scene.layers[0].width], [50, 50, 10])
+        XCTAssertTrue(converted.leftOut.isEmpty)
+    }
+
+    func testASceneIsAddedFromItsArchiveAndFolder() async throws {
+        try scenePackage().write(to: wallpaper.appendingPathComponent("scene.pkg"))
+        try TestMedia.writePNG(to: wallpaper.appendingPathComponent("preview.png"), size: CGSize(width: 8, height: 8))
+        try #"{"file": "scene.json", "type": "scene", "title": "Night Sky", "preview": "preview.png"}"#
+            .write(to: wallpaper.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(WallpaperEngineProject(folder: wallpaper)?.kind, .scene)
+        XCTAssertNil(WebProject(folder: wallpaper), "not a page")
+
+        let library = WallpaperLibrary(rootURL: root.appendingPathComponent("Library"))
+        let added = try await library.importItem(at: wallpaper)
+        XCTAssertEqual(added.map(\.name), ["Night Sky"])
+        XCTAssertEqual(added[0].sourceFormat, "SCENE")
+        XCTAssertNil(added[0].thumbnailFileName, "the preview shows effects the scene came without; the app draws its own")
+        XCTAssertTrue(library.isScene(added[0]))
+        let scene = try SceneProject.read(from: library.projectURL(for: added[0]))
+        XCTAssertEqual(scene.background.kind, .image)
+        XCTAssertEqual(scene.layers.map(\.name), ["Moon"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: library.projectURL(for: added[0]).appendingPathComponent("index.html").path))
+        XCTAssertEqual(library.leftOutOnImport[added[0].id]?.effects, 3)
+    }
+
+    func testASceneWithoutPicturesIsRefusedAndLeavesNothingBehind() async throws {
+        let json = #"{"objects": [{"name": "Snow", "particle": "particles/snow.json"}, {"name": "Sky", "image": "models/Sky.json"}]}"#
+        try package([("scene.json", Data(json.utf8))]).write(to: wallpaper.appendingPathComponent("scene.pkg"))
+        try #"{"type": "scene", "title": "Snow"}"#.write(to: wallpaper.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+        let library = WallpaperLibrary(rootURL: root.appendingPathComponent("Library"))
+        do {
+            _ = try await library.importItem(at: wallpaper)
+            XCTFail("a scene with nothing to show was taken")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .noPicturesInScene)
+        }
+        XCTAssertTrue(library.items.isEmpty)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: library.webURL.path), [])
+
+        try Data("broken".utf8).write(to: wallpaper.appendingPathComponent("scene.pkg"))
+        do {
+            _ = try await library.importItem(at: wallpaper)
+            XCTFail("a broken package was taken")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .unreadable)
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: library.webURL.path), [])
     }
 }
 

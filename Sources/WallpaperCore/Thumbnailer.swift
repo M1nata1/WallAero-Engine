@@ -29,6 +29,17 @@ public enum Thumbnailer {
         return image
     }
 
+    /// Keeps every pixel as it is, see-through ones too: for pictures a scene is put together from.
+    static func writePNG(_ image: CGImage, to url: URL) throws {
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw ImportError.conversionFailed("Cannot create \(url.lastPathComponent).")
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ImportError.conversionFailed("Cannot write \(url.lastPathComponent).")
+        }
+    }
+
     static func writeJPEG(_ image: CGImage, to url: URL, quality: Double = 0.85) throws {
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
             throw ImportError.conversionFailed("Cannot create \(url.lastPathComponent).")
