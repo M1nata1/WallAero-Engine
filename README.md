@@ -44,7 +44,7 @@ xattr -dr com.apple.quarantine "/Applications/WallAero Engine.app"
 - **Formats:** MP4, MOV, M4V (H.264/HEVC), GIF, APNG, animated WebP and HEICS, plus still PNG, JPEG, HEIC and WebP.
 - **GIFs and other animated images** are converted to H.264 once, on import. From then on they play through the hardware decoder like any other video, which is far more efficient than playing a GIF frame by frame. Small GIFs are scaled up by a whole number without smoothing, so pixel art stays crisp.
 - **Multiple displays:** one wallpaper on every screen or a different one on each; you can also turn it off on a single display.
-- **Energy saving:** playback pauses when the desktop is completely covered by windows or a full-screen app, while displays sleep and while the screen is locked. Optionally also on battery power and in Low Power Mode. Video never keeps the display awake.
+- **Energy saving:** playback pauses when windows cover the desktop — one window that fills the screen is enough — or a full-screen app does, while displays sleep and while the screen is locked. Optionally also on battery power and in Low Power Mode. Scenes and web wallpapers are held to 30 frames a second, or to the rate you choose. Video never keeps the display awake.
 - **Scenes and an editor:** turn any video or picture into a scene and shape it in a visual editor: a clock and the date, text, pictures, shapes, background effects, and layers with your own HTML, CSS and JavaScript. See [Scenes](#scenes).
 - **Wallpaper Engine wallpapers:** add a wallpaper made for Wallpaper Engine as the `.zip` it was downloaded in — a web page, a scene or a video. A page's own settings show in the wallpaper's settings, and pages and scenes open in the editor like any scene. See [Web wallpapers](#web-wallpapers).
 - **Web wallpapers:** a folder with an `index.html` is shown as a wallpaper.
@@ -158,7 +158,7 @@ A wallpaper made for Wallpaper Engine is added the way it was downloaded: click 
 - **A scene** — a wallpaper with `scene.pkg` in it — becomes a scene made of its pictures: the one that fills the canvas is the background, the others are layers, each where it was, and all of them can be moved and changed in the editor. Effects, particles and sound work only in Wallpaper Engine itself and are not brought over.
 - Audio visualizers follow the sound your Mac is playing, see [Reacting to sound](#reacting-to-sound). The rest of Wallpaper Engine's media API (the track's title, cover and position) is not there.
 - The mouse reaches web wallpapers and scenes: they follow the pointer while it is over the desktop and take clicks on it. A click goes to the desktop as well, as ever, and where a window covers the wallpaper the mouse is the window's.
-- Scenes and web wallpapers use more energy and memory than plain video: they are drawn by the web engine built into macOS. Plain videos keep taking the direct route. While paused, the page stands completely still.
+- Scenes and web wallpapers use more energy and memory than plain video: they are drawn by the web engine built into macOS. In the settings, under General → Energy, you choose how many frames a second they draw — 30 unless you change it — and whether they draw at Retina resolution. Without it, what a page's scripts draw takes a quarter of the pixels, while its text and pictures stay sharp. Plain videos keep taking the direct route. While paused, the page stands completely still.
 
 Any other folder with an `index.html` in it, or an archive of one, is added the same way and shown as it is.
 

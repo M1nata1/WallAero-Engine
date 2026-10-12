@@ -642,6 +642,37 @@ enum ScreenshotMode {
         }
     }
 
+    // MARK: - Cover
+
+    /// `--cover-test <seconds>` watches the main display the way a wallpaper's window does and
+    /// prints, whenever it changes and once a second, how much of the desktop shows around the
+    /// windows over it and whether that counts as covered. No wallpaper is shown.
+    static var coverTestSeconds: Double? {
+        values(of: "--cover-test").last.flatMap(Double.init)
+    }
+
+    static func coverTest(_ seconds: Double) {
+        NSApp.setActivationPolicy(.accessory)
+        guard let screen = NSScreen.main else { exit(1) }
+        let visibility = DesktopVisibility(screen: screen)
+        let started = CFAbsoluteTimeGetCurrent()
+        func say(_ what: String) {
+            print(String(format: "%5.1f s  %@: %.0f %% of the desktop shows, %@", CFAbsoluteTimeGetCurrent() - started, what,
+                         visibility.seenShare * 100, visibility.isCovered ? "covered" : "in view"))
+            fflush(stdout)
+        }
+        visibility.onChange = { say("changed") }
+        visibility.show()
+        let timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            MainActor.assumeIsolated { say("      ") }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            timer.invalidate()
+            visibility.hide()
+            exit(0)
+        }
+    }
+
     // MARK: - Energy
 
     /// `--energy-test <video, picture or web wallpaper folder> [--seconds <n>] [--window <w> <h>]`
@@ -651,8 +682,14 @@ enum ScreenshotMode {
     /// would tell it, without listening to the Mac: `--sound music` hands it a moving spectrum
     /// thirty times a second, `--sound silence` zeros four times a second, and without the
     /// option it is told nothing, as when the reaction to sound is switched off. `--eval
-    /// <JavaScript>` runs in the page once it has loaded, and `--pause-after <seconds>` pauses
-    /// the wallpaper then, the way the app does when windows cover the desktop.
+    /// <JavaScript>` runs in the page once it has loaded and `--eval-end <JavaScript>` when it
+    /// has played, each printing what it comes to; `--pause-after <seconds>` pauses the
+    /// wallpaper then, the way the app does when windows cover the desktop.
+    ///
+    /// `--full-screen` makes the window as large as the main display, which is what a wallpaper
+    /// costs for real, and `--zoomed` as large as a window gets short of that, to serve as one
+    /// lying over the desktop. `--fps <n>` and `--plain-density` are the app's two settings for
+    /// what a web wallpaper costs: its frame rate, and drawing without a Retina display's density.
     static var energyTestTarget: URL? {
         values(of: "--energy-test").last.map { URL(fileURLWithPath: $0) }
     }
@@ -666,7 +703,18 @@ enum ScreenshotMode {
             size = NSSize(width: width, height: height)
         }
         let seconds = values(of: "--seconds").last.flatMap(Double.init) ?? 20
-        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: 60, y: 60), size: size), styleMask: [.borderless],
+        var origin = NSPoint(x: 60, y: 60)
+        // `--full-screen`: as large as the main display, which is what a wallpaper costs for real.
+        // `--zoomed`: as large as a window made as large as it gets, which leaves the menu bar
+        // and the Dock out; the helper then serves as such a window over the desktop.
+        if arguments.contains("--full-screen"), let screen = NSScreen.main {
+            size = screen.frame.size
+            origin = screen.frame.origin
+        } else if arguments.contains("--zoomed"), let screen = NSScreen.main {
+            size = screen.visibleFrame.size
+            origin = screen.visibleFrame.origin
+        }
+        let window = NSWindow(contentRect: NSRect(origin: origin, size: size), styleMask: [.borderless],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.level = .floating
@@ -677,6 +725,9 @@ enum ScreenshotMode {
         let view = WallpaperView(frame: NSRect(origin: .zero, size: size))
         window.contentView = view
         view.setPlaying(true, rate: 1)
+        // `--fps <n>` and `--plain-density`: the app's own two ways of making a page cost less.
+        view.setDrawing(frameRate: values(of: "--fps").last.flatMap(Int.init) ?? 0,
+                        atFullDensity: !arguments.contains("--plain-density"))
         var isFolder: ObjCBool = false
         FileManager.default.fileExists(atPath: target.path, isDirectory: &isFolder)
         if isFolder.boolValue, let project = WebProject(folder: target) {
@@ -692,7 +743,9 @@ enum ScreenshotMode {
         Task {
             await view.webView?.waitUntilLoaded()
             for script in values(of: "--eval") {
-                _ = await view.webView?.value(of: script)
+                let value = await view.webView?.value(of: script)
+                print("eval: \(value.map { "\($0)" } ?? "nothing")")
+                fflush(stdout)
             }
         }
         if let pause = values(of: "--pause-after").last.flatMap(Double.init) {
@@ -740,6 +793,11 @@ enum ScreenshotMode {
                 // Whether the wallpaper was really playing all that time: a measurement of a
                 // page that stood hidden behind another window says nothing.
                 print("hidden \(hiddenSeconds) s")
+                // `--eval-end <JavaScript>`: what the page has to say once it has played.
+                for script in values(of: "--eval-end") {
+                    let value = await view.webView?.value(of: script)
+                    print("eval: \(value.map { "\($0)" } ?? "nothing")")
+                }
                 if let page = view.webView {
                     let state = await page.value(of: "(function () { var v = document.querySelector('video'); return document.visibilityState + ', video ' + (v ? (v.paused ? 'paused' : 'playing') + ' at ' + v.currentTime.toFixed(1) + ' of ' + v.duration.toFixed(1) + ' s, ' + (v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames + ' frames' : '') : 'none'); })()")
                     print("page \(state as? String ?? "?")")

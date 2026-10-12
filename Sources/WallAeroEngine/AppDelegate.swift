@@ -36,6 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.run()
             return
         }
+        if let seconds = ScreenshotMode.coverTestSeconds {
+            ScreenshotMode.coverTest(seconds)
+            app.run()
+            return
+        }
         if let folder = ScreenshotMode.settingsTestFolder {
             ScreenshotMode.settingsTest(folder)
             app.run()

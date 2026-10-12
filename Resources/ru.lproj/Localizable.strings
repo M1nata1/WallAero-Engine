@@ -75,6 +75,9 @@
 "Pause when windows cover the desktop" = "Ставить на паузу, когда окна закрывают рабочий стол";
 "Pause on battery power" = "Ставить на паузу при работе от аккумулятора";
 "Pause in Low Power Mode" = "Ставить на паузу в режиме энергосбережения";
+"Frame rate of web wallpapers" = "Частота кадров веб-обоев";
+"%d fps" = "%d кадров/с";
+"Draw web wallpapers at Retina resolution" = "Рисовать веб-обои в разрешении Retina";
 "General" = "Основные";
 "Open at login" = "Открывать при входе в систему";
 "Show the wallpaper on the lock screen" = "Показывать обои на экране блокировки";

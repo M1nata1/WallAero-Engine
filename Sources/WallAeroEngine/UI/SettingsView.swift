@@ -53,6 +53,12 @@ struct SettingsView: View {
                 Toggle("Pause when windows cover the desktop", isOn: $preferences.pauseWhenCovered)
                 Toggle("Pause on battery power", isOn: $preferences.pauseOnBattery)
                 Toggle("Pause in Low Power Mode", isOn: $preferences.pauseInLowPowerMode)
+                Picker("Frame rate of web wallpapers", selection: $preferences.frameRate) {
+                    ForEach(Preferences.frameRates, id: \.self) { rate in
+                        Text(String(format: NSLocalizedString("%d fps", comment: "A frame rate to choose: frames per second"), rate)).tag(rate)
+                    }
+                }
+                Toggle("Draw web wallpapers at Retina resolution", isOn: $preferences.drawsAtFullDensity)
             }
 
             CursorSettingsSection()

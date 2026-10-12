@@ -245,6 +245,8 @@ final class WallpaperManager: NSObject, ObservableObject {
     private func applyAssignments() {
         for screen in screens.values {
             let item = assignments.wallpaperID(forDisplay: screen.displayID).flatMap(library.item(withID:))
+            // Before the wallpaper is shown, so that a page is loaded once, the way it is to draw.
+            screen.view.setDrawing(frameRate: preferences.frameRate, atFullDensity: preferences.drawsAtFullDensity)
             screen.show(item, from: library)
         }
         reloadMusic()
@@ -273,6 +275,7 @@ final class WallpaperManager: NSObject, ObservableObject {
             }
             let audible = isAudible && screen.displayID == audibleDisplay
             screen.view.setAudio(muted: !audible, volume: Float(preferences.volume))
+            screen.view.setDrawing(frameRate: preferences.frameRate, atFullDensity: preferences.drawsAtFullDensity)
         }
         music.volume = Float(preferences.volume)
     }
@@ -298,6 +301,7 @@ final class WallpaperManager: NSObject, ObservableObject {
             pauseReason = reason
         }
         for screen in screens.values {
+            screen.watchesCover = preferences.pauseWhenCovered
             let visible = !preferences.pauseWhenCovered || screen.isVisibleOnScreen
             screen.setPlaying(pauseReason == nil && visible, rate: Float(screen.item?.shownSettings.speed ?? 1))
         }
@@ -592,6 +596,21 @@ final class ScreenWallpaper: NSObject {
     private(set) var item: Wallpaper?
     private var isPlaying = false
     private weak var manager: WallpaperManager?
+    /// Says how much of the desktop shows around the windows over it; see `isVisibleOnScreen`.
+    private let visibility: DesktopVisibility
+    /// Whether the desktop is watched for being covered. It is not while the user would have
+    /// the wallpaper play covered or not, or while nothing here moves.
+    var watchesCover = true {
+        didSet {
+            if watchesCover != oldValue { updateVisibilityWatch() }
+        }
+    }
+    /// Whether macOS has the window as one that can be seen, taken with a short delay when it
+    /// says it cannot: as a window opens over the desktop macOS changes its mind several times
+    /// within a moment, and the wallpaper would be paused and started again as often.
+    private var windowIsSeen = true
+    private var windowGoesUnseen: DispatchWorkItem?
+    private static let unseenMustLast: TimeInterval = 0.4
     /// Tells a wallpaper that became ready late that another one has been asked for since.
     private var showGeneration = 0
     /// A wallpaper that cannot be shown is not waited for longer than this.
@@ -602,8 +621,10 @@ final class ScreenWallpaper: NSObject {
         self.manager = manager
         window = WallpaperWindow(screen: screen)
         view = WallpaperView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        visibility = DesktopVisibility(screen: screen)
         super.init()
         window.contentView = view
+        visibility.onChange = { [weak self] in self?.manager?.updatePlayback() }
         NotificationCenter.default.addObserver(
             self, selector: #selector(occlusionStateDidChange),
             name: NSWindow.didChangeOcclusionStateNotification, object: window
@@ -618,9 +639,20 @@ final class ScreenWallpaper: NSObject {
         }
     }
 
-    /// False while other windows, a full-screen app or the lock screen cover the desktop.
+    /// False while other windows, a full-screen app or the lock screen cover the desktop. The
+    /// window alone does not tell: it counts as visible while any of it is, and the strip under
+    /// the see-through menu bar is, whatever lies over the rest of the desktop.
     var isVisibleOnScreen: Bool {
-        window.isVisible && window.occlusionState.contains(.visible)
+        window.isVisible && windowIsSeen && !visibility.isCovered
+    }
+
+    /// The desktop is watched while a wallpaper that moves is on it.
+    private func updateVisibilityWatch() {
+        if watchesCover, let item, item.kind != .image, window.isVisible {
+            visibility.show()
+        } else {
+            visibility.hide()
+        }
     }
 
     func isShown(on screen: NSScreen) -> Bool {
@@ -629,6 +661,7 @@ final class ScreenWallpaper: NSObject {
 
     func move(to screen: NSScreen) {
         window.setFrame(screen.frame, display: true)
+        visibility.move(to: screen)
     }
 
     func setPlaying(_ playing: Bool, rate: Float) {
@@ -650,6 +683,7 @@ final class ScreenWallpaper: NSObject {
         guard let newItem else {
             view.clear()
             window.orderOut(nil)
+            updateVisibilityWatch()
             return
         }
         // The window stays out of sight until the wallpaper has a picture to show. Until then
@@ -683,6 +717,7 @@ final class ScreenWallpaper: NSObject {
             manager?.refreshPicturesIfOutdated(of: newItem)
         }
         window.orderFrontRegardless()
+        updateVisibilityWatch()
     }
 
     private func reveal(_ generation: Int) {
@@ -695,12 +730,28 @@ final class ScreenWallpaper: NSObject {
 
     func close() {
         NotificationCenter.default.removeObserver(self)
+        visibility.hide()
         view.clear()
         window.orderOut(nil)
         window.close()
     }
 
     @objc private func occlusionStateDidChange() {
-        manager?.updatePlayback()
+        windowGoesUnseen?.cancel()
+        windowGoesUnseen = nil
+        if window.occlusionState.contains(.visible) {
+            // Back in view: at once.
+            guard !windowIsSeen else { return }
+            windowIsSeen = true
+            manager?.updatePlayback()
+        } else if windowIsSeen {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, !self.window.occlusionState.contains(.visible) else { return }
+                self.windowIsSeen = false
+                self.manager?.updatePlayback()
+            }
+            windowGoesUnseen = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.unseenMustLast, execute: work)
+        }
     }
 }

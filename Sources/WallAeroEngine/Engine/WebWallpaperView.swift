@@ -26,6 +26,29 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     /// the latest, so that whoever keeps the wallpaper out of sight until then never waits for good.
     var onReady: (() -> Void)?
 
+    /// How many frames a second the page's scripts may draw; 0 leaves it to the screen. A page
+    /// that draws itself frame by frame costs as much as it draws frames, and most are made to
+    /// run at half the screen's sixty. May be changed while the page is shown.
+    var frameRate = 0 {
+        didSet {
+            guard frameRate != oldValue, let webView, let project else { return }
+            installUserScripts(in: webView.configuration.userContentController, for: project)
+            webView.evaluateJavaScript("window.__wallaeroDrawing && window.__wallaeroDrawing.setFrameRate(\(frameRate))")
+        }
+    }
+
+    /// Whether the page is told of the display's full density. A page sizes what it draws by
+    /// that: on a Retina display it fills four times the pixels it would on a plain one. With
+    /// this off it is told of a plain display; text and pictures of the page stay sharp, only
+    /// what its scripts draw — canvases — is drawn smaller and stretched. A change shows once
+    /// the page is loaded anew, which changing it while the page is shown does.
+    var drawsAtFullDensity = true {
+        didSet {
+            guard drawsAtFullDensity != oldValue, webView != nil else { return }
+            reloadPage()
+        }
+    }
+
     /// Makes the web engine refuse to start any video or sound by itself, the way it refuses
     /// videos in Low Power Mode. Only the helper that checks that the app starts them sets this.
     var mediaNeedsUserAction = false
@@ -342,6 +365,10 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         if rendersStill {
             source += "\nwindow.wallaeroStill = true;"
         }
+        let drawing = Self.drawingScript
+            .replacingOccurrences(of: "__FRAME_RATE__", with: String(max(0, frameRate)))
+            .replacingOccurrences(of: "__DENSITY__", with: drawsAtFullDensity ? "0" : "1")
+        controller.addUserScript(WKUserScript(source: drawing, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         controller.addUserScript(WKUserScript(source: Self.frameScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         if let editorScript {
@@ -597,6 +624,91 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     })();
     """#
 
+    /// Runs first, in the page and in every page in a frame of it. Keeps what the page's scripts
+    /// draw within the frame rate and the density the app allows.
+    ///
+    /// A page draws by asking for the next frame of the screen, sixty times a second. Here it
+    /// is let through as often as the app's frame rate has it and left waiting the rest of the
+    /// time, so a frame not let through costs nothing: nothing is drawn, and the web engine
+    /// has nothing new to put on the screen. Videos and animations written in CSS are not
+    /// drawn by scripts and go on as they are.
+    private static let drawingScript = #"""
+    (function () {
+      var drawing = window.__wallaeroDrawing = {
+        frameRate: __FRAME_RATE__,
+        // Tells this page and the pages in its frames.
+        setFrameRate: function (rate) {
+          drawing.frameRate = rate;
+          for (var i = 0; i < window.frames.length; i++) {
+            try {
+              window.frames[i].__wallaeroDrawing.setFrameRate(rate);
+            } catch (error) {}
+          }
+        }
+      };
+      var request = window.requestAnimationFrame;
+      if (typeof request === 'function') {
+        request = request.bind(window);
+        var waiting = new Map(); // what the page asked to be called with the next frame
+        var lastId = 0;
+        var asked = false;
+        var last = -1e9;
+        var frame = function (now) {
+          asked = false;
+          var rate = drawing.frameRate;
+          if (rate > 0) {
+            var interval = 1000 / rate;
+            var elapsed = now - last;
+            // Too soon after the frame before: the page waits for the screen's next one. The
+            // few milliseconds off allow for frames of the screen that come a little early.
+            if (elapsed < interval - 3) {
+              asked = true;
+              request(frame);
+              return;
+            }
+            // Kept in step with the rate rather than with this frame, so that being late once
+            // does not make every frame after it late.
+            var late = elapsed - interval;
+            last = late > 0 && late < interval ? now - late : now;
+          }
+          var callbacks = waiting;
+          waiting = new Map();
+          callbacks.forEach(function (callback) {
+            try {
+              callback(now);
+            } catch (error) {
+              // Reported as the page's own error, without keeping the other callbacks back.
+              setTimeout(function () { throw error; });
+            }
+          });
+        };
+        window.requestAnimationFrame = function (callback) {
+          waiting.set(++lastId, callback);
+          if (!asked) {
+            asked = true;
+            request(frame);
+          }
+          return lastId;
+        };
+        window.cancelAnimationFrame = function (id) { waiting.delete(id); };
+      }
+      // The density the page is told of: at most this many pixels to a point, 0 for the display's own.
+      var density = __DENSITY__;
+      if (density > 0) {
+        var own = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio') ||
+                  Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'devicePixelRatio');
+        var real = window.devicePixelRatio;
+        try {
+          Object.defineProperty(window, 'devicePixelRatio', {
+            configurable: true,
+            enumerable: true,
+            get: function () { return Math.min(own && own.get ? own.get.call(window) : real, density); }
+          });
+        } catch (error) {}
+      }
+    })();
+    """#
+
     /// What a page in a frame is given: a scene shows a wallpaper made for Wallpaper Engine in
     /// one. Such a page asks for the sound like any other; the page on top hears it for it,
     /// and the listener goes when the frame does.
@@ -693,20 +805,26 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
             if let scene = Self.sceneJSON(in: project.folder) {
                 webView.evaluateJavaScript("window.wallaero && window.wallaero.setScene(\(scene))")
             }
-        } else if let reread = WebProject(folder: project.folder) {
-            self.project = reread
-            installUserScripts(in: webView.configuration.userContentController, for: reread)
-            hasLoaded = false
-            pageWantsSound = false
-            updateSound()
-            beginLoading()
-            coverWhileLoading(webView)
-            webView.isHidden = false
-            isFrozen = false
-            freezeGeneration += 1
-            webView.loadFileURL(reread.entryURL, allowingReadAccessTo: reread.folder)
+        } else {
+            reloadPage()
         }
         onContentChange?()
+    }
+
+    /// Loads the page anew, from its files as they are now, behind a picture of how it looked.
+    private func reloadPage() {
+        guard let project, let webView, let reread = WebProject(folder: project.folder) else { return }
+        self.project = reread
+        installUserScripts(in: webView.configuration.userContentController, for: reread)
+        hasLoaded = false
+        pageWantsSound = false
+        updateSound()
+        beginLoading()
+        coverWhileLoading(webView)
+        webView.isHidden = false
+        isFrozen = false
+        freezeGeneration += 1
+        webView.loadFileURL(reread.entryURL, allowingReadAccessTo: reread.folder)
     }
 }
 

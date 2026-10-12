@@ -56,6 +56,9 @@ final class WallpaperView: NSView {
     private var rate: Float = 1
     private var isMuted = true
     private var volume: Float = 1
+    // How a web wallpaper draws, see `WebWallpaperView`.
+    private var frameRate = 0
+    private var drawsAtFullDensity = true
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -115,6 +118,8 @@ final class WallpaperView: NSView {
         self.webView = webView
         webView.setAudio(muted: isMuted, volume: volume)
         webView.setPlaying(isPlaying, rate: rate)
+        webView.frameRate = frameRate
+        webView.drawsAtFullDensity = drawsAtFullDensity
         webView.onReady = { [weak self] in self?.contentIsReady() }
         webView.show(project, backdrop: backdrop)
     }
@@ -162,6 +167,16 @@ final class WallpaperView: NSView {
             player?.isMuted = muted
             player?.volume = volume
         }
+    }
+
+    /// How a web wallpaper draws: how many frames a second its scripts may draw, 0 for as many
+    /// as the screen shows, and whether it draws at a Retina display's full density. A video
+    /// has its own frame rate and a picture none.
+    func setDrawing(frameRate: Int, atFullDensity: Bool) {
+        self.frameRate = frameRate
+        drawsAtFullDensity = atFullDensity
+        webView?.frameRate = frameRate
+        webView?.drawsAtFullDensity = atFullDensity
     }
 
     /// How the video or picture fills the view. `position` matters when filling crops it: in

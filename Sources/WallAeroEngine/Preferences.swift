@@ -20,6 +20,9 @@ extension Wallpaper.Settings.Scaling: Identifiable {
 @MainActor
 final class Preferences: ObservableObject {
     static let playbackRates: [Double] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]
+    /// The frame rates a web wallpaper may be held to. Sixty is what the screen shows; thirty,
+    /// the usual choice for a wallpaper, halves the work.
+    static let frameRates = [15, 20, 30, 60]
 
     static func title(forRate rate: Double) -> String {
         if rate == 1 {
@@ -40,6 +43,8 @@ final class Preferences: ObservableObject {
         static let pauseWhenCovered = "pauseWhenCovered"
         static let pauseOnBattery = "pauseOnBattery"
         static let pauseInLowPowerMode = "pauseInLowPowerMode"
+        static let frameRate = "frameRate"
+        static let drawsAtFullDensity = "drawsAtFullDensity"
         static let setsSystemWallpaper = "setsSystemWallpaper"
     }
 
@@ -77,6 +82,16 @@ final class Preferences: ObservableObject {
     @Published var pauseInLowPowerMode: Bool {
         didSet { defaults.set(pauseInLowPowerMode, forKey: Key.pauseInLowPowerMode) }
     }
+    /// How many frames a second a web wallpaper's scripts may draw; one of `frameRates`. A
+    /// page that draws itself frame by frame costs as much as it draws frames.
+    @Published var frameRate: Int {
+        didSet { defaults.set(frameRate, forKey: Key.frameRate) }
+    }
+    /// Whether a web wallpaper's scripts draw at a Retina display's full density: four times
+    /// the pixels of a plain display, and that much more work for the graphics chip.
+    @Published var drawsAtFullDensity: Bool {
+        didSet { defaults.set(drawsAtFullDensity, forKey: Key.drawsAtFullDensity) }
+    }
     /// Also set a still frame as the regular macOS wallpaper, which shows on the lock screen,
     /// in Mission Control and whenever the app is not running.
     @Published var setsSystemWallpaper: Bool {
@@ -93,6 +108,8 @@ final class Preferences: ObservableObject {
             Key.pauseWhenCovered: true,
             Key.pauseOnBattery: false,
             Key.pauseInLowPowerMode: true,
+            Key.frameRate: 30,
+            Key.drawsAtFullDensity: true,
             Key.setsSystemWallpaper: false,
         ])
         scaling = ScalingMode(rawValue: defaults.string(forKey: Key.scaling) ?? "") ?? .fill
@@ -102,6 +119,9 @@ final class Preferences: ObservableObject {
         pauseWhenCovered = defaults.bool(forKey: Key.pauseWhenCovered)
         pauseOnBattery = defaults.bool(forKey: Key.pauseOnBattery)
         pauseInLowPowerMode = defaults.bool(forKey: Key.pauseInLowPowerMode)
+        let storedFrameRate = defaults.integer(forKey: Key.frameRate)
+        frameRate = Self.frameRates.contains(storedFrameRate) ? storedFrameRate : 30
+        drawsAtFullDensity = defaults.bool(forKey: Key.drawsAtFullDensity)
         setsSystemWallpaper = defaults.bool(forKey: Key.setsSystemWallpaper)
     }
 }
