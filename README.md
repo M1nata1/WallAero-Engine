@@ -3,11 +3,45 @@
 
 Live wallpapers for macOS: videos, GIFs and pictures on your desktop — beneath icons and windows, on every Space and every display. Plus animated cursors from Windows cursor packs.
 
+## Installation
+
+Build the app on your Mac. You need Xcode or its Command Line Tools (`xcode-select --install`) and macOS 13 Ventura or later.
+
+```bash
+git clone https://github.com/M1nata1/WallAero-Engine.git
+cd WallAero-Engine
+scripts/build.sh --native && open "build/WallAero Engine.app"
+```
+
+An app built on your own Mac opens right away. To keep it in your Applications folder, run `scripts/build.sh --native --install`.
+
+To run it straight from the sources, without building the app:
+
+```bash
+swift run --build-system native WallAeroEngine
+```
+
+### Ready-made build
+
+A ready-made build is in the repository: [**download WallAeroEngine.zip**](https://github.com/M1nata1/WallAero-Engine/raw/main/dist/WallAeroEngine.zip). It runs on Macs with Apple silicon or Intel processors and needs macOS 13 Ventura or later.
+
+1. Unzip the archive and drag WallAero Engine to your Applications folder.
+2. Open the app. It is not notarized by Apple, so on first launch macOS stops it and says it cannot verify it. Close that message.
+3. Open System Settings → Privacy & Security, click Open Anyway near the bottom and confirm with your password. You only have to do this once.
+
+Updating from AiWallpaper, as the app used to be called? Just open WallAero Engine: on first launch it moves your library, settings and cursor backups over. Turn "Open at login" on again in Settings, then delete the old AiWallpaper app.
+
+Instead of steps 2–3, you can remove the quarantine flag in Terminal; the app then opens without any warning:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/WallAero Engine.app"
+```
+
+## Features
+
 <p align="center">
   <img src="docs/screenshots/en/library.png" width="900" alt="The WallAero Engine window: the library, and the settings of the selected wallpaper at its side">
 </p>
-
-## Features
 
 - **Formats:** MP4, MOV, M4V (H.264/HEVC), GIF, APNG, animated WebP and HEICS, plus still PNG, JPEG, HEIC and WebP.
 - **GIFs and other animated images** are converted to H.264 once, on import. From then on they play through the hardware decoder like any other video, which is far more efficient than playing a GIF frame by frame. Small GIFs are scaled up by a whole number without smoothing, so pixel art stays crisp.
@@ -24,27 +58,9 @@ Live wallpapers for macOS: videos, GIFs and pictures on your desktop — beneath
 - **Settings of the app:** sound and volume, open at login, and the first frame as the regular macOS wallpaper (shown on the lock screen and in Mission Control).
 - **Interface language:** English or Russian, following the system language; any other language gets English. To change it for WallAero Engine alone, go to System Settings → General → Language & Region → Applications.
 
-## Installation
-
-A ready-made build is in the repository: [**download WallAeroEngine.zip**](https://github.com/M1nata1/WallAero-Engine/raw/main/dist/WallAeroEngine.zip). It runs on Macs with Apple silicon or Intel processors and needs macOS 13 Ventura or later.
-
-1. Unzip the archive and drag WallAero Engine to your Applications folder.
-2. Open the app. It is not notarized by Apple, so on first launch macOS stops it and says it cannot verify it. Close that message.
-3. Open System Settings → Privacy & Security, click Open Anyway near the bottom and confirm with your password. You only have to do this once.
-
-Updating from AiWallpaper, as the app used to be called? Just open WallAero Engine: on first launch it moves your library, settings and cursor backups over. Turn "Open at login" on again in Settings, then delete the old AiWallpaper app.
-
-Instead of steps 2–3, you can remove the quarantine flag in Terminal; the app then opens without any warning:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/WallAero Engine.app"
-```
-
 ## Building from source
 
-You need Xcode 15 or later and macOS 13 Ventura or later. With only the Command Line Tools (Swift 5.9+), universal builds are not available — use `--native`.
-
-For the look of macOS 26, build with Xcode 26 or later: macOS shows it only to apps built with its SDK. Older tools build the app too, and macOS 26 then draws it the way earlier systems do. `scripts/build.sh` ends by saying which SDK the app carries. Some tools leave that mark at the oldest macOS the app runs on instead of the SDK they built with; the script then puts the right one in.
+You need Xcode 15 or later and macOS 13 Ventura or later; for the look of macOS 26, Xcode 26 or later. With only the Command Line Tools (Swift 5.9+), universal builds are not available — use `--native`.
 
 The app is universal: macOS runs the version for its own processor, Apple silicon or Intel.
 
@@ -57,9 +73,7 @@ swift test                    # import, conversion and cursor-reading tests
 scripts/screenshots.sh        # retake the README screenshots in both languages in docs/screenshots
 ```
 
-The app is signed ad hoc, so a copy built on your own Mac opens right away, without a warning.
-
-`swift run WallAeroEngine` and an editor's Run button start the program without the app around it. That is enough to try a change, but its settings are kept apart from the app's, and macOS takes it for a different program when it asks for permissions. Nothing corrects the SDK mark of such a run, so with tools that leave it wrong the program looks on macOS 26 as it does on earlier systems.
+`swift run --build-system native WallAeroEngine` and an editor's Run button start the program without the app around it. That is enough to try a change, but its settings are kept apart from the app's, and macOS takes it for a different program when it asks for permissions.
 
 ## Usage
 
