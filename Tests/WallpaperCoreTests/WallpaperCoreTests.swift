@@ -1040,7 +1040,7 @@ final class WallpaperEngineSceneTests: XCTestCase {
     }
 
     private func texture(pixels: Data, format: Int, width: Int, height: Int, canvas: Int, version: Int = 2,
-                         packed: Bool = false, pictureFile: Bool = false) -> Data {
+                         packed: Bool = false, pictureFile: Bool = false, video: Bool = false) -> Data {
         var file = Data("TEXV0005\0TEXI0001\0".utf8)
         for value in [format, 2, canvas, canvas, width, height, 0] {
             file += number(value)
@@ -1048,6 +1048,9 @@ final class WallpaperEngineSceneTests: XCTestCase {
         file += Data("TEXB000\(version)\0".utf8) + number(1)
         if version >= 3 {
             file += number(pictureFile ? 13 : -1)
+        }
+        if version >= 4 {
+            file += number(video ? 1 : 0)
         }
         file += number(1) + number(canvas) + number(canvas)
         var stored = pixels
@@ -1145,6 +1148,24 @@ final class WallpaperEngineSceneTests: XCTestCase {
         let file = texture(pixels: try Data(contentsOf: png), format: 0, width: 8, height: 8, canvas: 8, version: 3, pictureFile: true)
         let image = try XCTUnwrap(WallpaperEngineTexture.image(from: file))
         XCTAssertEqual([image.width, image.height], [8, 8])
+    }
+
+    func testTheNewestKindOfTextureIsRead() throws {
+        // The fourth version of the container is the third with a number more, which says
+        // whether a video stands in place of the picture.
+        let pixels = Data([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 9, 9, 9, 255])
+        let plain = texture(pixels: pixels, format: 0, width: 2, height: 2, canvas: 2, version: 4, packed: true)
+        let image = try XCTUnwrap(WallpaperEngineTexture.image(from: plain))
+        XCTAssertEqual([image.width, image.height], [2, 2])
+        XCTAssertEqual(try pixel(image, 1, 0), [0, 255, 0, 255])
+        XCTAssertEqual(try pixel(image, 0, 1), [0, 0, 255, 255])
+        // A picture file inside it, too.
+        let png = root.appendingPathComponent("inside.png")
+        try TestMedia.writePNG(to: png, size: CGSize(width: 8, height: 8))
+        let file = texture(pixels: try Data(contentsOf: png), format: 0, width: 8, height: 8, canvas: 8, version: 4, pictureFile: true)
+        XCTAssertEqual(WallpaperEngineTexture.image(from: file)?.width, 8)
+        // A video is not a picture.
+        XCTAssertNil(WallpaperEngineTexture.image(from: texture(pixels: pixels, format: 0, width: 2, height: 2, canvas: 2, version: 4, video: true)))
     }
 
     func testPixelsPackedForAGraphicsCardAreUnpacked() throws {
@@ -1529,6 +1550,37 @@ final class WallpaperEngineShaderTests: XCTestCase {
         XCTAssertEqual(eased, "1.56 5 8.44")
         // What is no animation gives none.
         XCTAssertTrue(try player("curve").call(withArguments: [["options": ["fps": 30]]]).isNull)
+    }
+
+    func testAnAnimationMayBeCountedFromTheScenesValueAndComeRoundSmoothly() throws {
+        // As a real scene has it: something that bobs up and down. Two moments, the handles
+        // left to the player, the numbers counted from the place the scene gives, and the
+        // curve going on from its last moment back to its first.
+        context.evaluateScript("""
+        function handle(x) { return { enabled: true, magic: true, x: x, y: 0 }; }
+        function moment(frame, value) { return { frame: frame, value: value, back: handle(-1), front: handle(1), lockangle: true, locklength: true }; }
+        var bob = window.WallaeroEngine.curve({
+          c0: [moment(0, 0), moment(60, 0)], c1: [moment(0, 16), moment(60, -12)], c2: [moment(0, 0), moment(60, 0)],
+          options: { fps: 30, length: 120, mode: 'loop', wraploop: true }, relative: true
+        });
+        function bobAt(seconds) { return bob(seconds, [1280, 744, 300]).map(function (part) { return Math.round(part * 100) / 100; }).join(' '); }
+        """)
+        func at(_ seconds: Double) -> String? {
+            context.objectForKeyedSubscript("bobAt")?.call(withArguments: [seconds])?.toString()
+        }
+        // At its moments it is the scene's place moved by what the animation says.
+        XCTAssertEqual(at(0), "1280 760 300")
+        XCTAssertEqual(at(2), "1280 732 300")
+        // Half way down and half way back up it is in the middle: after the last moment the
+        // curve returns to the first, with no jump where the loop starts anew.
+        XCTAssertEqual(at(1), "1280 746 300")
+        XCTAssertEqual(at(3), "1280 746 300")
+        XCTAssertEqual(at(3.999), at(0))
+        // It leaves a turning point slowly: a quarter of the way in time is less than a
+        // quarter of the way down.
+        let early = try XCTUnwrap(context.evaluateScript("bob(0.5, [1280, 744, 300])[1]")?.toDouble())
+        XCTAssertGreaterThan(early, 760 - 28 * 0.25)
+        XCTAssertLessThan(early, 760)
     }
 
     func testAScriptOfASceneIsMadeReady() throws {

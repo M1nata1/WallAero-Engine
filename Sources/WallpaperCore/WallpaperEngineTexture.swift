@@ -86,7 +86,8 @@ enum WallpaperEngineTexture {
             isPictureFile = kind != -1
         }
         if version >= 4 {
-            // A video in place of a picture is not read.
+            // The fourth version is the third with one more number, which says that a video
+            // stands in place of the picture. A video is not read.
             guard let isVideo = reader.int32(), isVideo == 0 else { return nil }
         }
         let sides = 1...longestSide
@@ -94,10 +95,6 @@ enum WallpaperEngineTexture {
         for index in 0..<imageCount {
             guard let mipmapCount = reader.int32(), (1...64).contains(mipmapCount) else { return nil }
             for mipmap in 0..<mipmapCount {
-                if version >= 4 {
-                    // Three more fields before each picture: two numbers, a text, a number.
-                    guard reader.int32() != nil, reader.int32() != nil, reader.text() != nil, reader.int32() != nil else { return nil }
-                }
                 guard let storedWidth = reader.int32(), let storedHeight = reader.int32() else { return nil }
                 var isCompressed = false
                 var unpackedSize = 0

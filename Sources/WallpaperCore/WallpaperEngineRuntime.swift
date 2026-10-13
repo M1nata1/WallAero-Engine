@@ -561,8 +561,14 @@ public enum WallpaperEngineRuntime {
       // An animation of a value: for each of its numbers a list of moments, with the number at
       // each and how the curve leaves one moment and arrives at the next.
       //
-      //   { c0: [{ frame, value, front: { enabled, x, y }, back: { enabled, x, y } }, …], c1: …,
-      //     options: { fps, length, mode } }
+      //   { c0: [{ frame, value, front: { enabled, magic, x, y }, back: { enabled, magic, x, y } }, …],
+      //     c1: …, options: { fps, length, mode, wraploop }, relative }
+      //
+      // A handle says how the curve leaves or reaches its moment: by how much the curve has moved
+      // on, in frames and in value, where the handle ends. A handle marked `magic` is left to the
+      // player: the curve passes its moment smoothly, level where the value turns back. With
+      // `wraploop` the curve goes on from its last moment to its first, one length later, so that
+      // a loop has no jump. With `relative` the numbers are counted from what the scene says.
       function curveOf(animation) {
         if (!animation || typeof animation !== 'object') return null;
         var channels = [];
@@ -572,7 +578,7 @@ public enum WallpaperEngineRuntime {
           var keys = animation[name].filter(function (each) { return each && isFinite(Number(each.frame)) && isFinite(Number(each.value)); })
             .map(function (each) {
               function handle(said) {
-                return said && said.enabled ? [Number(said.x) || 0, Number(said.y) || 0] : null;
+                return said && said.enabled ? { x: Number(said.x) || 0, y: Number(said.y) || 0, magic: said.magic === true } : null;
               }
               return { frame: Number(each.frame), value: Number(each.value), front: handle(each.front), back: handle(each.back) };
             })
@@ -585,22 +591,46 @@ public enum WallpaperEngineRuntime {
         var length = Number(options.length) > 0 ? Number(options.length) : 0;
         channels.forEach(function (keys) { length = Math.max(length, options.length > 0 ? 0 : keys[keys.length - 1].frame); });
         var mode = String(options.mode || 'loop').toLowerCase();
+        var wraps = mode === 'loop' && options.wraploop === true && length > 0;
+        var relative = animation.relative === true;
 
-        function at(keys, frame) {
-          if (frame <= keys[0].frame) return keys[0].value;
-          var last = keys[keys.length - 1];
-          if (frame >= last.frame) return last.value;
-          var index = 1;
-          while (keys[index].frame < frame) index++;
-          var from = keys[index - 1], to = keys[index];
-          var share = (frame - from.frame) / (to.frame - from.frame || 1);
-          if (!from.front && !to.back) return from.value + (to.value - from.value) * share;
+        // The moment before or after one of a curve's: with `wraploop`, round the end.
+        function beside(keys, index, by) {
+          var other = keys[index + by];
+          if (other) return other;
+          if (!wraps) return null;
+          other = by > 0 ? keys[0] : keys[keys.length - 1];
+          return { frame: other.frame + by * length, value: other.value, front: other.front, back: other.back };
+        }
+
+        // How steeply a curve left to the player passes a moment: as the line between the moments
+        // on both sides of it runs, and level where the value turns back or the curve ends.
+        function slope(keys, index) {
+          var here = keys[index], before = beside(keys, index, -1), after = beside(keys, index, 1);
+          if (!before || !after || after.frame === before.frame) return 0;
+          if ((here.value - before.value) * (after.value - here.value) <= 0) return 0;
+          return (after.value - before.value) / (after.frame - before.frame);
+        }
+
+        function along(first, second, third, fourth, t) {
+          var rest = 1 - t;
+          return rest * rest * rest * first + 3 * rest * rest * t * second + 3 * rest * t * t * third + t * t * t * fourth;
+        }
+
+        // The value between two moments; `fromIndex` and `toIndex` say which of the curve's they are.
+        function span(keys, from, to, fromIndex, toIndex, frame) {
+          var wide = to.frame - from.frame;
+          if (!(wide > 0)) return to.value;
+          if (!from.front && !to.back) return from.value + (to.value - from.value) * (frame - from.frame) / wide;
           // A curve drawn with two handles; the moment along it is looked for, then its height.
-          var x1 = from.frame + (from.front ? from.front[0] : 0), y1 = from.value + (from.front ? from.front[1] : 0);
-          var x2 = to.frame + (to.back ? to.back[0] : 0), y2 = to.value + (to.back ? to.back[1] : 0);
-          function along(first, second, third, fourth, t) {
-            var rest = 1 - t;
-            return rest * rest * rest * first + 3 * rest * rest * t * second + 3 * rest * t * t * third + t * t * t * fourth;
+          var x1 = from.frame, y1 = from.value, x2 = to.frame, y2 = to.value;
+          if (from.front) {
+            x1 += from.front.magic ? wide / 3 : Math.max(0, Math.min(wide, from.front.x));
+            y1 += from.front.magic ? slope(keys, fromIndex) * wide / 3 : from.front.y;
+          }
+          if (to.back) {
+            x2 += to.back.magic ? -wide / 3 : Math.max(-wide, Math.min(0, to.back.x));
+            y2 += to.back.magic ? -slope(keys, toIndex) * wide / 3 : to.back.y;
           }
           var low = 0, high = 1;
           for (var step = 0; step < 24; step++) {
@@ -609,6 +639,21 @@ public enum WallpaperEngineRuntime {
             else high = middle;
           }
           return along(from.value, y1, y2, to.value, (low + high) / 2);
+        }
+
+        function at(keys, frame) {
+          var last = keys.length - 1;
+          if (frame <= keys[0].frame) {
+            var before = beside(keys, 0, -1);
+            return before && frame < keys[0].frame ? span(keys, before, keys[0], last, 0, frame) : keys[0].value;
+          }
+          if (frame >= keys[last].frame) {
+            var after = beside(keys, last, 1);
+            return after && frame > keys[last].frame ? span(keys, keys[last], after, last, 0, frame) : keys[last].value;
+          }
+          var index = 1;
+          while (keys[index].frame < frame) index++;
+          return span(keys, keys[index - 1], keys[index], index - 1, index, frame);
         }
 
         // The numbers at a moment, in seconds since the scene began; a number the animation
@@ -627,7 +672,7 @@ public enum WallpaperEngineRuntime {
           }
           var result = base.slice();
           channels.forEach(function (keys, index) {
-            if (index < result.length) result[index] = at(keys, frame);
+            if (index < result.length) result[index] = (relative ? base[index] : 0) + at(keys, frame);
           });
           return result;
         };
@@ -1748,11 +1793,10 @@ public enum WallpaperEngineRuntime {
           scripts.forEach(function (script) {
             var made = script.made;
             var thing = script.owner;
-            if (!made || !thing || !thing.state || !thing.size) return;
-            var stands = standing(thing);
-            var width = Math.abs(thing.size[0] * stands.scale[0]), height = Math.abs(thing.size[1] * stands.scale[1]);
-            var over = stands.visible && Math.abs(world.x - stands.origin[0]) <= width / 2 && Math.abs(world.y - stands.origin[1]) <= height / 2;
-            var event = { worldPosition: world, localPosition: new Vec3(world.x - stands.origin[0], world.y - stands.origin[1], 0) };
+            if (!made || !thing || !thing.state || !thing.size || thing.solid === false) return;
+            var own = spot(thing, world.x, world.y);
+            var over = !!own;
+            var event = { worldPosition: world, localPosition: own ? new Vec3(own[0], own[1], 0) : new Vec3(0, 0, 0) };
             if (over !== !!script.over) {
               script.over = over;
               call(script, over ? 'cursorEnter' : 'cursorLeave', event);
@@ -1835,6 +1879,28 @@ public enum WallpaperEngineRuntime {
           'void main() { color = texture(u_Texture, v_Uv); }'
         ].join('\n'), 'the player\'s own shader');
         var placeProgram = link(placeVertex, sampleLines.concat(['void main() { color = picture(); }']).join('\n'), 'the player\'s own shader');
+        // Layers drawn one over another onto nothing leave their colors multiplied by how solid
+        // the result is. Effects, and the scene, take colors that are not: this divides them back.
+        var straightProgram = link([
+          '#version 300 es',
+          'in vec3 a_Position;',
+          'in vec2 a_TexCoord;',
+          'out vec2 v_Uv;',
+          'void main() {',
+          '  v_Uv = a_TexCoord;',
+          '  gl_Position = vec4(a_TexCoord * 2.0 - 1.0, 0.0, 1.0);',
+          '}'
+        ].join('\n'), [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'uniform sampler2D u_Texture;',
+          'out vec4 color;',
+          'void main() {',
+          '  vec4 c = texture(u_Texture, v_Uv);',
+          '  color = c.a > 0.0 ? vec4(c.rgb / c.a, c.a) : vec4(0.0);',
+          '}'
+        ].join('\n'), 'the player\'s own shader');
         var meshProgram = link(meshVertex, sampleLines.concat(['void main() { color = picture(); }']).join('\n'), 'the player\'s own shader');
         // Blended with what lies under it in one of the ways image editors have; the scene so far
         // is read from a copy.
@@ -1857,14 +1923,59 @@ public enum WallpaperEngineRuntime {
         var blendProgram = link(placeVertex, blendFragment, 'the player\'s own shader');
         var meshBlendProgram = link(meshVertex, blendFragment, 'the player\'s own shader');
 
-        // Where a rectangle of the scene lands on the screen, as a matrix for the shader: `origin`
-        // is its middle, counted from the scene's bottom left; `size` its sides after scaling.
-        function placement(origin, size, angle) {
-          var cos = Math.cos(angle), sin = Math.sin(angle);
+        // --- Where things stand -------------------------------------------------------
+        //
+        // An object has a place, a size and a turn about each of the three axes, all counted from
+        // the object it hangs on. They are kept as a matrix of four by four, column by column.
+        // The scene is looked at from straight ahead and from far: depth shows only in how
+        // something turned is foreshortened, and in where what lies behind it comes to stand.
+
+        // What is being drawn on: the scene, or a layer that holds other layers. `left` and
+        // `bottom` are where its lower left corner is, in the coordinates of what is drawn on it.
+        var surface = null;
+
+        // First `second`, then `first`.
+        function times(first, second) {
+          var result = new Array(16);
+          for (var column = 0; column < 4; column++) {
+            for (var row = 0; row < 4; row++) {
+              result[column * 4 + row] = first[row] * second[column * 4] + first[4 + row] * second[column * 4 + 1] +
+                                         first[8 + row] * second[column * 4 + 2] + first[12 + row] * second[column * 4 + 3];
+            }
+          }
+          return result;
+        }
+
+        // Scaled, then turned about x, then about y, then about z, then moved.
+        function matrixOf(origin, angles, scale) {
+          var cx = Math.cos(angles[0]), sx = Math.sin(angles[0]);
+          var cy = Math.cos(angles[1]), sy = Math.sin(angles[1]);
+          var cz = Math.cos(angles[2]), sz = Math.sin(angles[2]);
+          return [
+            cz * cy * scale[0], sz * cy * scale[0], -sy * scale[0], 0,
+            (cz * sy * sx - sz * cx) * scale[1], (sz * sy * sx + cz * cx) * scale[1], cy * sx * scale[1], 0,
+            (cz * sy * cx + sz * sx) * scale[2], (sz * sy * cx - cz * sx) * scale[2], cy * cx * scale[2], 0,
+            origin[0], origin[1], origin[2], 1
+          ];
+        }
+
+        // The same, for something moved by (x, y) of its own before anything else.
+        function nudged(matrix, x, y) {
+          var result = matrix.slice();
+          result[12] += matrix[0] * x + matrix[4] * y;
+          result[13] += matrix[1] * x + matrix[5] * y;
+          result[14] += matrix[2] * x + matrix[6] * y;
+          return result;
+        }
+
+        // Where a rectangle lands on what is drawn on, as a matrix for the shader. `matrix` takes
+        // the rectangle's own coordinates — from its middle, y up — to those of the surface.
+        function placeOf(matrix, size) {
+          var width = surface.width, height = surface.height;
           return new Float32Array([
-            2 * cos * size[0] / sceneWidth, -2 * sin * size[0] / sceneHeight, 0,
-            -2 * sin * size[1] / sceneWidth, -2 * cos * size[1] / sceneHeight, 0,
-            2 * origin[0] / sceneWidth - 1, 1 - 2 * origin[1] / sceneHeight, 1
+            2 * matrix[0] * size[0] / width, -2 * matrix[1] * size[0] / height, 0,
+            2 * matrix[4] * size[1] / width, -2 * matrix[5] * size[1] / height, 0,
+            2 * (matrix[12] - surface.left) / width - 1, 1 - 2 * (matrix[13] - surface.bottom) / height, 1
           ]);
         }
 
@@ -1875,12 +1986,14 @@ public enum WallpaperEngineRuntime {
         // one of the blend modes. `mesh`, if given, is drawn in place of the plain rectangle.
         function put(source, place, tint, how, mesh) {
           var program = mesh ? meshProgram : placeProgram;
+          var onto = surface.target;
           if (typeof how === 'number') {
-            // What is under the picture is read from a copy of the scene.
-            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, sceneTarget.framebuffer);
-            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, copyTarget.framebuffer);
-            gl.blitFramebuffer(0, 0, sceneTarget.width, sceneTarget.height, 0, 0, sceneTarget.width, sceneTarget.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+            // What is under the picture is read from a copy of what it is drawn on.
+            if (!surface.copy) surface.copy = acquire(onto.width, onto.height);
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, onto.framebuffer);
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, surface.copy.framebuffer);
+            gl.blitFramebuffer(0, 0, onto.width, onto.height, 0, 0, onto.width, onto.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, onto.framebuffer);
             program = mesh ? meshBlendProgram : blendProgram;
           }
           if (!program) return;
@@ -1888,9 +2001,9 @@ public enum WallpaperEngineRuntime {
           if (typeof how === 'number') {
             gl.disable(gl.BLEND);
             gl.activeTexture(gl.TEXTURE1);
-            gl.bindTexture(gl.TEXTURE_2D, copyTarget.texture);
+            gl.bindTexture(gl.TEXTURE_2D, surface.copy.texture);
             gl.uniform1i(program.uniforms.u_Scene.location, 1);
-            gl.uniform2f(program.uniforms.u_SceneSize.location, sceneTarget.width, sceneTarget.height);
+            gl.uniform2f(program.uniforms.u_SceneSize.location, onto.width, onto.height);
             gl.uniform1i(program.uniforms.u_Mode.location, how);
           } else if (how === 'normal') {
             gl.disable(gl.BLEND);
@@ -2099,6 +2212,10 @@ public enum WallpaperEngineRuntime {
           var hangs = object.parent !== undefined && object.parent !== null;
           var thing = { name: String(plain(object.name) || otherName || object.id || ''), id: object.id, parent: hangs ? object.parent : undefined,
                         said: object, state: {}, lives: {}, moving: false };
+          // The mouse is told to an object unless the scene says it is not solid.
+          thing.solid = flag(object.solid, true);
+          var given = numbers(object.size, 2, 0);
+          if (given[0] > 0 && given[1] > 0) thing.size = given;
           thing.lives.origin = live(object.origin, 3, hangs ? 0 : [sceneWidth / 2, sceneHeight / 2, 0], thing);
           thing.lives.scale = live(object.scale, 3, 1, thing);
           thing.lives.angles = live(object.angles, 3, 0, thing, 'numbers', 'degrees');
@@ -2124,19 +2241,48 @@ public enum WallpaperEngineRuntime {
           thing.state[name] = value.now;
         }
 
-        // Where an object stands on the scene. One that hangs on another has its place, size and
-        // turn counted from that one, and is hidden with it.
-        function standing(thing, depth) {
+        // Where an object stands on what it is drawn on — the scene, or the layer that holds it —
+        // how see-through it is there, and whether it shows. One that hangs on another has its
+        // place, size and turn counted from that one, is as see-through as that one makes it, and
+        // is hidden with it. With `whole`, where it stands on the scene whatever holds it: for
+        // telling what the pointer is over. `above` is whether everything it hangs on shows.
+        function standing(thing, whole, depth) {
           var state = thing.state;
-          var own = { origin: state.origin, scale: state.scale, angle: state.angles[2], visible: state.visible !== false };
-          var parent = thing.parent !== undefined && (depth || 0) < 32 ? byId[String(thing.parent)] : null;
-          if (!parent || parent === thing) return own;
-          var up = standing(parent, (depth || 0) + 1);
-          var x = own.origin[0] * up.scale[0], y = own.origin[1] * up.scale[1];
-          var cos = Math.cos(up.angle), sin = Math.sin(up.angle);
-          return { origin: [up.origin[0] + x * cos - y * sin, up.origin[1] + x * sin + y * cos, own.origin[2]],
-                   scale: [own.scale[0] * up.scale[0], own.scale[1] * up.scale[1], own.scale[2]],
-                   angle: own.angle + up.angle, visible: own.visible && up.visible };
+          var matrix = matrixOf(state.origin, state.angles, state.scale);
+          var alpha = Math.max(0, Math.min(1, state.alpha[0]));
+          var above = true;
+          var parent = thing.parent !== undefined && (depth || 0) < 64 ? byId[String(thing.parent)] : null;
+          if (parent && parent !== thing) {
+            var up = standing(parent, whole, (depth || 0) + 1);
+            above = up.visible;
+            // Drawn into the layer that holds it, an object is placed in that layer's own
+            // coordinates; the layer's place and opacity are added when the layer is drawn.
+            if (!parent.holds || whole) {
+              matrix = times(up.matrix, matrix);
+              alpha *= up.alpha;
+            }
+          } else if (eye && eye.on) {
+            // What hangs together moves with the pointer together.
+            var moved = shifted(thing);
+            matrix[12] += moved[0];
+            matrix[13] += moved[1];
+          }
+          return { matrix: matrix, alpha: alpha, above: above, visible: above && state.visible !== false };
+        }
+
+        // Where a point of the scene is on an object, in the object's own coordinates from its
+        // middle; null if it is not on it. An object need not show for that — one that is hidden
+        // serves as a place to click — but what it hangs on must.
+        function spot(thing, x, y) {
+          if (!thing.size) return null;
+          var stands = standing(thing, true);
+          if (!stands.above) return null;
+          var matrix = thing.shift ? nudged(stands.matrix, thing.shift[0], thing.shift[1]) : stands.matrix;
+          var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
+          if (Math.abs(area) < 1e-9) return null;
+          var dx = x - matrix[12], dy = y - matrix[13];
+          var own = [(dx * matrix[5] - dy * matrix[4]) / area, (dy * matrix[0] - dx * matrix[1]) / area];
+          return Math.abs(own[0]) <= thing.size[0] / 2 && Math.abs(own[1]) <= thing.size[1] / 2 ? own : null;
         }
 
         function wantsReading(value, all) {
@@ -2264,22 +2410,21 @@ public enum WallpaperEngineRuntime {
           var modelName = String(plain(object.image) || '');
           var model = json(modelName);
           layer.kept = null;
-          if (!model) {
-            // Layers Wallpaper Engine has ready-made: one that takes what is under it, to put
-            // effects over the whole scene, and one of a single color.
-            if (/composelayer|fullscreenlayer/.test(key(modelName))) {
-              layer.takesScene = true;
-            } else if (/solidlayer/.test(key(modelName))) {
-              layer.picture = flat(255, 255, 255, 255);
-            } else {
-              note('“' + layer.name + '”: its model ' + modelName + ' is not in the scene');
-              return null;
-            }
+          // Layers Wallpaper Engine has ready-made: one to put effects over others — it takes what
+          // the scene shows under it, or holds the layers that hang on it — and one of a single
+          // color, which a scene may also bring as a model of its own.
+          if (/composelayer|fullscreenlayer/.test(key(modelName))) {
+            if (!layer.holds) layer.takesScene = true;
+          } else if (/solidlayer/.test(key(modelName)) || (model && (model.solidlayer === true || /solidlayer/.test(key(String(model.material || '')))))) {
+            layer.picture = flat(255, 255, 255, 255);
+          } else if (!model) {
+            note('“' + layer.name + '”: its model ' + modelName + ' is not in the scene');
+            return null;
           }
           var base = (model && (json(model.material) || {}).passes || [])[0] || {};
           layer.blending = key(base.blending || 'translucent');
           if (base.textures && base.textures[0]) layer.picture = texture('materials/' + base.textures[0]);
-          if (!layer.picture && !layer.takesScene) {
+          if (!layer.picture && !layer.takesScene && !layer.holds) {
             note('“' + layer.name + '” has no picture');
             return null;
           }
@@ -2289,6 +2434,11 @@ public enum WallpaperEngineRuntime {
                     number(model && model.height, 0) || (layer.picture && layer.picture.height > 1 ? layer.picture.height : sceneHeight)];
           }
           layer.size = size;
+          // Which point of the picture is at its place: its middle, the middle of a side, or a corner.
+          var hangs = key(String(plain(object.alignment) || 'center'));
+          var aside = [/left/.test(hangs) ? size[0] / 2 : (/right/.test(hangs) ? -size[0] / 2 : 0),
+                       /top/.test(hangs) ? -size[1] / 2 : (/bottom/.test(hangs) ? size[1] / 2 : 0)];
+          if (aside[0] !== 0 || aside[1] !== 0) layer.shift = aside;
           layer.brightness = number(object.brightness, 1);
           layer.blendMode = number(object.colorBlendMode, 0);
           if (layer.picture && layer.picture.frames) layer.moving = true;
@@ -2315,15 +2465,34 @@ public enum WallpaperEngineRuntime {
         var fontFiles = (scene && scene.fonts) || {};
         var fontsMade = {};
         var fontsThere = 0; // how many of them have arrived
+        // Fonts of Windows by the names Wallpaper Engine has for them, each with what a Mac has
+        // that is nearest to it.
         var KNOWN_FONTS = {
-          arial: 'Arial, Helvetica', consolas: 'Consolas, Menlo, Monaco, monospace', couriernew: '"Courier New", Courier, monospace',
-          timesnewroman: '"Times New Roman", Times, serif', verdana: 'Verdana', tahoma: 'Tahoma', georgia: 'Georgia, serif',
-          impact: 'Impact', comicsansms: '"Comic Sans MS"', trebuchetms: '"Trebuchet MS"', segoeui: '"Segoe UI", -apple-system',
-          calibri: 'Calibri, "Helvetica Neue"', lucidaconsole: '"Lucida Console", Menlo, monospace'
+          arial: 'Arial, Helvetica', arialblack: '"Arial Black", Arial', consolas: 'Consolas, Menlo, Monaco, monospace',
+          couriernew: '"Courier New", Courier, monospace', lucidaconsole: '"Lucida Console", Menlo, monospace',
+          cascadiacode: '"Cascadia Code", Menlo, monospace', cascadiamono: '"Cascadia Mono", Menlo, monospace',
+          timesnewroman: '"Times New Roman", Times, serif', georgia: 'Georgia, serif', cambria: 'Cambria, Georgia, serif',
+          constantia: 'Constantia, Georgia, serif', palatinolinotype: '"Palatino Linotype", Palatino, serif',
+          bookantiqua: '"Book Antiqua", Palatino, serif', garamond: 'Garamond, Georgia, serif', sylfaen: 'Sylfaen, Georgia, serif',
+          verdana: 'Verdana', tahoma: 'Tahoma', trebuchetms: '"Trebuchet MS"', impact: 'Impact', comicsansms: '"Comic Sans MS"',
+          segoeui: '"Segoe UI", -apple-system', segoeuilight: '"Segoe UI Light", -apple-system',
+          segoeuisemibold: '"Segoe UI Semibold", -apple-system', segoeuiblack: '"Segoe UI Black", -apple-system',
+          calibri: 'Calibri, "Helvetica Neue"', candara: 'Candara, "Helvetica Neue"', corbel: 'Corbel, "Helvetica Neue"',
+          centurygothic: '"Century Gothic", Futura', franklingothicmedium: '"Franklin Gothic Medium", "Helvetica Neue"',
+          bahnschrift: 'Bahnschrift, "DIN Alternate", "Helvetica Neue"', lucidasansunicode: '"Lucida Sans Unicode", "Lucida Grande"',
+          microsoftsansserif: '"Microsoft Sans Serif", Helvetica', segoeprint: '"Segoe Print", "Bradley Hand"',
+          segoescript: '"Segoe Script", "Snell Roundhand"', inkfree: '"Ink Free", "Bradley Hand"',
+          microsoftyahei: '"Microsoft YaHei", "PingFang SC"', microsoftyaheiui: '"Microsoft YaHei UI", "PingFang SC"',
+          simsun: 'SimSun, "Songti SC"', simhei: 'SimHei, "PingFang SC"', microsoftjhenghei: '"Microsoft JhengHei", "PingFang TC"',
+          msgothic: '"MS Gothic", "Hiragino Sans"', meiryo: 'Meiryo, "Hiragino Sans"', yugothic: '"Yu Gothic", "Hiragino Sans"',
+          malgungothic: '"Malgun Gothic", "Apple SD Gothic Neo"'
         };
+        var fontsMissed = {};
 
         // The font a text names, for the browser: one of the scene's own files, or one of the
-        // system's by the name Wallpaper Engine has for it.
+        // system's by the name Wallpaper Engine has for it. A file the scene names without
+        // bringing it is one of Wallpaper Engine's own; it is looked for among the Mac's fonts by
+        // its name, and the system's font stands in for it if it is not there.
         function fontOf(name) {
           var id = key(String(name || ''));
           var file = fontFiles[id];
@@ -2343,8 +2512,17 @@ public enum WallpaperEngineRuntime {
             }
             return '"' + fontsMade[id] + '", -apple-system, sans-serif';
           }
+          if (/\.(ttf|otf|ttc|woff2?)$/.test(id)) {
+            if (!fontsMissed[id]) {
+              fontsMissed[id] = true;
+              note('the font ' + name + ' is not in the scene; if the Mac does not have it, the system\'s stands in for it');
+            }
+            // "fonts/Monofur-PK7og.ttf" is Monofur.
+            var family = String(name).replace(/^.*[\\/]/, '').replace(/\.\w+$/, '').replace(/[-_].*$/, '').replace(/["\\]/g, '');
+            return '"' + family + '", -apple-system, sans-serif';
+          }
           var plainName = id.replace(/^systemfont_/, '').replace(/[^a-z0-9 ]/g, '');
-          return (KNOWN_FONTS[plainName] || '"' + plainName + '"') + ', -apple-system, sans-serif';
+          return (KNOWN_FONTS[plainName.replace(/ /g, '')] || '"' + plainName + '"') + ', -apple-system, sans-serif';
         }
 
         function buildText(object, thing) {
@@ -2365,9 +2543,12 @@ public enum WallpaperEngineRuntime {
           var entry = { texture: newTexture(true, true), width: 1, height: 1 };
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
           thing.picture = { layers: [entry], width: 1, height: 1, channels: 'rgba', frames: null, ready: true };
-          // The box the scene gives the text, which says where its edges are held.
+          // The box the scene gives the text: as wide as the text was when the scene was saved and
+          // as high as a line of it, in the font it names. It says where the text's edges are held.
           var given = numbers(object.size, 2, 0);
           thing.size = given[0] > 0 ? given : [1, 1];
+          var saved = object.text && typeof object.text === 'object' && !Array.isArray(object.text) ? object.text.value : object.text;
+          saved = typeof saved === 'string' ? saved : '';
           var shown = null;
 
           function hex(parts) {
@@ -2386,21 +2567,34 @@ public enum WallpaperEngineRuntime {
             var asked = [state.text, state.pointsize[0], state.color.join(), scale, padding, across, down, String(background), family, fontsThere, widest, rows].join('\u0001');
             if (asked === shown) return;
             shown = asked;
-            // Wallpaper Engine sizes a font by the height of its line, from the top of its tallest
-            // letter to the bottom of its lowest: four units of the scene to a point.
-            pen.font = '100px ' + family;
-            var whole = pen.measureText('M');
-            var tall = (whole.fontBoundingBoxAscent + whole.fontBoundingBoxDescent) / 100;
-            var letter = Math.max(1, state.pointsize[0] * 4 / (tall > 0.7 && tall < 2.5 ? tall : 1.17));
+            // Wallpaper Engine counts a point of a font at 300 to the inch, with a unit of the
+            // scene for a pixel: the square its letters are drawn in is 300/72 units to the point.
+            var letter = Math.max(1, state.pointsize[0] * 25 / 6);
             var font = letter + 'px ' + family;
             pen.font = font;
+            var whole = pen.measureText('M');
+            var rise = whole.fontBoundingBoxAscent, fall = whole.fontBoundingBoxDescent;
+            if (!(rise > 0) || !(fall >= 0)) {
+              rise = letter * 0.93;
+              fall = letter * 0.24;
+            }
+            var line = rise + fall; // from one line to the next
+            // Where another font stands in for the one the text names, its letters are narrower
+            // or wider. The box the scene gives says how wide the text was in the right font, so
+            // the letters are drawn that much narrower or wider, and the text takes its old room.
+            var squeeze = 1;
+            if (given[0] > 0 && saved !== '' && saved.indexOf('\n') < 0 && !(widest > 0)) {
+              var measured = pen.measureText(saved).width;
+              if (measured > 0) squeeze = Math.max(0.5, Math.min(1.5, given[0] / measured));
+              if (Math.abs(squeeze - 1) < 0.03) squeeze = 1;
+            }
             var lines = String(state.text).split('\n');
             if (widest > 0) {
               // Lines longer than the scene allows are broken between words.
               var broken = [];
-              lines.forEach(function (line) {
+              lines.forEach(function (each) {
                 var current = '';
-                line.split(' ').forEach(function (word) {
+                each.split(' ').forEach(function (word) {
                   var longer = current ? current + ' ' + word : word;
                   if (current && pen.measureText(longer).width > widest) {
                     broken.push(current);
@@ -2414,11 +2608,10 @@ public enum WallpaperEngineRuntime {
               lines = broken;
             }
             if (rows > 0) lines = lines.slice(0, rows);
-            var widths = lines.map(function (line) { return pen.measureText(line).width; });
-            var row = letter * 0.84;
-            var advance = Math.max(1, state.pointsize[0] * 4); // from one line to the next
-            var width = Math.max.apply(null, widths.concat([1])) + padding * 2;
-            var height = row + (lines.length - 1) * advance + padding * 2;
+            var widths = lines.map(function (each) { return pen.measureText(each).width * squeeze; });
+            // The text itself, and around it the room the scene leaves for what effects add.
+            var content = [Math.max.apply(null, widths.concat([1])), Math.max(1, lines.length) * line];
+            var width = content[0] + padding * 2, height = content[1] + padding * 2;
             paper.width = Math.max(1, Math.min(8192, Math.ceil(width * scale)));
             paper.height = Math.max(1, Math.min(8192, Math.ceil(height * scale)));
             pen.setTransform(paper.width / width, 0, 0, paper.height / height, 0, 0);
@@ -2429,10 +2622,14 @@ public enum WallpaperEngineRuntime {
             }
             pen.font = font;
             pen.fillStyle = hex(state.color);
-            pen.textBaseline = 'middle';
-            lines.forEach(function (line, index) {
+            pen.textBaseline = 'alphabetic';
+            lines.forEach(function (each, index) {
               var x = across === 'left' ? padding : (across === 'right' ? width - padding - widths[index] : (width - widths[index]) / 2);
-              pen.fillText(line, x, padding + row / 2 + index * advance);
+              pen.save();
+              pen.translate(x, padding + rise + index * line);
+              pen.scale(squeeze, 1);
+              pen.fillText(each, 0, 0);
+              pen.restore();
             });
             gl.bindTexture(gl.TEXTURE_2D, entry.texture);
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -2441,9 +2638,9 @@ public enum WallpaperEngineRuntime {
             entry.width = paper.width;
             entry.height = paper.height;
             // The text grows from the edge it is aligned to; in the middle, from its middle.
-            var box = given[0] > 0 ? given : [width, height];
-            thing.shift = [across === 'left' ? (width - box[0]) / 2 : (across === 'right' ? (box[0] - width) / 2 : 0),
-                           down === 'top' ? (box[1] - height) / 2 : (down === 'bottom' ? (height - box[1]) / 2 : 0)];
+            var box = given[0] > 0 ? given : content;
+            thing.shift = [across === 'left' ? (content[0] - box[0]) / 2 : (across === 'right' ? (box[0] - content[0]) / 2 : 0),
+                           down === 'top' ? (box[1] - content[1]) / 2 : (down === 'bottom' ? (content[1] - box[1]) / 2 : 0)];
             thing.size = [width, height];
             stale(thing);
           };
@@ -2458,7 +2655,7 @@ public enum WallpaperEngineRuntime {
         // How far the scene is moved for an object as the pointer moves: the nearer an object is
         // said to be, the further.
         function shifted(thing) {
-          if (!eye.on) return [0, 0];
+          if (!eye || !eye.on) return [0, 0];
           var depth = thing.state.parallax;
           return [-eye.x * depth[0] * eye.amount * sceneWidth, eye.y * depth[1] * eye.amount * sceneHeight];
         }
@@ -2469,23 +2666,20 @@ public enum WallpaperEngineRuntime {
           if (!stands.visible) return;
           var nominal = layer.size;
           var width = nominal[0] * scale, height = nominal[1] * scale;
-          var moved = shifted(layer);
-          var origin = [stands.origin[0] + moved[0] + (layer.shift ? layer.shift[0] * stands.scale[0] : 0),
-                        stands.origin[1] + moved[1] + (layer.shift ? layer.shift[1] * stands.scale[1] : 0)];
-          var size = [nominal[0] * stands.scale[0], nominal[1] * stands.scale[1]];
-          var angle = stands.angle;
+          var matrix = layer.shift ? nudged(stands.matrix, layer.shift[0], layer.shift[1]) : stands.matrix;
           var bright = layer.brightness;
-          var tint = layer.ownColor ? [1, 1, 1, Math.max(0, Math.min(1, state.alpha[0]))]
-                   : [state.color[0] * bright, state.color[1] * bright, state.color[2] * bright, Math.max(0, Math.min(1, state.alpha[0]))];
+          var tint = layer.ownColor ? [1, 1, 1, stands.alpha]
+                   : [state.color[0] * bright, state.color[1] * bright, state.color[2] * bright, stands.alpha];
           var how = layer.blendMode > 0 && layer.blendMode !== 9 ? layer.blendMode :
                     (layer.blendMode === 9 || layer.blending === 'additive' ? 'additive' : (layer.blending === 'normal' ? 'normal' : 'translucent'));
-          var place = placement(origin, size, angle);
+          var onto = surface;
+          var place = placeOf(matrix, nominal);
           // A picture that bends is drawn as its triangles, whose corners are counted in the
           // picture's own pixels from its middle.
           var mesh = layer.puppet || null;
           if (mesh) {
             mesh.pose(time);
-            place = placement(origin, [stands.scale[0], stands.scale[1]], angle);
+            place = placeOf(matrix, [1, 1]);
           }
           var effects = layer.effects.filter(function (effect) { return effect.shown.now; });
 
@@ -2526,9 +2720,39 @@ public enum WallpaperEngineRuntime {
             if (grabProgram) {
               gl.useProgram(grabProgram.program);
               gl.activeTexture(gl.TEXTURE0);
-              gl.bindTexture(gl.TEXTURE_2D, sceneTarget.texture);
+              gl.bindTexture(gl.TEXTURE_2D, onto.target.texture);
               gl.uniform1i(grabProgram.uniforms.u_Texture.location, 0);
               gl.uniformMatrix3fv(grabProgram.uniforms.u_Place.location, false, place);
+              gl.bindVertexArray(passShape);
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            }
+            source = { texture: held.texture, resolution: resolution };
+          } else if (layer.holds) {
+            // The layers that hang on this one are drawn into it, with its middle as theirs and
+            // cut at its edges; its effects are then put over all of them at once.
+            var inside = next();
+            surface = { target: inside, copy: null, width: nominal[0], height: nominal[1], left: -nominal[0] / 2, bottom: -nominal[1] / 2 };
+            gl.bindFramebuffer(gl.FRAMEBUFFER, inside.framebuffer);
+            gl.viewport(0, 0, inside.width, inside.height);
+            gl.disable(gl.BLEND);
+            gl.clearColor(0, 0, 0, 0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            layer.held.forEach(function (child) {
+              gl.bindFramebuffer(gl.FRAMEBUFFER, inside.framebuffer);
+              gl.viewport(0, 0, inside.width, inside.height);
+              child.draw();
+            });
+            if (surface.copy) release(surface.copy);
+            surface = onto;
+            held = spare[0] === inside ? spare[1] : spare[0];
+            gl.bindFramebuffer(gl.FRAMEBUFFER, held.framebuffer);
+            gl.viewport(0, 0, held.width, held.height);
+            gl.disable(gl.BLEND);
+            if (straightProgram) {
+              gl.useProgram(straightProgram.program);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, inside.texture);
+              gl.uniform1i(straightProgram.uniforms.u_Texture.location, 0);
               gl.bindVertexArray(passShape);
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             }
@@ -2561,7 +2785,7 @@ public enum WallpaperEngineRuntime {
                 return { texture: target.texture, resolution: [target.nominalWidth, target.nominalHeight, target.nominalWidth, target.nominalHeight] };
               }
               if (from.target === '_rt_fullframebuffer') {
-                return { texture: sceneTarget.texture, resolution: [sceneWidth, sceneHeight, sceneWidth, sceneHeight] };
+                return { texture: onto.target.texture, resolution: [onto.width, onto.height, onto.width, onto.height] };
               }
               // What the picture has become so far, also under the names Wallpaper Engine has for it.
               return previous;
@@ -2587,10 +2811,11 @@ public enum WallpaperEngineRuntime {
             Object.keys(named).forEach(function (name) { release(named[name]); });
           });
 
-          gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
-          gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, onto.target.framebuffer);
+          gl.viewport(0, 0, onto.target.width, onto.target.height);
           put({ texture: previous.texture }, place, tint, how, mesh);
-          if (!layer.moving && held && loading === 0) {
+          // What holds other layers is another picture whenever one of them is.
+          if (!layer.moving && !layer.holds && held && loading === 0) {
             layer.kept = held;
             release(spare[0] === held ? spare[1] : spare[0]);
           } else {
@@ -2942,12 +3167,14 @@ public enum WallpaperEngineRuntime {
             var stands = standing(system);
             if (!stands.visible) return;
             var state = system.state;
-            var moved = shifted(system);
-            var originX = stands.origin[0] + moved[0], originY = stands.origin[1] + moved[1];
-            // Its own directions on the scene: turned, then stretched.
-            var cos = Math.cos(stands.angle), sin = Math.sin(stands.angle);
-            var linear = [cos * stands.scale[0], sin * stands.scale[0], -sin * stands.scale[1], cos * stands.scale[1]];
-            var see = system.alphaBy * Math.max(0, Math.min(1, state.alpha[0]));
+            // Counted from the lower left corner of what the particles are drawn on.
+            var matrix = stands.matrix;
+            var originX = matrix[12] - surface.left, originY = matrix[13] - surface.bottom;
+            var middleX = surface.width / 2, middleY = surface.height / 2;
+            // Its own directions there: stretched, then turned.
+            var linear = [matrix[0], matrix[1], matrix[4], matrix[5]];
+            var deep = Math.sqrt(matrix[8] * matrix[8] + matrix[9] * matrix[9] + matrix[10] * matrix[10]);
+            var see = system.alphaBy * stands.alpha;
             var data = system.data;
             var count = Math.min(system.particles.length, system.most);
             var layer = system.picture.layers[0];
@@ -2958,9 +3185,9 @@ public enum WallpaperEngineRuntime {
               var y = originY + linear[1] * localX + linear[3] * localY;
               var near = 1;
               if (system.perspective) {
-                near = away / Math.max(away * 0.2, away - particle.z * stands.scale[2]);
-                x = sceneWidth / 2 + (x - sceneWidth / 2) * near;
-                y = sceneHeight / 2 + (y - sceneHeight / 2) * near;
+                near = away / Math.max(away * 0.2, away - particle.z * deep);
+                x = middleX + (x - middleX) * near;
+                y = middleY + (y - middleY) * near;
               }
               var at = i * FLOATS;
               data[at] = x;
@@ -2986,7 +3213,7 @@ public enum WallpaperEngineRuntime {
             gl.uniform1i(particleProgram.uniforms.u_Channels.location, CHANNELS[system.picture.channels] || 0);
             gl.uniform1f(particleProgram.uniforms.u_Bright.location, system.bright);
             gl.uniformMatrix2fv(particleProgram.uniforms.u_Linear.location, false, new Float32Array(linear));
-            gl.uniform2f(particleProgram.uniforms.u_Scene.location, sceneWidth, sceneHeight);
+            gl.uniform2f(particleProgram.uniforms.u_Scene.location, surface.width, surface.height);
             gl.bindVertexArray(system.shape);
             gl.bindBuffer(gl.ARRAY_BUFFER, system.buffer);
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, count * FLOATS));
@@ -3116,15 +3343,28 @@ public enum WallpaperEngineRuntime {
         // is left out.
         var scripted = /"script"\s*:/.test(files['scene.json'] || '');
         function idle() {}
+        var hasChildren = {};
+        all.forEach(function (object) {
+          if (object.parent !== undefined && object.parent !== null) hasChildren[String(object.parent)] = true;
+        });
 
         all.forEach(function (object) {
           var hidden = object.visible === false;
-          if (hidden && !scripted) return;
           var make = object.image ? buildImage : (object.particle ? buildParticles : (object.sound ? buildSound :
                      (object.text !== undefined ? buildText : null)));
           var thing = placed(object, String(plain(object.image) || plain(object.particle) || (object.sound ? 'sound' : (make ? 'text' : 'group'))));
           thing.draw = idle;
           objects.push(thing);
+          // A layer made to put effects over others either takes what the scene shows under it or
+          // holds the layers that hang on it, which are then drawn into it. The scene says which;
+          // where it does not, the layer holds what hangs on it if anything does.
+          if (object.image && /composelayer/.test(key(String(plain(object.image) || '')))) {
+            var through = object.config && typeof object.config === 'object' ? plain(object.config.passthrough) : undefined;
+            thing.holds = through === false || (through === undefined && hasChildren[String(object.id)] === true);
+            thing.held = [];
+          }
+          // What is hidden for good is only there for what hangs on it to be hidden with it.
+          if (hidden && !scripted) return;
           if (!make) {
             // Something with only a place holds the objects that hang on it together.
             if (!hidden && (object.model || object.light || object.camera)) {
@@ -3154,10 +3394,23 @@ public enum WallpaperEngineRuntime {
               if (!standing(thing).visible) return;
               thing.draw = idle;
               if (!finish()) return;
-              gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
-              gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+              gl.bindFramebuffer(gl.FRAMEBUFFER, surface.target.framebuffer);
+              gl.viewport(0, 0, surface.target.width, surface.target.height);
               thing.draw();
             };
+          }
+        });
+        // Each object is drawn by the nearest layer above it that holds layers, if there is one.
+        objects.forEach(function (thing) {
+          var up = thing;
+          for (var depth = 0; depth < 64 && up.parent !== undefined; depth++) {
+            up = byId[String(up.parent)];
+            if (!up || up === thing) return;
+            if (up.holds) {
+              thing.heldBy = up;
+              up.held.push(thing);
+              return;
+            }
           }
         });
 
@@ -3331,7 +3584,10 @@ public enum WallpaperEngineRuntime {
           gl.disable(gl.BLEND);
           gl.clearColor(clear[0], clear[1], clear[2], 1);
           gl.clear(gl.COLOR_BUFFER_BIT);
+          surface = { target: sceneTarget, copy: copyTarget, width: sceneWidth, height: sceneHeight, left: 0, bottom: 0 };
           objects.forEach(function (object) {
+            // What a layer holds is drawn by that layer.
+            if (object.heldBy) return;
             gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
             gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
             object.draw();
