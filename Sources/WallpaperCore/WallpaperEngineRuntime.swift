@@ -68,14 +68,15 @@ public enum WallpaperEngineRuntime {
         return fallback;
       }
 
-      // Several numbers written as one text, "990.000 540.000 0.000", or one number for them all.
+      // Several numbers written as one text, "990.000 540.000 0.000" or "0.0, 1.0", or one number
+      // for them all.
       function numbers(value, count, fallback) {
         value = plain(value);
         var list = [];
         if (typeof value === 'number') {
           for (var i = 0; i < count; i++) list.push(value);
         } else if (typeof value === 'string') {
-          list = value.trim().split(/\s+/).map(Number).filter(function (n) { return isFinite(n); });
+          list = value.split(/[\s,]+/).filter(function (part) { return part !== ''; }).map(Number).filter(function (n) { return isFinite(n); });
         } else if (Array.isArray(value)) {
           list = value.map(Number).filter(function (n) { return isFinite(n); });
         }
@@ -133,7 +134,32 @@ public enum WallpaperEngineRuntime {
         'min(vec3(1.0), B * B / max(1.0 - A, vec3(0.0001)))',
         'min(A, B) - max(A, B) + 1.0',
         '(A + B) * 0.5',
-        '1.0 - abs(1.0 - A - B)'
+        '1.0 - abs(1.0 - A - B)',
+        // 26–29: one of hue, saturation and lightness taken from the one, the rest from the other
+        'wallaeroSetLum(wallaeroSetSat(B, wallaeroSat(A)), wallaeroLum(A))',
+        'wallaeroSetLum(wallaeroSetSat(A, wallaeroSat(B)), wallaeroLum(A))',
+        'wallaeroSetLum(B, wallaeroLum(A))',
+        'wallaeroSetLum(A, wallaeroLum(B))',
+        // 30: tinted — as light as it was, in the other's color
+        'max(A.r, max(A.g, A.b)) * B'
+      ];
+      // What the blend modes above are worked out with.
+      var BLEND_HELPERS = [
+        'float wallaeroLum(vec3 c) { return dot(c, vec3(0.3, 0.59, 0.11)); }',
+        'float wallaeroSat(vec3 c) { return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)); }',
+        'vec3 wallaeroSetLum(vec3 c, float l) {',
+        '  c += l - wallaeroLum(c);',
+        '  float least = min(c.r, min(c.g, c.b));',
+        '  float most = max(c.r, max(c.g, c.b));',
+        '  if (least < 0.0) c = l + (c - l) * l / max(l - least, 0.0001);',
+        '  if (most > 1.0) c = l + (c - l) * (1.0 - l) / max(most - l, 0.0001);',
+        '  return c;',
+        '}',
+        'vec3 wallaeroSetSat(vec3 c, float s) {',
+        '  float least = min(c.r, min(c.g, c.b));',
+        '  float most = max(c.r, max(c.g, c.b));',
+        '  return most > least ? (c - least) * s / (most - least) : vec3(0.0);',
+        '}'
       ];
 
       var HEADERS = {
@@ -163,7 +189,7 @@ public enum WallpaperEngineRuntime {
         ].join('\n'),
 
         // The blend modes go by number, in the order image editors list them.
-        'common_blending.h': ['vec3 wallaeroBlend(vec3 A, vec3 B) {'].concat(BLENDS.map(function (formula, index) {
+        'common_blending.h': BLEND_HELPERS.concat(['vec3 wallaeroBlend(vec3 A, vec3 B) {'], BLENDS.map(function (formula, index) {
           return '#if BLENDMODE == ' + (index + 1) + '\n  return ' + formula + ';\n#endif';
         })).concat([
           '  return B;',
@@ -233,13 +259,23 @@ public enum WallpaperEngineRuntime {
 
       // Every switch a shader declares in a comment, `// [COMBO] {...}`, and what its uniforms say
       // of themselves in theirs.
+      // What a shader says of itself is written by hand, as JSON and nearly JSON: a number may
+      // begin with noughts, a list end with a comma.
+      function loose(text) {
+        try {
+          return JSON.parse(text);
+        } catch (error) {
+          return JSON.parse(text.replace(/([\[,:]\s*)0+(\d)/g, '$1$2').replace(/,(\s*[}\]])/g, '$1'));
+        }
+      }
+
       function annotations(source) {
         var result = { combos: {}, uniforms: {} };
         source.replace(/\r\n?/g, '\n').split('\n').forEach(function (line) {
           var combo = /^\s*\/\/\s*\[\s*(?:COMBO|COMBO_OFF|OFF_COMBO)\s*\]\s*(\{.*\})\s*$/.exec(line);
           if (combo) {
             try {
-              var declared = JSON.parse(combo[1]);
+              var declared = loose(combo[1]);
               if (declared && declared.combo) result.combos[declared.combo] = number(declared['default'], 0);
             } catch (error) {}
             return;
@@ -247,7 +283,7 @@ public enum WallpaperEngineRuntime {
           var uniform = /^\s*uniform\s+\w+\s+(\w+)\s*(?:\[[^\]]*\])?\s*;\s*\/\/\s*(\{.*\})\s*$/.exec(line);
           if (uniform) {
             try {
-              result.uniforms[uniform[1]] = JSON.parse(uniform[2]);
+              result.uniforms[uniform[1]] = loose(uniform[2]);
             } catch (error) {}
           }
         });
@@ -492,6 +528,224 @@ public enum WallpaperEngineRuntime {
         return tokens;
       }
 
+      // --- Shaders a browser refuses and Wallpaper Engine takes -------------------------------
+      //
+      // Wallpaper Engine hands its shaders to Direct3D, which is lenient where a browser is not:
+      // a function given vectors of different sizes works with the smaller, and a vector put
+      // where a smaller one or a single number belongs loses its last parts. Scenes are written
+      // against that. When a shader does not compile, what the compiler says is turned into the
+      // change that lets it through, and it is tried again.
+
+      // Functions that take vectors part by part, with how many values each takes.
+      var LENIENT = { mix: 3, clamp: 3, smoothstep: 3, min: 2, max: 2, pow: 2, step: 2, mod: 2, atan: 2, dot: 2, distance: 2, reflect: 2 };
+      var TO_ONE_NUMBER = { dot: true, distance: true };
+
+      // The function under a name of its own, for every mixture of sizes: all its values are cut
+      // to the smallest vector among them, and single numbers are spread over that.
+      function overloads(name) {
+        var types = ['', 'float', 'vec2', 'vec3', 'vec4'];
+        var lines = [];
+        function all(sizes) {
+          if (sizes.length < LENIENT[name]) {
+            for (var size = 1; size <= 4; size++) all(sizes.concat([size]));
+            return;
+          }
+          var vectors = sizes.filter(function (each) { return each > 1; });
+          var least = vectors.length ? Math.min.apply(null, vectors) : 1;
+          var takes = sizes.map(function (each, index) { return types[each] + ' v' + index; });
+          var gives = sizes.map(function (each, index) { return each === least ? 'v' + index : types[least] + '(v' + index + ')'; });
+          lines.push((TO_ONE_NUMBER[name] ? 'float' : types[least]) + ' wallaero_' + name + '(' + takes.join(', ') + ') { return ' +
+                     name + '(' + gives.join(', ') + '); }');
+        }
+        all([]);
+        return lines.join('\n');
+      }
+
+      // How many numbers a kind of value has, as the compiler names it: 1 for a single number,
+      // 2 to 4 for a vector, 'bool' for a yes or no, 0 for anything else.
+      function sizeNamed(kind) {
+        var parts = /(\d)-component vector of float/.exec(kind);
+        if (parts) return Number(parts[1]);
+        if (/\bbool\b/.test(kind)) return 'bool';
+        return /\bfloat\b/.test(kind) && !/matrix|vector/.test(kind) ? 1 : 0;
+      }
+
+      // The value that stands right before a place in a line, or right after it: a name with
+      // what is taken of it, a call, a number, or something in brackets. Gives where it starts
+      // and ends.
+      function valueBefore(text, at) {
+        var end = at;
+        while (end > 0 && text.charAt(end - 1) === ' ') end--;
+        var start = end;
+        while (start > 0) {
+          var letter = text.charAt(start - 1);
+          if (/[\w.]/.test(letter)) {
+            start--;
+          } else if (letter === ')' || letter === ']') {
+            var depth = 0;
+            do {
+              var inner = text.charAt(start - 1);
+              if (inner === ')' || inner === ']') depth++;
+              if (inner === '(' || inner === '[') depth--;
+              start--;
+            } while (start > 0 && depth > 0);
+          } else {
+            break;
+          }
+        }
+        return [start, end];
+      }
+
+      function valueAfter(text, at) {
+        var start = at;
+        while (start < text.length && text.charAt(start) === ' ') start++;
+        var end = start;
+        if (text.charAt(end) === '-' || text.charAt(end) === '+') end++;
+        while (end < text.length) {
+          var letter = text.charAt(end);
+          if (/[\w.]/.test(letter)) {
+            end++;
+          } else if (letter === '(' || letter === '[') {
+            var depth = 0;
+            do {
+              var inner = text.charAt(end);
+              if (inner === '(' || inner === '[') depth++;
+              if (inner === ')' || inner === ']') depth--;
+              end++;
+            } while (end < text.length && depth > 0);
+          } else {
+            break;
+          }
+        }
+        return [start, end];
+      }
+
+      // How many numbers a value written out has, where that can be told from how it is written
+      // or from how its name was declared; 0 where it cannot.
+      function sizeWritten(text, declared) {
+        text = text.trim();
+        var taken = /\.([xyzwrgbastpq]{1,4})$/.exec(text);
+        if (taken) return taken[1].length;
+        var made = /^(vec([234])|float)\s*\(/.exec(text);
+        if (made && valueAfter(text, 0)[1] === text.length) return made[2] ? Number(made[2]) : 1;
+        if (/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(text)) return 1;
+        return /^\w+$/.test(text) && typeof declared[text] === 'number' ? declared[text] : 0;
+      }
+
+      // How many numbers each name of a shader stands for, by how it is declared.
+      function declaredIn(source) {
+        var declared = {};
+        source.replace(/\b(float|vec([234]))\s+(\w+)\s*[;,=)\[]/g, function (whole, kind, parts, name) {
+          var size = parts ? Number(parts) : 1;
+          // A name declared as two kinds in two places tells nothing.
+          declared[name] = declared[name] === undefined || declared[name] === size ? size : 'unsure';
+          return whole;
+        });
+        return declared;
+      }
+
+      // A translated shader changed so that what its compiler complained of is gone; null when
+      // none of the complaints is one that can be mended. `messages` is all it said of one line,
+      // `line` that line, counted from one.
+      function mend(source, messages, line) {
+        messages = Array.isArray(messages) ? messages : [messages];
+        for (var which = 0; which < messages.length; which++) {
+          var mended = mendOne(source, String(messages[which]), line);
+          if (mended !== null) return mended;
+        }
+        return null;
+      }
+
+      function mendOne(source, message, line) {
+        // A function given vectors of different sizes.
+        var call = /'(\w+)' : no matching overloaded function found/.exec(message);
+        if (call) {
+          if (!LENIENT[call[1]] || source.indexOf('wallaero_' + call[1] + '(') >= 0) return null;
+          var body = source.replace(new RegExp('\\b' + call[1] + '\\s*\\(', 'g'), 'wallaero_' + call[1] + '(');
+          var mark = body.indexOf('\n#define log10(');
+          if (mark < 0) return null;
+          var after = body.indexOf('\n', mark + 1) + 1;
+          return body.slice(0, after) + overloads(call[1]) + '\n' + body.slice(after);
+        }
+        var lines = source.split('\n');
+        var text = lines[line - 1];
+        if (!(line > 0) || text === undefined) return null;
+
+        // Two values of different sizes joined by a sign: the larger is cut to the smaller. A yes
+        // or no joined to a number counts as one or nought.
+        var joined = /'([-+*\/])' : wrong operand types.*left-hand operand of type '([^']*)' and a right operand of type '([^']*)'/.exec(message);
+        if (joined) {
+          var left = sizeNamed(joined[2]), right = sizeNamed(joined[3]);
+          if (left === 0 || right === 0 || left === right) return null;
+          var declared = declaredIn(source);
+          var best = null;
+          for (var at = 0; at < text.length; at++) {
+            if (text.charAt(at) !== joined[1] || text.charAt(at + 1) === '=' || text.charAt(at + 1) === joined[1] || text.charAt(at - 1) === joined[1]) continue;
+            var before = valueBefore(text, at), behind = valueAfter(text, at + 1);
+            // A sign with nothing before it belongs to the number after it.
+            if (before[0] === before[1] || behind[0] === behind[1] || /^(\d+\.?\d*|\.\d+)[eE]$/.test(text.slice(before[0], before[1]))) continue;
+            var first = sizeWritten(text.slice(before[0], before[1]), declared), second = sizeWritten(text.slice(behind[0], behind[1]), declared);
+            var wantsLeft = left === 'bool' ? 0 : left, wantsRight = right === 'bool' ? 0 : right;
+            if ((first !== 0 && wantsLeft !== 0 && first !== wantsLeft) || (second !== 0 && wantsRight !== 0 && second !== wantsRight)) continue;
+            var sure = (first !== 0 ? 1 : 0) + (second !== 0 ? 1 : 0);
+            if (!best || sure > best.sure) best = { sure: sure, before: before, behind: behind };
+          }
+          if (!best) return null;
+          var cut, where;
+          if (left === 'bool' || right === 'bool') {
+            cut = 'float';
+            where = left === 'bool' ? best.before : best.behind;
+          } else {
+            if (left === 1 || right === 1) return null;
+            cut = 'vec' + Math.min(left, right);
+            where = left > right ? best.before : best.behind;
+          }
+          lines[line - 1] = text.slice(0, where[0]) + cut + '(' + text.slice(where[0], where[1]) + ')' + text.slice(where[1]);
+          return lines.join('\n');
+        }
+
+        // A vector put where a smaller one or a single number belongs loses its last parts.
+        var convert = /cannot convert from '([^']*)' to '([^']*)'/.exec(message);
+        if (convert) {
+          var from = sizeNamed(convert[1]), to = sizeNamed(convert[2]);
+          if (typeof to !== 'number' || to === 0 || typeof from !== 'number' || from === 0 || (from !== 1 && from < to)) return null;
+          var type = to === 1 ? 'float' : 'vec' + to;
+          // The statements of the line, one after another: the first that gives a value to
+          // something of that size, and has not been mended already, is mended.
+          var names = declaredIn(source);
+          var start = 0;
+          while (start < text.length) {
+            var depth = 0, stop = -1, sign = -1;
+            for (var i = start; i < text.length; i++) {
+              var letter = text.charAt(i);
+              if (letter === '(' || letter === '[') depth++;
+              if (letter === ')' || letter === ']') depth--;
+              if (letter === ';' && depth === 0) {
+                stop = i;
+                break;
+              }
+              if (letter === '=' && depth === 0 && sign < 0 && text.charAt(i + 1) !== '=' && '=!<>'.indexOf(text.charAt(i - 1)) < 0) sign = i;
+            }
+            if (stop < 0) break;
+            if (sign >= 0) {
+              // What is given the value: "vec3 b", "a.rgb", "b".
+              var target = text.slice(start, sign).replace(/[-+*\/]$/, '').trim();
+              var made = /^(?:const\s+)?(float|vec[234])\s+\w+$/.exec(target);
+              var size = made ? (made[1] === 'float' ? 1 : Number(made[1].charAt(3))) : sizeWritten(target, names);
+              var given = text.slice(sign + 1, stop).trim();
+              var done = given.indexOf(type + '(') === 0 && valueAfter(given, 0)[1] === given.length;
+              if ((size === 0 || size === to) && given !== '' && !done) {
+                lines[line - 1] = text.slice(0, sign + 1) + ' ' + type + '(' + given + ')' + text.slice(stop);
+                return lines.join('\n');
+              }
+            }
+            start = stop + 1;
+          }
+          return null;
+        }
+        return null;
+      }
+
       // The whole of a shader, ready to compile. `defines` are the switches of the effect.
       function translate(source, stage, defines, files) {
         var table = { GLSL: 1 };
@@ -658,7 +912,7 @@ public enum WallpaperEngineRuntime {
 
         // The numbers at a moment, in seconds since the scene began; a number the animation
         // does not have is left as `base` has it.
-        return function (seconds, base) {
+        function valueAt(seconds, base) {
           var frame = seconds * rate;
           if (length > 0) {
             if (mode === 'mirror') {
@@ -675,7 +929,16 @@ public enum WallpaperEngineRuntime {
             if (index < result.length) result[index] = (relative ? base[index] : 0) + at(keys, frame);
           });
           return result;
-        };
+        }
+        // How it plays: the name scripts know it by, whether it waits for one of them to start
+        // it, and the value of the same object whose animation it plays along with.
+        valueAt.called = typeof options.name === 'string' ? options.name : '';
+        valueAt.startsPaused = options.startpaused === true;
+        valueAt.mode = mode;
+        valueAt.rate = rate;
+        valueAt.frames = length;
+        valueAt.follows = options.parent && typeof options.parent === 'object' && typeof options.parent.key === 'string' ? options.parent.key : '';
+        return valueAt;
       }
 
       // --- What a script of a scene has to work with ----------------------------------------
@@ -1049,7 +1312,10 @@ public enum WallpaperEngineRuntime {
 
         // --- Programs ---------------------------------------------------------
 
-        function compile(type, source, what) {
+        // What the compiler last complained of, when it was asked not to say so itself.
+        var complaint = null;
+
+        function compile(type, source, what, quietly) {
           var shader = gl.createShader(type);
           gl.shaderSource(shader, source);
           gl.compileShader(shader);
@@ -1058,7 +1324,14 @@ public enum WallpaperEngineRuntime {
             // The line the compiler names, to make the reason readable.
             var line = /ERROR: \d+:(\d+)/.exec(problem);
             var text = line ? (source.split('\n')[Number(line[1]) - 1] || '').trim() : '';
-            note(what + ' does not compile: ' + problem.replace(/^ERROR: \d+:\d+: /, '') + (text ? ' — in “' + text.slice(0, 80) + '”' : ''));
+            var said = what + ' does not compile: ' + problem.replace(/^ERROR: \d+:\d+: /, '') + (text ? ' — in “' + text.slice(0, 80) + '”' : '');
+            // Everything it says of that line: the first complaint is not always the telling one.
+            var ofLine = (gl.getShaderInfoLog(shader) || '').split('\n').filter(function (each) {
+              var named = /ERROR: \d+:(\d+)/.exec(each);
+              return named && line && named[1] === line[1];
+            });
+            complaint = { stage: type === gl.VERTEX_SHADER ? 'vertex' : 'fragment', messages: ofLine, line: line ? Number(line[1]) : 0, said: said };
+            if (!quietly) note(said);
             gl.deleteShader(shader);
             return null;
           }
@@ -1066,9 +1339,10 @@ public enum WallpaperEngineRuntime {
         }
 
         // A program with what it takes: its uniforms by name, with their kinds.
-        function link(vertexSource, fragmentSource, what) {
-          var vertex = compile(gl.VERTEX_SHADER, vertexSource, what + ' (vertex)');
-          var fragment = vertex && compile(gl.FRAGMENT_SHADER, fragmentSource, what + ' (fragment)');
+        function link(vertexSource, fragmentSource, what, quietly) {
+          complaint = null;
+          var vertex = compile(gl.VERTEX_SHADER, vertexSource, what + ' (vertex)', quietly);
+          var fragment = vertex && compile(gl.FRAGMENT_SHADER, fragmentSource, what + ' (fragment)', quietly);
           if (!vertex || !fragment) return null;
           var program = gl.createProgram();
           gl.attachShader(program, vertex);
@@ -1258,6 +1532,7 @@ public enum WallpaperEngineRuntime {
         var time = 0;
         var frameTime = 1 / 60;
         var pointer = [0.5, 0.5];
+        var pointerSeen = false; // whether the pointer is over the wallpaper, as far as is known
         var pointerBefore = [0.5, 0.5];
         var spectrum = null;    // 64 bands left, 64 right, once a shader asks for the sound
         var wantsSound = false;
@@ -1352,9 +1627,20 @@ public enum WallpaperEngineRuntime {
             defaults[Number(slot[1])] = about['default'];
             if (about.combo && slotTextures[Number(slot[1])]) defines[about.combo] = 1;
           });
-          var program;
+          var program = null;
           try {
-            program = link(translate(vertexSource, 'vertex', defines, files), translate(fragmentSource, 'fragment', defines, files), what);
+            var sources = { vertex: translate(vertexSource, 'vertex', defines, files), fragment: translate(fragmentSource, 'fragment', defines, files) };
+            // A shader the compiler refuses is mended by what it said and tried again, a few times.
+            for (var attempt = 0; attempt < 24 && !program; attempt++) {
+              program = link(sources.vertex, sources.fragment, what, true);
+              if (program || !complaint) break;
+              var mended = mend(sources[complaint.stage], complaint.messages, complaint.line);
+              if (mended === null) {
+                note(complaint.said);
+                break;
+              }
+              sources[complaint.stage] = mended;
+            }
           } catch (error) {
             note(what + ': ' + error.message);
             return null;
@@ -1430,6 +1716,7 @@ public enum WallpaperEngineRuntime {
         // one with nothing behind it never again: what a script has made of it meanwhile stays.
 
         var things = [];         // everything of the scene that has a place: pictures, texts, particles
+        var motions = [];        // the animations of values, each with how far it has played
         var scripts = [];        // the scripts that are running
         var timers = [];         // what the scripts asked to be called later
         var shared = {};         // what the scripts keep for one another
@@ -1462,13 +1749,17 @@ public enum WallpaperEngineRuntime {
             if (kind === 'flag') return flag(raw, fallback);
             return numbers(raw, count, fallback);
           }
+          // An animation plays from the scene's start, or waits for a script to play it; `at` is
+          // how far it has played, in seconds. One that follows another plays as that one does.
+          var motion = curve ? { curve: curve, called: curve.called, at: 0, playing: !curve.startsPaused, speed: 1, leader: null } : null;
+          if (motion) motions.push(motion);
           // `bound`: a setting of the wallpaper stands behind it.
-          var value = { changes: !!curve, script: script, bound: !!(behind && behind.user !== undefined && behind.user !== null), now: base() };
+          var value = { changes: !!curve, motion: motion, script: script, bound: !!(behind && behind.user !== undefined && behind.user !== null), now: base() };
           value.read = function () {
             // A script carries on from what the value is; anything else starts from what the
             // scene says.
             var result = script && script.made !== undefined ? value.now : base();
-            if (curve) result = curve(time, result);
+            if (curve) result = curve((motion.leader || motion).at, result);
             if (script) result = runScript(script, result);
             value.now = result;
             return result;
@@ -1721,11 +2012,50 @@ public enum WallpaperEngineRuntime {
             return effect.forScripts;
           };
           object.getAnimationLayerCount = function () { return thing.puppet && thing.puppet.moving ? 1 : 0; };
-          // Other parts of an object a script may steer — an animation, a video — take what they
-          // are told and do nothing with it.
-          ['getAnimationLayer', 'getTextureAnimation', 'getVideoTexture', 'getAnimation', 'getMaterial'].forEach(function (name) {
-            object[name] = function () { return lenient({ visible: true, rate: 1, isPlaying: function () { return true; }, getFrame: function () { return 0; } }); };
-          });
+          // Other parts of an object a script may steer — the animation of a puppet, a video —
+          // take what they are told and do nothing with it.
+          function unsteered() {
+            return lenient({ visible: true, rate: 1, isPlaying: function () { return true; }, getFrame: function () { return 0; } });
+          }
+          ['getAnimationLayer', 'getTextureAnimation', 'getVideoTexture', 'getMaterial'].forEach(function (name) { object[name] = unsteered; });
+          // An animation of one of the object's values, by the name the scene gives it: to be
+          // played, paused and stopped. One that has run to its end plays from its start.
+          object.getAnimation = function (wanted) {
+            var found = null;
+            Object.keys(thing.lives).forEach(function (name) {
+              var motion = thing.lives[name].motion;
+              if (motion && !motion.leader && !found && (wanted === undefined || motion.called === wanted)) found = motion;
+            });
+            if (!found) return unsteered();
+            if (!found.forScripts) {
+              found.forScripts = lenient({
+                get name() { return found.called; },
+                get fps() { return found.curve.rate; },
+                get frameCount() { return found.curve.frames; },
+                get duration() { return found.curve.frames / found.curve.rate; },
+                get rate() { return found.speed; },
+                set rate(value) { found.speed = Number(value) || 0; },
+                play: function () {
+                  if (found.curve.mode === 'single' && found.at * found.curve.rate >= found.curve.frames) found.at = 0;
+                  found.playing = true;
+                  changed();
+                },
+                pause: function () { found.playing = false; },
+                stop: function () {
+                  found.playing = false;
+                  found.at = 0;
+                  changed();
+                },
+                isPlaying: function () { return found.playing; },
+                getFrame: function () { return found.at * found.curve.rate; },
+                setFrame: function (frame) {
+                  found.at = Math.max(0, Number(frame) || 0) / found.curve.rate;
+                  changed();
+                }
+              });
+            }
+            return found.forScripts;
+          };
           thing.forScripts = lenient(object);
           return thing.forScripts;
         }
@@ -1907,7 +2237,8 @@ public enum WallpaperEngineRuntime {
         var blendFragment = sampleLines.concat([
           'uniform sampler2D u_Scene;',
           'uniform vec2 u_SceneSize;',
-          'uniform int u_Mode;',
+          'uniform int u_Mode;'
+        ], BLEND_HELPERS, [
           'vec3 blend(vec3 A, vec3 B) {'
         ], BLENDS.map(function (formula, index) {
           return '  if (u_Mode == ' + (index + 1) + ') return ' + formula + ';';
@@ -2229,7 +2560,13 @@ public enum WallpaperEngineRuntime {
             if (thing.lives[name] || name === 'text' || name === 'volume' || name === 'pointsize') return;
             if (value && typeof value === 'object' && typeof value.script === 'string') thing.lives['~' + name] = liveOfAnyKind(value, thing);
           });
-          Object.keys(thing.lives).forEach(function (name) { thing.state[name] = thing.lives[name].now; });
+          Object.keys(thing.lives).forEach(function (name) {
+            thing.state[name] = thing.lives[name].now;
+            // Animations of several values of an object that the scene has tied together play as one.
+            var motion = thing.lives[name].motion;
+            var leads = motion && motion.curve.follows ? thing.lives[motion.curve.follows] : null;
+            if (leads && leads.motion && leads.motion !== motion) motion.leader = leads.motion;
+          });
           if (object.id !== undefined) byId[String(object.id)] = thing;
           things.push(thing);
           return thing;
@@ -2242,10 +2579,11 @@ public enum WallpaperEngineRuntime {
         }
 
         // Where an object stands on what it is drawn on — the scene, or the layer that holds it —
-        // how see-through it is there, and whether it shows. One that hangs on another has its
-        // place, size and turn counted from that one, is as see-through as that one makes it, and
-        // is hidden with it. With `whole`, where it stands on the scene whatever holds it: for
-        // telling what the pointer is over. `above` is whether everything it hangs on shows.
+        // and whether it shows. One that hangs on another has its place, size and turn counted
+        // from that one and is hidden with it; how see-through it is, is its own: scenes hang
+        // what shows on layers that do not, to move it about. With `whole`, where it stands on
+        // the scene whatever holds it: for telling what the pointer is over. `above` is whether
+        // everything it hangs on shows.
         function standing(thing, whole, depth) {
           var state = thing.state;
           var matrix = matrixOf(state.origin, state.angles, state.scale);
@@ -2256,11 +2594,8 @@ public enum WallpaperEngineRuntime {
             var up = standing(parent, whole, (depth || 0) + 1);
             above = up.visible;
             // Drawn into the layer that holds it, an object is placed in that layer's own
-            // coordinates; the layer's place and opacity are added when the layer is drawn.
-            if (!parent.holds || whole) {
-              matrix = times(up.matrix, matrix);
-              alpha *= up.alpha;
-            }
+            // coordinates; the layer's place is added when the layer is drawn.
+            if (!parent.holds || whole) matrix = times(up.matrix, matrix);
           } else if (eye && eye.on) {
             // What hangs together moves with the pointer together.
             var moved = shifted(thing);
@@ -2866,6 +3201,36 @@ public enum WallpaperEngineRuntime {
           '}'
         ].join('\n'), 'the player\'s own shader');
         var FLOATS = 12; // to a particle, for the shader
+        // Particles drawn as a rope: one band through them all, in the order they were made, as
+        // wide as each is large. The picture is laid across the band.
+        var ropeProgram = link([
+          '#version 300 es',
+          'in vec4 a_Place;',  // where a point of the band's edge is, and where across the picture
+          'in vec4 a_Color;',
+          'uniform vec2 u_Scene;',
+          'out vec2 v_Uv;',
+          'out vec4 v_Color;',
+          'void main() {',
+          '  gl_Position = vec4(2.0 * a_Place.x / u_Scene.x - 1.0, 1.0 - 2.0 * a_Place.y / u_Scene.y, 0.0, 1.0);',
+          '  v_Uv = vec2(a_Place.z, 0.5);',
+          '  v_Color = a_Color;',
+          '}'
+        ].join('\n'), [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'in vec4 v_Color;',
+          'uniform sampler2D u_Texture;',
+          'uniform int u_Channels;',
+          'uniform float u_Bright;',
+          'out vec4 color;',
+          'void main() {',
+          '  vec4 c = texture(u_Texture, v_Uv);',
+          '  if (u_Channels == 1) c = vec4(1.0, 1.0, 1.0, c.r);',
+          '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
+          '  color = vec4(c.rgb * v_Color.rgb * u_Bright, c.a * v_Color.a);',
+          '}'
+        ].join('\n'), 'the player\'s own shader');
 
         function mix(from, to, share) {
           return from + (to - from) * share;
@@ -2937,6 +3302,18 @@ public enum WallpaperEngineRuntime {
                 var speed = mix(least, most, Math.random());
                 particle.vx += Math.cos(heading + wander) * speed;
                 particle.vy += Math.sin(heading + wander) * speed;
+              };
+            case 'mapsequencearoundcontrolpoint':
+              // One particle after another is sent off a step further round: so many to a turn.
+              var toTurn = Math.max(1, Math.round(number(said.count, 1)));
+              var offLeast = numbers(said.speedmin, 3, 0), offMost = numbers(said.speedmax, 3, 0);
+              return function (particle) {
+                var turn = ((particle.id - 1) % toTurn) / toTurn * Math.PI * 2;
+                var share = Math.random();
+                var x = mix(offLeast[0], offMost[0], share), y = mix(offLeast[1], offMost[1], share);
+                particle.vx += x * Math.cos(turn) - y * Math.sin(turn);
+                particle.vy += x * Math.sin(turn) + y * Math.cos(turn);
+                particle.vz += mix(offLeast[2], offMost[2], share);
               };
             default:
               note('“' + system.name + '”: what sets up a particle by “' + said.name + '” is not played');
@@ -3024,6 +3401,38 @@ public enum WallpaperEngineRuntime {
                 particle.vx += along[0] * push * (smoothNoise(particle.x * grain + at, particle.y * grain, 4096, 5) - 0.5) * 2;
                 particle.vy += along[1] * push * (smoothNoise(particle.x * grain, particle.y * grain + at, 4096, 6) - 0.5) * 2;
               };
+            case 'controlpointattract':
+              // Pulled toward one of the system's points, or pushed from it, while nearer to it
+              // than the threshold.
+              var toward = number(said.controlpoint, 0), pull = number(said.scale, 0), reach = number(said.threshold, 0);
+              var beside = numbers(said.origin, 3, 0);
+              return function (particle, seconds) {
+                var point = system.pointAt(toward);
+                var dx = point[0] + beside[0] - particle.x, dy = point[1] + beside[1] - particle.y, dz = point[2] + beside[2] - particle.z;
+                var far = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (far < 0.0001 || (reach > 0 && far > reach)) return;
+                var by = pull * seconds / far;
+                particle.vx += dx * by;
+                particle.vy += dy * by;
+                particle.vz += dz * by;
+              };
+            case 'vortex':
+              // Swept round one of the system's points: fastest within the inner distance, less
+              // and less up to the outer one.
+              var about = number(said.controlpoint, 0), swirlAt = numbers(said.offset, 3, 0);
+              var inner = number(said.distanceinner, 0), outer = number(said.distanceouter, 0);
+              var swiftest = number(said.speedinner, 0), slowest = number(said.speedouter, 0);
+              var handed = numbers(said.axis, 3, [0, 0, 1])[2] < 0 ? -1 : 1;
+              return function (particle, seconds) {
+                var point = system.pointAt(about);
+                var dx = particle.x - point[0] - swirlAt[0], dy = particle.y - point[1] - swirlAt[1];
+                var far = Math.sqrt(dx * dx + dy * dy);
+                if (far < 0.0001) return;
+                var out = outer > inner ? Math.max(0, Math.min(1, (far - inner) / (outer - inner))) : (far > outer ? 1 : 0);
+                var by = mix(swiftest, slowest, out) * seconds * handed / far;
+                particle.vx -= dy * by;
+                particle.vy += dx * by;
+              };
             default:
               note('“' + system.name + '”: what changes a particle by “' + said.name + '” is not played');
               return null;
@@ -3061,8 +3470,30 @@ public enum WallpaperEngineRuntime {
             system.tint = over.colorn !== undefined ? color(over.colorn, 1) : [1, 1, 1];
           };
           system.settle();
+          // The points a system's particles are counted from. One may follow the pointer: a
+          // system that makes its particles there trails the mouse.
+          var points = (Array.isArray(said.controlpoint) ? said.controlpoint : []).map(function (point) {
+            return { id: number(point.id, 0), follows: (number(point.flags, 0) & 1) !== 0, offset: numbers(point.offset, 3, 0) };
+          });
+          var pointerThere = [0, 0]; // the pointer, in the system's own coordinates
+          function follows(index) {
+            return points.some(function (point) { return point.id === index && point.follows; });
+          }
+          system.pointAt = function (index) {
+            var point = points.filter(function (each) { return each.id === index; })[0];
+            if (!point) return [0, 0, 0];
+            return point.follows ? [pointerThere[0] + point.offset[0], pointerThere[1] + point.offset[1], point.offset[2]] : point.offset;
+          };
+          function findPointer() {
+            var matrix = standing(system, true).matrix;
+            var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
+            if (Math.abs(area) < 1e-9) return;
+            var dx = pointer[0] * sceneWidth - matrix[12], dy = (1 - pointer[1]) * sceneHeight - matrix[13];
+            pointerThere = [(dx * matrix[5] - dy * matrix[4]) / area, (dy * matrix[0] - dx * matrix[1]) / area];
+          }
           system.emitters = (said.emitter || []).map(function (emitter) {
             return {
+              point: number(emitter.controlpoint, 0), withPointer: follows(number(emitter.controlpoint, 0)),
               box: key(emitter.name) === 'boxrandom',
               origin: numbers(emitter.origin, 3, 0), directions: numbers(emitter.directions, 3, 1),
               least: numbers(emitter.distancemin, 3, 0), most: numbers(emitter.distancemax, 3, 256),
@@ -3075,7 +3506,8 @@ public enum WallpaperEngineRuntime {
           system.initializers = (said.initializer || []).map(function (each) { return initializer(each, system); }).filter(Boolean);
           system.operators = (said.operator || []).map(function (each) { return operator(each, system); }).filter(Boolean);
           (said.renderer || []).forEach(function (renderer) {
-            if (key(renderer.name) !== 'sprite') note('“' + name + '”: particles drawn as “' + renderer.name + '” are drawn as plain sprites');
+            if (key(renderer.name) === 'rope') system.rope = true;
+            else if (key(renderer.name) !== 'sprite') note('“' + name + '”: particles drawn as “' + renderer.name + '” are drawn as plain sprites');
           });
           system.data = new Float32Array(system.most * FLOATS);
           system.buffer = gl.createBuffer();
@@ -3113,9 +3545,10 @@ public enum WallpaperEngineRuntime {
                 away[axis] = toward[axis] * far * emitter.directions[axis];
               }
             }
-            particle.x = emitter.origin[0] + away[0];
-            particle.y = emitter.origin[1] + away[1];
-            particle.z = emitter.origin[2] + away[2];
+            var from = system.pointAt(emitter.point);
+            particle.x = emitter.origin[0] + away[0] + from[0];
+            particle.y = emitter.origin[1] + away[1] + from[1];
+            particle.z = emitter.origin[2] + away[2] + from[2];
             var speed = mix(emitter.speedLeast, emitter.speedMost, Math.random());
             var length = Math.sqrt(away[0] * away[0] + away[1] * away[1] + away[2] * away[2]);
             if (speed !== 0 && length > 0) {
@@ -3133,8 +3566,11 @@ public enum WallpaperEngineRuntime {
 
           system.step = function (seconds) {
             system.age += seconds;
+            if (points.some(function (point) { return point.follows; })) findPointer();
             system.emitters.forEach(function (emitter) {
               if (system.age < emitter.waits) return;
+              // Particles made where the pointer is are not made while it is away.
+              if (emitter.withPointer && !pointerSeen) return;
               if (emitter.burst > 0) {
                 for (var first = 0; first < emitter.burst && system.particles.length < system.most; first++) make(emitter);
                 emitter.burst = 0;
@@ -3221,6 +3657,72 @@ public enum WallpaperEngineRuntime {
             gl.bindVertexArray(null);
           };
 
+          if (system.rope && ropeProgram) {
+            // Two points to a particle, one at each edge of the band, with its color.
+            var band = new Float32Array(system.most * 16);
+            var bandBuffer = gl.createBuffer();
+            var bandShape = gl.createVertexArray();
+            gl.bindVertexArray(bandShape);
+            gl.bindBuffer(gl.ARRAY_BUFFER, bandBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, band.byteLength, gl.DYNAMIC_DRAW);
+            gl.enableVertexAttribArray(2);
+            gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, 0);
+            gl.enableVertexAttribArray(3);
+            gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 32, 16);
+            gl.bindVertexArray(null);
+            system.draw = function () {
+              var count = Math.min(system.particles.length, system.most);
+              var stands = standing(system);
+              if (count < 2 || !stands.visible) return;
+              var state = system.state;
+              var matrix = stands.matrix;
+              var wide = Math.sqrt(Math.abs(matrix[0] * matrix[5] - matrix[4] * matrix[1])) * system.sizeBy;
+              var see = system.alphaBy * stands.alpha;
+              var spots = [];
+              var i;
+              for (i = 0; i < count; i++) {
+                var particle = system.particles[i];
+                var localX = particle.x + particle.shiftX, localY = particle.y + particle.shiftY;
+                spots.push([matrix[12] - surface.left + matrix[0] * localX + matrix[4] * localY,
+                            matrix[13] - surface.bottom + matrix[1] * localX + matrix[5] * localY]);
+              }
+              for (i = 0; i < count; i++) {
+                var each = system.particles[i];
+                var before = spots[Math.max(0, i - 1)], after = spots[Math.min(count - 1, i + 1)];
+                var dx = after[0] - before[0], dy = after[1] - before[1];
+                var far = Math.sqrt(dx * dx + dy * dy);
+                // Where the band does not go on, it has no width: a rope lying in one spot is not seen.
+                var half = far > 0.0001 ? each.size * each.sizeNow * wide / 2 / far : 0;
+                for (var side = 0; side < 2; side++) {
+                  var at = (i * 2 + side) * 8, turn = side ? 1 : -1;
+                  band[at] = spots[i][0] - dy * half * turn;
+                  band[at + 1] = spots[i][1] + dx * half * turn;
+                  band[at + 2] = side;
+                  band[at + 3] = 0;
+                  band[at + 4] = each.red * each.redNow * system.tint[0] * state.color[0];
+                  band[at + 5] = each.green * each.greenNow * system.tint[1] * state.color[1];
+                  band[at + 6] = each.blue * each.blueNow * system.tint[2] * state.color[2];
+                  band[at + 7] = Math.max(0, each.alpha * each.alphaNow * see);
+                }
+              }
+              gl.useProgram(ropeProgram.program);
+              gl.enable(gl.BLEND);
+              if (system.additive) gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
+              else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, system.picture.layers[0].texture);
+              gl.uniform1i(ropeProgram.uniforms.u_Texture.location, 0);
+              gl.uniform1i(ropeProgram.uniforms.u_Channels.location, CHANNELS[system.picture.channels] || 0);
+              gl.uniform1f(ropeProgram.uniforms.u_Bright.location, system.bright);
+              gl.uniform2f(ropeProgram.uniforms.u_Scene.location, surface.width, surface.height);
+              gl.bindVertexArray(bandShape);
+              gl.bindBuffer(gl.ARRAY_BUFFER, bandBuffer);
+              gl.bufferSubData(gl.ARRAY_BUFFER, 0, band.subarray(0, count * 16));
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, count * 2);
+              gl.bindVertexArray(null);
+            };
+          }
+
           // A system begins as if it had been running for a while already.
           var warm = Math.min(60, Math.max(0, number(said.starttime, 0)));
           for (var played = 0; played < warm; played += 1 / 20) system.step(1 / 20);
@@ -3274,8 +3776,8 @@ public enum WallpaperEngineRuntime {
           audio.addEventListener('error', function () { note('“' + name + '”: this web engine cannot play ' + list[index].replace(/^.*\./, '.') + ' sound'); });
           if (mode === 'random') index = Math.floor(Math.random() * list.length);
 
-          // Plays while the scene shows the object and nothing has stopped it, as loud as the
-          // scene says: a share of what the app lets the wallpaper have.
+          // Plays while the scene shows the object, it is not turned all the way down and nothing
+          // has stopped it, as loud as the scene says: a share of what the app lets the wallpaper have.
           thing.settle = function () {
             var share = Math.max(0, Math.min(1, thing.state.volume[0]));
             if (share !== loud) {
@@ -3285,7 +3787,9 @@ public enum WallpaperEngineRuntime {
               if (host && host.apply) host.apply({});
               else audio.volume = share;
             }
-            var sounds = wanted && standing(thing).visible;
+            // One turned all the way down is not played at all: playing it unheard keeps the
+            // Mac's sound awake for nothing.
+            var sounds = wanted && share > 0 && standing(thing).visible;
             if (sounds && audio.paused && !audio.ended) start();
             if (!sounds && !audio.paused) audio.pause();
           };
@@ -3418,7 +3922,10 @@ public enum WallpaperEngineRuntime {
         function isMoving() {
           return objects.some(function (object) {
             // What changes by itself over time, also whether the object shows.
-            if (Object.keys(object.lives).some(function (name) { return object.lives[name].changes; })) return true;
+            if (Object.keys(object.lives).some(function (name) {
+              var value = object.lives[name];
+              return value.changes && (!value.motion || (value.motion.leader || value.motion).playing);
+            })) return true;
             if (!standing(object).visible) return false;
             return object.moving || (object.effects || []).some(function (effect) { return effect.shown.changes; });
           });
@@ -3619,6 +4126,16 @@ public enum WallpaperEngineRuntime {
           resize();
           serveScripts();
           look(passed);
+          // Animations move on; one that plays once stops at its end.
+          motions.forEach(function (motion) {
+            if (motion.leader || !motion.playing) return;
+            motion.at += passed * motion.speed;
+            var curve = motion.curve;
+            if (curve.mode === 'single' && curve.frames > 0 && motion.at * curve.rate >= curve.frames) {
+              motion.at = curve.frames / curve.rate;
+              motion.playing = false;
+            }
+          });
           things.forEach(function (thing) { refresh(thing, false); });
           // A script nothing has asked for by now belongs to something that could not be made.
           scripts.forEach(function (script) {
@@ -3657,6 +4174,7 @@ public enum WallpaperEngineRuntime {
           var left = box.left + (box.width - width) * (isFinite(kept[0]) ? kept[0] : 50) / 100;
           var top = box.top + (box.height - height) * (isFinite(kept[1]) ? kept[1] : 50) / 100;
           pointer = [(event.clientX - left) / width, (event.clientY - top) / height];
+          pointerSeen = true;
         }
         // What the mouse does is told to the scripts; whatever they change by it is then drawn.
         function mouse(kind) {
@@ -3668,7 +4186,9 @@ public enum WallpaperEngineRuntime {
             if (dirty || eye.on) wake();
           };
         }
-        var mice = { pointermove: mouse('move'), pointerdown: mouse('down'), pointerup: mouse('up') };
+        var mice = { pointermove: mouse('move'), pointerdown: mouse('down'), pointerup: mouse('up'),
+                     // Gone from the wallpaper: over a window, or to another display.
+                     pointerleave: function () { pointerSeen = false; } };
         Object.keys(mice).forEach(function (name) { window.addEventListener(name, mice[name], true); });
         window.addEventListener('resize', changed);
 
@@ -3755,9 +4275,12 @@ public enum WallpaperEngineRuntime {
         // The translation of a shader alone, for whoever wants to see or check it.
         translate: translate,
         annotations: annotations,
-        // The way a value changes over time, and a script made ready: also for checking.
+        // The way a value changes over time, a script made ready, a refused shader mended and
+        // numbers read from a text: also for checking.
         curve: curveOf,
-        script: compileScript
+        script: compileScript,
+        mend: mend,
+        numbers: numbers
       };
     })();
 

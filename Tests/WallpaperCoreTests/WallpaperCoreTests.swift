@@ -1552,6 +1552,120 @@ final class WallpaperEngineShaderTests: XCTestCase {
         XCTAssertTrue(try player("curve").call(withArguments: [["options": ["fps": 30]]]).isNull)
     }
 
+    func testAnAnimationSaysHowItIsPlayed() throws {
+        // One that a script plays by its name, and one tied to it that plays along.
+        context.evaluateScript("""
+        var keys = [{ frame: 0, value: 0 }, { frame: 90, value: 9 }];
+        var named = window.WallaeroEngine.curve({ c0: keys, options: { fps: 30, length: 90, mode: 'single', name: 'edcv', startpaused: true } });
+        var tied = window.WallaeroEngine.curve({ c0: keys, options: { fps: 30, length: 90, mode: 'single', parent: { key: 'origin' } } });
+        var plain = window.WallaeroEngine.curve({ c0: keys, options: { fps: 30, length: 90, mode: 'loop' } });
+        """)
+        func says(_ which: String, _ what: String) -> String? {
+            context.evaluateScript("String(\(which).\(what))")?.toString()
+        }
+        XCTAssertEqual([says("named", "called"), says("named", "startsPaused"), says("named", "mode"), says("named", "frames"), says("named", "rate")],
+                       ["edcv", "true", "single", "90", "30"])
+        XCTAssertEqual([says("tied", "follows"), says("tied", "startsPaused")], ["origin", "false"])
+        XCTAssertEqual([says("plain", "called"), says("plain", "follows"), says("plain", "startsPaused")], ["", "", "false"])
+        // It is still asked for its value by how far it has played.
+        XCTAssertEqual(context.evaluateScript("named(1.5, [0]).join()")?.toString(), "4.5")
+    }
+
+    func testNumbersAreReadHoweverTheyAreSetApart() throws {
+        func numbers(_ text: String, _ count: Int) -> String? {
+            try? player("numbers").call(withArguments: [text, count, 7])?.toArray().map { "\($0)" }.joined(separator: " ")
+        }
+        XCTAssertEqual(numbers("990.000 540.000 0.000", 3), "990 540 0")
+        // An effect's shader may give its vectors with commas.
+        XCTAssertEqual(numbers("0.0, 1.0", 2), "0 1")
+        XCTAssertEqual(numbers(" 1,2 ,3", 4), "1 2 3 7")
+    }
+
+    func testAShadersNotesOnItsSettingsMayBeLooselyWritten() throws {
+        let source = """
+        uniform float u_userSpeed; // {"material":"Speed","default":1,"range":[0,01]}
+        uniform vec2 u_Bounds; // {"default":"0.0, 1.0","material":"bounds",}
+        // [COMBO] {"material":"Shape","combo":"SHAPE","type":"options","default":02,}
+        """
+        let said = try XCTUnwrap(try player("annotations").call(withArguments: [source]))
+        let uniforms = try XCTUnwrap(said.objectForKeyedSubscript("uniforms"))
+        XCTAssertEqual(uniforms.objectForKeyedSubscript("u_userSpeed")?.objectForKeyedSubscript("material")?.toString(), "Speed")
+        XCTAssertEqual(uniforms.objectForKeyedSubscript("u_Bounds")?.objectForKeyedSubscript("default")?.toString(), "0.0, 1.0")
+        XCTAssertEqual(said.objectForKeyedSubscript("combos")?.objectForKeyedSubscript("SHAPE")?.toInt32(), 2)
+    }
+
+    func testAShaderDirect3DWouldTakeIsMended() throws {
+        // Written as scenes write them: vectors of different sizes in one function and joined
+        // by a sign, a vector given to a smaller one and to a single number.
+        let source = """
+        varying vec2 v_Uv;
+        uniform sampler2D g_Texture0;
+        uniform vec3 u_Tone;
+        void main() {
+          vec4 albedo = texSample2D(g_Texture0, v_Uv);
+          albedo.rgb = lerp(albedo, u_Tone, 0.5);
+          vec3 base = albedo; float level = albedo;
+          albedo.rgb = albedo * u_Tone - 1.0;
+          albedo.rgb = u_Tone * (level > 0.5);
+          if (level == 1.0) albedo.rgb = albedo;
+          gl_FragColor = albedo;
+        }
+        """
+        var shader = try whole(source)
+        func line(of text: String) throws -> Int {
+            try XCTUnwrap(shader.components(separatedBy: "\n").firstIndex { $0.contains(text) }) + 1
+        }
+        func mend(_ messages: [String], at line: Int) throws -> String? {
+            let mended = try XCTUnwrap(try player("mend").call(withArguments: [shader, messages, line]))
+            return mended.isNull ? nil : mended.toString()
+        }
+        let vector4 = "'highp 4-component vector of float'", vector3 = "'highp 3-component vector of float'"
+
+        // A function is given under a name of its own, for every mixture of sizes.
+        var at = try line(of: "mix(albedo, u_Tone, 0.5)")
+        shader = try XCTUnwrap(try mend(["ERROR: 0:\(at): 'mix' : no matching overloaded function found", "ERROR: 0:\(at): '=' : dimension mismatch"], at: at))
+        XCTAssertTrue(shader.contains("albedo.rgb = wallaero_mix(albedo, u_Tone, 0.5);"))
+        XCTAssertTrue(shader.contains("vec3 wallaero_mix(vec4 v0, vec3 v1, float v2) { return mix(vec3(v0), v1, vec3(v2)); }"))
+        // Once is enough: the same complaint again is not one this mends.
+        at = try line(of: "wallaero_mix(albedo")
+        XCTAssertNil(try mend(["ERROR: 0:\(at): 'mix' : no matching overloaded function found"], at: at))
+
+        // Of the statements of a line, the one that gives a value to something of that size.
+        at = try line(of: "vec3 base = albedo;")
+        shader = try XCTUnwrap(try mend(["ERROR: 0:\(at): '=' : dimension mismatch",
+                                         "ERROR: 0:\(at): '=' : cannot convert from \(vector4) to 'highp float'"], at: at))
+        XCTAssertTrue(shader.contains("vec3 base = albedo; float level = float(albedo);"))
+        shader = try XCTUnwrap(try mend(["ERROR: 0:\(at): '=' : cannot convert from \(vector4) to \(vector3)"], at: at))
+        XCTAssertTrue(shader.contains("vec3 base = vec3(albedo); float level = float(albedo);"))
+
+        // Of two values joined by a sign, the larger is cut to the smaller.
+        at = try line(of: "albedo * u_Tone - 1.0")
+        shader = try XCTUnwrap(try mend(["ERROR: 0:\(at): '*' : wrong operand types - no operation '*' exists that takes a left-hand operand of type \(vector4) and a right operand of type 'uniform highp 3-component vector of float' (or there is no acceptable conversion)"], at: at))
+        XCTAssertTrue(shader.contains("albedo.rgb = vec3(albedo) * u_Tone - 1.0;"))
+        // A yes or no joined to a number counts as a number.
+        at = try line(of: "u_Tone * (level > 0.5)")
+        shader = try XCTUnwrap(try mend(["ERROR: 0:\(at): '*' : wrong operand types - no operation '*' exists that takes a left-hand operand of type 'uniform highp 3-component vector of float' and a right operand of type 'bool' (or there is no acceptable conversion)"], at: at))
+        XCTAssertTrue(shader.contains("albedo.rgb = u_Tone * float((level > 0.5));"))
+        // A comparison is not taken for the giving of a value.
+        at = try line(of: "if (level == 1.0)")
+        shader = try XCTUnwrap(try mend(["ERROR: 0:\(at): 'assign' : cannot convert from \(vector4) to \(vector3)"], at: at))
+        XCTAssertTrue(shader.contains("if (level == 1.0) albedo.rgb = vec3(albedo);"))
+
+        // What cannot be mended is left to be reported: a vector cannot grow, and other complaints.
+        XCTAssertNil(try mend(["ERROR: 0:\(at): 'assign' : cannot convert from \(vector3) to \(vector4)"], at: at))
+        XCTAssertNil(try mend(["ERROR: 0:3: 'foo' : undeclared identifier"], at: 3))
+    }
+
+    func testTheTintBlendModeKeepsHowLightThePictureWas() throws {
+        // The tint effect's own mode: as light as the picture was, in the color given.
+        let source = "#include \"common_blending.h\"\nvoid main() { gl_FragColor = vec4(ApplyBlending(BLENDMODE, vec3(0.5), vec3(1, 0, 0), 1), 1); }"
+        let tinted = try translate(source, switches: ["BLENDMODE": 30])
+        XCTAssertTrue(tinted.contains("return max(A.r, max(A.g, A.b)) * B;"))
+        XCTAssertFalse(tinted.contains("return A * B;"))
+        // The modes that take hue, saturation or lightness from one picture and the rest from the other.
+        XCTAssertTrue(try translate(source, switches: ["BLENDMODE": 28]).contains("return wallaeroSetLum(B, wallaeroLum(A));"))
+    }
+
     func testAnAnimationMayBeCountedFromTheScenesValueAndComeRoundSmoothly() throws {
         // As a real scene has it: something that bobs up and down. Two moments, the handles
         // left to the player, the numbers counted from the place the scene gives, and the
