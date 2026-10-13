@@ -141,7 +141,62 @@ public enum WallpaperEngineRuntime {
         'wallaeroSetLum(B, wallaeroLum(A))',
         'wallaeroSetLum(A, wallaeroLum(B))',
         // 30: tinted — as light as it was, in the other's color
-        'max(A.r, max(A.g, A.b)) * B'
+        'max(A.r, max(A.g, A.b)) * B',
+        // 31: added, without an upper end. A scene of three videos shows it: white writing on
+        // black laid over a face with this mode leaves the face and adds the writing.
+        'A + B',
+        // 32: what light effects — caustics — come set to. Taken for adding too; Wallpaper
+        // Engine's own list was not at hand.
+        'A + B'
+      ];
+
+      // The blend modes by name, as the header image editors' formulas are passed around in has
+      // them: for one value (ending in f) and for a color, and one that weighs a blend in.
+      var BLEND_NAMES = [
+        '#define BlendLinearDodgef BlendAddf',
+        '#define BlendLinearBurnf BlendSubstractf',
+        '#define BlendAddf(base, blend) min((base) + (blend), 1.0)',
+        '#define BlendSubstractf(base, blend) max((base) + (blend) - 1.0, 0.0)',
+        '#define BlendLightenf(base, blend) max((blend), (base))',
+        '#define BlendDarkenf(base, blend) min((blend), (base))',
+        '#define BlendLinearLightf(base, blend) ((blend) < 0.5 ? BlendLinearBurnf((base), (2.0 * (blend))) : BlendLinearDodgef((base), (2.0 * ((blend) - 0.5))))',
+        '#define BlendScreenf(base, blend) (1.0 - ((1.0 - (base)) * (1.0 - (blend))))',
+        '#define BlendOverlayf(base, blend) ((base) < 0.5 ? (2.0 * (base) * (blend)) : (1.0 - 2.0 * (1.0 - (base)) * (1.0 - (blend))))',
+        '#define BlendSoftLightf(base, blend) (((blend) < 0.5) ? (2.0 * (base) * (blend) + (base) * (base) * (1.0 - 2.0 * (blend))) : (sqrt(base) * (2.0 * (blend) - 1.0) + 2.0 * (base) * (1.0 - (blend))))',
+        '#define BlendColorDodgef(base, blend) (((blend) >= 1.0) ? (blend) : min((base) / (1.0 - (blend)), 1.0))',
+        '#define BlendColorBurnf(base, blend) (((blend) <= 0.0) ? (blend) : max((1.0 - ((1.0 - (base)) / (blend))), 0.0))',
+        '#define BlendVividLightf(base, blend) (((blend) < 0.5) ? BlendColorBurnf((base), (2.0 * (blend))) : BlendColorDodgef((base), (2.0 * ((blend) - 0.5))))',
+        '#define BlendPinLightf(base, blend) (((blend) < 0.5) ? BlendDarkenf((base), (2.0 * (blend))) : BlendLightenf((base), (2.0 * ((blend) - 0.5))))',
+        '#define BlendHardMixf(base, blend) ((BlendVividLightf((base), (blend)) < 0.5) ? 0.0 : 1.0)',
+        '#define BlendReflectf(base, blend) (((blend) >= 1.0) ? (blend) : min((base) * (base) / (1.0 - (blend)), 1.0))',
+        '#define Blend(base, blend, funcf) vec3(funcf((base).r, (blend).r), funcf((base).g, (blend).g), funcf((base).b, (blend).b))',
+        '#define BlendNormal(base, blend) (blend)',
+        '#define BlendLighten BlendLightenf',
+        '#define BlendDarken BlendDarkenf',
+        '#define BlendMultiply(base, blend) ((base) * (blend))',
+        '#define BlendAverage(base, blend) (((base) + (blend)) / 2.0)',
+        '#define BlendAdd(base, blend) min((base) + (blend), vec3(1.0))',
+        '#define BlendSubstract(base, blend) max((base) + (blend) - vec3(1.0), vec3(0.0))',
+        '#define BlendSubtract BlendSubstract',
+        '#define BlendDifference(base, blend) abs((base) - (blend))',
+        '#define BlendNegation(base, blend) (vec3(1.0) - abs(vec3(1.0) - (base) - (blend)))',
+        '#define BlendExclusion(base, blend) ((base) + (blend) - 2.0 * (base) * (blend))',
+        '#define BlendScreen(base, blend) Blend((base), (blend), BlendScreenf)',
+        '#define BlendOverlay(base, blend) Blend((base), (blend), BlendOverlayf)',
+        '#define BlendSoftLight(base, blend) Blend((base), (blend), BlendSoftLightf)',
+        '#define BlendHardLight(base, blend) BlendOverlay((blend), (base))',
+        '#define BlendColorDodge(base, blend) Blend((base), (blend), BlendColorDodgef)',
+        '#define BlendColorBurn(base, blend) Blend((base), (blend), BlendColorBurnf)',
+        '#define BlendLinearDodge BlendAdd',
+        '#define BlendLinearBurn BlendSubstract',
+        '#define BlendLinearLight(base, blend) Blend((base), (blend), BlendLinearLightf)',
+        '#define BlendVividLight(base, blend) Blend((base), (blend), BlendVividLightf)',
+        '#define BlendPinLight(base, blend) Blend((base), (blend), BlendPinLightf)',
+        '#define BlendHardMix(base, blend) Blend((base), (blend), BlendHardMixf)',
+        '#define BlendReflect(base, blend) Blend((base), (blend), BlendReflectf)',
+        '#define BlendGlow(base, blend) BlendReflect((blend), (base))',
+        '#define BlendPhoenix(base, blend) (min((base), (blend)) - max((base), (blend)) + vec3(1.0))',
+        '#define BlendOpacity(base, blend, F, O) (F((base), (blend)) * (O) + (base) * (1.0 - (O)))'
       ];
       // What the blend modes above are worked out with.
       var BLEND_HELPERS = [
@@ -189,7 +244,7 @@ public enum WallpaperEngineRuntime {
         ].join('\n'),
 
         // The blend modes go by number, in the order image editors list them.
-        'common_blending.h': BLEND_HELPERS.concat(['vec3 wallaeroBlend(vec3 A, vec3 B) {'], BLENDS.map(function (formula, index) {
+        'common_blending.h': BLEND_NAMES.concat(BLEND_HELPERS, ['vec3 wallaeroBlend(vec3 A, vec3 B) {'], BLENDS.map(function (formula, index) {
           return '#if BLENDMODE == ' + (index + 1) + '\n  return ' + formula + ';\n#endif';
         })).concat([
           '  return B;',
@@ -198,6 +253,43 @@ public enum WallpaperEngineRuntime {
           '  return mix(A, wallaeroBlend(A, B), opacity);',
           '}'
         ]).join('\n'),
+
+        // How an effect's result is put together with the picture it was made of: in place of it,
+        // blended over it, under it, or only where the picture is not. Not in packages; written by
+        // what the names say and by the settings scenes give it.
+        'common_composite.h': [
+          '#include "common_blending.h"',
+          'uniform vec3 g_CompositeColor; // {"material":"compositecolor","type":"color","default":"1 1 1"}',
+          'uniform float g_CompositeAlpha; // {"material":"compositealpha","default":1,"range":[0,2]}',
+          'uniform vec2 g_CompositeOffset; // {"material":"compositeoffset","default":"0 0"}',
+          'vec2 ApplyCompositeOffset(vec2 coords, vec2 resolution) {',
+          '#if COMPOSITE == 0',
+          '  return coords;',
+          '#else',
+          '  return coords - g_CompositeOffset / max(resolution, vec2(1.0));',
+          '#endif',
+          '}',
+          'vec4 ApplyComposite(vec4 base, vec4 made) {',
+          '#if COMPOSITE == 0',
+          '  return made;',
+          '#else',
+          '#if COMPOSITEMONO',
+          '  made.rgb = g_CompositeColor;',
+          '#else',
+          '  made.rgb *= g_CompositeColor;',
+          '#endif',
+          '  made.a = clamp(made.a * g_CompositeAlpha, 0.0, 1.0);',
+          '#if COMPOSITE == 2',
+          '  float under = base.a + made.a * (1.0 - base.a);',
+          '  return vec4((base.rgb * base.a + made.rgb * made.a * (1.0 - base.a)) / max(under, 0.0001), under);',
+          '#elif COMPOSITE == 3',
+          '  return vec4(made.rgb, made.a * (1.0 - base.a));',
+          '#else',
+          '  return vec4(ApplyBlending(BLENDMODE, mix(made.rgb, base.rgb, base.a), made.rgb, made.a), base.a + made.a * (1.0 - base.a));',
+          '#endif',
+          '#endif',
+          '}'
+        ].join('\n'),
 
         // The mapping of the unit square onto any four-cornered shape, as a matrix.
         'common_perspective.h': [
@@ -289,6 +381,22 @@ public enum WallpaperEngineRuntime {
         } catch (error) {
           return JSON.parse(text.replace(/([\[,:]\s*)0+(\d)/g, '$1$2').replace(/,(\s*[}\]])/g, '$1'));
         }
+      }
+
+      // The headers a shader includes, and those they include, as they are written: what they
+      // say of their settings in comments counts like what the shader says.
+      function headersOf(source, files, seen) {
+        seen = seen || {};
+        var texts = [];
+        String(source).replace(/^[ \t]*#[ \t]*include[ \t]+["<]([^">]+)[">]/gm, function (whole, named) {
+          var header = key(named.trim());
+          if (seen[header]) return whole;
+          seen[header] = true;
+          var text = HEADERS[header] !== undefined ? HEADERS[header] : (files || {})['shaders/' + header];
+          if (typeof text === 'string') texts.push(text, headersOf(text, files, seen));
+          return whole;
+        });
+        return texts.join('\n');
       }
 
       function annotations(source) {
@@ -678,7 +786,100 @@ public enum WallpaperEngineRuntime {
         return null;
       }
 
+      // A value the vertex shader hands to the fragment shader, or a setting both of them take,
+      // declared by the two with different sizes: Direct3D hands on what fits, and makes each
+      // shader by itself. The smaller declaration is made as large as the other, and where that
+      // shader used the value whole, it uses the parts it knew of. What the vertex shader then
+      // never sets of a value it hands on is nought. Gives both shaders, or null.
+      function mendPair(vertex, fragment, messages) {
+        var named = null;
+        (Array.isArray(messages) ? messages : [messages]).some(function (message) {
+          named = /Types of (varying|uniform) '(\w+)' differ/.exec(String(message));
+          return !!named;
+        });
+        if (!named) return null;
+        var name = named[2];
+        var handed = named[1] === 'varying';
+        var declared = new RegExp('^([ \\t]*' + (handed ? '(?:flat[ \\t]+|smooth[ \\t]+)?(?:in|out)' : 'uniform') +
+                                  '[ \\t]+(?:(?:highp|mediump|lowp)[ \\t]+)?)(float|vec[234])([ \\t]+' + name + '[ \\t]*;)', 'm');
+        var first = declared.exec(vertex), second = declared.exec(fragment);
+        if (!first || !second) return null;
+        function sizeOf(type) { return type === 'float' ? 1 : Number(type.charAt(3)); }
+        var sizes = [sizeOf(first[2]), sizeOf(second[2])];
+        if (sizes[0] === sizes[1]) return null;
+        var larger = sizes[0] > sizes[1] ? first[2] : second[2];
+        var parts = '.' + 'xyzw'.slice(0, Math.min(sizes[0], sizes[1]));
+        function widened(source, found, sets) {
+          var whole = new RegExp('\\b' + name + '\\b(?![ \\t]*\\.)', 'g');
+          var before = source.slice(0, found.index).replace(whole, name + parts);
+          var after = source.slice(found.index + found[0].length).replace(whole, name + parts);
+          if (sets) {
+            after = after.replace(/void\s+main\s*\(\s*(?:void)?\s*\)\s*\{/, function (opened) { return opened + ' ' + name + ' = ' + larger + '(0.0);'; });
+          }
+          return before + found[1] + larger + found[3] + after;
+        }
+        return sizes[0] < sizes[1] ? { vertex: widened(vertex, first, handed), fragment: fragment }
+                                   : { vertex: vertex, fragment: widened(fragment, second, false) };
+      }
+
       function mendOne(source, message, line) {
+        // A value handed to the fragment shader that it changes: it changes a copy of its own,
+        // made as its work begins.
+        var handed = /l-value required \(can't modify an input "(\w+)"\)/.exec(message);
+        if (handed) {
+          var own = 'wallaero_own_' + handed[1];
+          var given = new RegExp('^[ \\t]*(?:flat[ \\t]+|smooth[ \\t]+)?in[ \\t]+(?:(?:highp|mediump|lowp)[ \\t]+)?(float|vec[234])[ \\t]+' + handed[1] + '[ \\t]*;', 'm').exec(source);
+          if (!given || source.indexOf(own) >= 0) return null;
+          var upTo = given.index + given[0].length;
+          var rest = source.slice(upTo).replace(new RegExp('\\b' + handed[1] + '\\b', 'g'), own);
+          var opened = /void\s+main\s*\(\s*(?:void)?\s*\)\s*\{/.exec(rest);
+          if (!opened) return null;
+          var at = opened.index + opened[0].length;
+          return source.slice(0, upTo) + ' ' + given[1] + ' ' + own + ';' + rest.slice(0, at) + ' ' + own + ' = ' + handed[1] + ';' + rest.slice(at);
+        }
+        // A number where a yes or no is asked for, in "a ? b : c" or "if (a)": Direct3D takes
+        // anything but nought for a yes.
+        if (/boolean expression expected/.test(message)) {
+          var asking = source.split('\n');
+          var row = asking[line - 1];
+          if (!(line > 0) || row === undefined) return null;
+          function plainNumber(asked) {
+            return asked !== '' && !/[<>!]=?|==|&&|\|\||\b(true|false)\b|!= 0\.0\)/.test(asked);
+          }
+          for (var mark = 0; mark < row.length; mark++) {
+            if (row.charAt(mark) !== '?') continue;
+            // What is asked: back from the mark to where that expression begins.
+            var nested = 0, from = mark - 1;
+            for (; from >= 0; from--) {
+              var sign = row.charAt(from);
+              if (sign === ')' || sign === ']') nested++;
+              else if (sign === '(' || sign === '[') {
+                if (nested === 0) break;
+                nested--;
+              } else if (nested === 0 && (sign === ',' || sign === ';' || sign === '?' || sign === ':' || sign === '{' ||
+                         (sign === '=' && row.charAt(from + 1) !== '=' && '=!<>'.indexOf(row.charAt(from - 1)) < 0))) break;
+            }
+            var lead = /^\s*(?:return\b)?\s*/.exec(row.slice(from + 1, mark))[0].length;
+            var asked = row.slice(from + 1 + lead, mark).trim();
+            if (!plainNumber(asked)) continue;
+            asking[line - 1] = row.slice(0, from + 1 + lead) + '((' + asked + ') != 0.0) ' + row.slice(mark);
+            return asking.join('\n');
+          }
+          var whether = /\b(if|while)\s*\(/.exec(row);
+          if (whether) {
+            var open = whether.index + whether[0].length, deep = 1, close = open;
+            for (; close < row.length && deep > 0; close++) {
+              if (row.charAt(close) === '(') deep++;
+              if (row.charAt(close) === ')') deep--;
+            }
+            var inside = row.slice(open, close - 1).trim();
+            if (deep === 0 && plainNumber(inside)) {
+              asking[line - 1] = row.slice(0, open) + '(' + inside + ') != 0.0' + row.slice(close - 1);
+              return asking.join('\n');
+            }
+          }
+          return null;
+        }
         // A function given vectors of different sizes.
         var call = /'(\w+)' : no matching overloaded function found/.exec(message);
         if (call) {
@@ -787,6 +988,9 @@ public enum WallpaperEngineRuntime {
 
       // The whole of a shader, ready to compile. `defines` are the switches of the effect.
       function translate(source, stage, defines, files) {
+        // A value declared with parts named after it ("varying vec4 v_Size.xy;") is that value
+        // whole: Wallpaper Engine reads the name and passes over the rest.
+        source = String(source).replace(/^([ \t]*(?:varying|uniform|attribute)[ \t]+\w+[ \t]+\w+)\.[xyzwrgbastpq]+([ \t]*;)/gm, '$1$2');
         var table = { GLSL: 1 };
         Object.keys(defines).forEach(function (name) { table[name] = defines[name]; });
         var pieces = [];
@@ -1153,6 +1357,10 @@ public enum WallpaperEngineRuntime {
         });
       }
 
+      // The names a script knows the state of the music by. What plays on the Mac is not told to
+      // scenes, so a script that asks finds it stopped.
+      var MEDIA_PLAYBACK = { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 };
+
       // Matrices are not made here; a script that makes one goes on, and gets nothing from it.
       function Matrix() {
         return lenient(this);
@@ -1284,6 +1492,79 @@ public enum WallpaperEngineRuntime {
         return pixels;
       }
 
+      // A ramp from black to white: down the picture, or across it.
+      function rampPixels(size, across, reverse) {
+        var pixels = new Uint8Array(size * size * 4);
+        for (var y = 0; y < size; y++) {
+          for (var x = 0; x < size; x++) {
+            var share = (across ? x : y) / (size - 1);
+            var shade = Math.round((reverse ? 1 - share : share) * 255);
+            var at = (y * size + x) * 4;
+            pixels[at] = pixels[at + 1] = pixels[at + 2] = shade;
+            pixels[at + 3] = 255;
+          }
+        }
+        return pixels;
+      }
+
+      // The colors of a soap film, across the picture: for effects that color by how bright.
+      function rainbowPixels(size) {
+        var pixels = new Uint8Array(size * size * 4);
+        for (var y = 0; y < size; y++) {
+          for (var x = 0; x < size; x++) {
+            var turn = x / size * Math.PI * 2;
+            var at = (y * size + x) * 4;
+            pixels[at] = Math.round((0.72 + 0.28 * Math.cos(turn)) * 255);
+            pixels[at + 1] = Math.round((0.72 + 0.28 * Math.cos(turn - 2.094)) * 255);
+            pixels[at + 2] = Math.round((0.72 + 0.28 * Math.cos(turn + 2.094)) * 255);
+            pixels[at + 3] = 255;
+          }
+        }
+        return pixels;
+      }
+
+      // Cells, as light on the floor of a pool is: bright where two cells meet. It repeats, so a
+      // texture of it tiles; `soft` makes the lines wide and faint, for a glow.
+      function cellsPixels(size, soft) {
+        var cells = 6;
+        var points = [];
+        for (var cy = 0; cy < cells; cy++) {
+          for (var cx = 0; cx < cells; cx++) {
+            points.push([(cx + 0.15 + 0.7 * hash(cx, cy, 71)) / cells, (cy + 0.15 + 0.7 * hash(cx, cy, 73)) / cells]);
+          }
+        }
+        var pixels = new Uint8Array(size * size * 4);
+        var reach = (soft ? 0.5 : 0.22) / cells;
+        for (var y = 0; y < size; y++) {
+          for (var x = 0; x < size; x++) {
+            var u = (x + 0.5) / size, v = (y + 0.5) / size;
+            var nearest = 9, second = 9;
+            var homeX = Math.floor(u * cells), homeY = Math.floor(v * cells);
+            for (var dy = -1; dy <= 1; dy++) {
+              for (var dx = -1; dx <= 1; dx++) {
+                var gx = homeX + dx, gy = homeY + dy;
+                var point = points[((gy % cells) + cells) % cells * cells + ((gx % cells) + cells) % cells];
+                // The point of a cell beyond the edge is the one of the cell at the other edge.
+                var px = point[0] + Math.floor(gx / cells), py = point[1] + Math.floor(gy / cells);
+                var far = Math.sqrt((px - u) * (px - u) + (py - v) * (py - v));
+                if (far < nearest) {
+                  second = nearest;
+                  nearest = far;
+                } else if (far < second) {
+                  second = far;
+                }
+              }
+            }
+            var edge = Math.max(0, 1 - (second - nearest) / reach);
+            var shade = Math.round(Math.pow(edge, soft ? 1.5 : 3) * 255);
+            var at = (y * size + x) * 4;
+            pixels[at] = pixels[at + 1] = pixels[at + 2] = shade;
+            pixels[at + 3] = 255;
+          }
+        }
+        return pixels;
+      }
+
       // The shapes of particles, drawn white on nothing; a particle's own color tints them.
       function spritePixels(name, size) {
         var canvas = document.createElement('canvas');
@@ -1303,7 +1584,7 @@ public enum WallpaperEngineRuntime {
           for (var blot = 0; blot < 40; blot++) {
             var angle = hash(blot, 1, 3) * Math.PI * 2;
             var away = Math.pow(hash(blot, 2, 3), 0.8) * half * 0.55;
-            glow(half + Math.cos(angle) * away, half + Math.sin(angle) * away, half * (0.2 + hash(blot, 3, 3) * 0.3), 0.12);
+            glow(half + Math.cos(angle) * away, half + Math.sin(angle) * away, half * (0.2 + hash(blot, 3, 3) * 0.3), 0.05);
           }
         } else if (/rain|drop|streak|line|trail|beam|ray/.test(name)) {
           var streak = context.createLinearGradient(0, 0, 0, size);
@@ -1404,14 +1685,16 @@ public enum WallpaperEngineRuntime {
           gl.attachShader(program, vertex);
           gl.attachShader(program, fragment);
           // The same places in every program, so that one shape serves them all.
-          ['a_Position', 'a_TexCoord', 'a_Place', 'a_Color', 'a_Frame', 'a_Spot', 'a_Uv'].forEach(function (name, index) {
+          ['a_Position', 'a_TexCoord', 'a_Place', 'a_Color', 'a_Frame', 'a_Spot', 'a_Uv', 'a_More'].forEach(function (name, index) {
             gl.bindAttribLocation(program, index, name);
           });
           gl.linkProgram(program);
           gl.deleteShader(vertex);
           gl.deleteShader(fragment);
           if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-            note(what + ' does not link: ' + (gl.getProgramInfoLog(program) || '').split('\n')[0]);
+            var refused = (gl.getProgramInfoLog(program) || '').split('\n').filter(Boolean);
+            complaint = { stage: 'both', messages: refused, line: 0, said: what + ' does not link: ' + (refused[0] || '') };
+            if (!quietly) note(complaint.said);
             gl.deleteProgram(program);
             return null;
           }
@@ -1520,8 +1803,20 @@ public enum WallpaperEngineRuntime {
           }
           // `users` are the objects that show it: what is kept of them is no longer good when the
           // video has moved on.
-          result.film = { video: video, layer: layer, picture: result, shown: -1, users: [] };
+          result.film = { video: video, layer: layer, picture: result, shown: -1, users: [], seen: false };
           films.push(result.film);
+          // A video says it is ready before it has a picture to give — a large one by seconds —
+          // and what is taken from it meanwhile is black. So nothing is taken until the web engine
+          // has shown a frame of it; where it cannot say so, or does not, the wait is by the clock.
+          function seen() {
+            if (result.film.seen) return;
+            result.film.seen = true;
+            changed();
+          }
+          if (typeof video.requestVideoFrameCallback === 'function') video.requestVideoFrameCallback(seen);
+          video.addEventListener('loadeddata', function () {
+            setTimeout(seen, typeof video.requestVideoFrameCallback === 'function' ? 6000 : 300);
+          });
           return result;
         }
 
@@ -1536,7 +1831,7 @@ public enum WallpaperEngineRuntime {
           var any = false;
           films.forEach(function (each) {
             var video = each.video;
-            if (video.readyState < 2 || video.currentTime === each.shown || !video.videoWidth) return;
+            if (!each.seen || video.readyState < 2 || video.currentTime === each.shown || !video.videoWidth) return;
             each.shown = video.currentTime;
             gl.bindTexture(gl.TEXTURE_2D, each.layer.texture);
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -1553,6 +1848,10 @@ public enum WallpaperEngineRuntime {
         // A slot of a material may be left to a setting of the wallpaper: a picture the user is
         // to choose. The name of the texture that came for it, if one did.
         function chosenTexture(bound) {
+          // A slot Wallpaper Engine fills itself — with the cover of the music that plays — has
+          // nothing in it here: the picture the scene keeps there is for its author to look at
+          // while making it.
+          if (bound && typeof bound === 'object' && bound.type === 'system' && /^\$media/i.test(String(bound.name))) return 'util/nothing';
           var name = typeof bound === 'string' ? bound : (bound && typeof bound === 'object' && bound.type !== 'system' ? bound.name : null);
           return typeof name === 'string' && pictures['user/' + key(name)] ? 'user/' + key(name) : null;
         }
@@ -1603,6 +1902,8 @@ public enum WallpaperEngineRuntime {
             result = flat(255, 255, 255, 255);
           } else if (/(^|\/)util\/black$/.test(id)) {
             result = flat(0, 0, 0, 255);
+          } else if (/(^|\/)util\/nothing$/.test(id)) {
+            result = flat(0, 0, 0, 0);
           } else if (/(^|\/)util\/noflow$/.test(id)) {
             // The middle value of a map of directions: no direction at all.
             result = flat(127, 127, 0, 255);
@@ -1610,8 +1911,19 @@ public enum WallpaperEngineRuntime {
             result = flat(128, 128, 255, 255);
           } else if (/(^|\/)util\/.*(cloud|perlin)/.test(id)) {
             result = fromPixels(cloudsPixels(256), 256, false);
-          } else if (/(^|\/)util\/.*noise/.test(id)) {
+          } else if (/(^|\/)util\/.*(noise|uniform)/.test(id)) {
             result = fromPixels(noisePixels(256), 256, false);
+          } else if (/(^|\/)gradient\/blend_gradient/.test(id)) {
+            // The masks an effect is faded in by from one side: taken to run down the picture,
+            // from nothing at the top — by a scene whose screen darkens toward its bottom with it.
+            result = fromPixels(rampPixels(256, false, /reverse/.test(id)), 256, true);
+          } else if (/(^|\/)gradient\/.*iridescent/.test(id)) {
+            result = fromPixels(rainbowPixels(256), 256, false);
+          } else if (/(^|\/)gradient\//.test(id)) {
+            note('the gradient ' + name + ' is not in the scene; one from black to white stands in for it');
+            result = fromPixels(rampPixels(256, true, false), 256, true);
+          } else if (/(^|\/)pattern\/voronoi/.test(id)) {
+            result = fromPixels(cellsPixels(256, !/local/.test(id)), 256, false);
           } else if (/(^|\/)particle\//.test(id)) {
             result = fromPixels(spritePixels(id, 128), 128, true);
             result.made = true;
@@ -1751,7 +2063,7 @@ public enum WallpaperEngineRuntime {
             note(what + ': the shader ' + shaderName + ' is not in the scene');
             return null;
           }
-          var said = annotations(vertexSource + '\n' + fragmentSource);
+          var said = annotations(vertexSource + '\n' + fragmentSource + '\n' + headersOf(vertexSource + '\n' + fragmentSource, files));
           var defines = {};
           Object.keys(said.combos).forEach(function (name) { defines[name] = said.combos[name]; });
           Object.keys(combos || {}).forEach(function (name) { defines[name] = number(combos[name], 0); });
@@ -1771,6 +2083,16 @@ public enum WallpaperEngineRuntime {
             for (var attempt = 0; attempt < 24 && !program; attempt++) {
               program = link(sources.vertex, sources.fragment, what, true);
               if (program || !complaint) break;
+              if (complaint.stage === 'both') {
+                // The two shaders do not fit each other.
+                var pair = mendPair(sources.vertex, sources.fragment, complaint.messages);
+                if (pair === null) {
+                  note(complaint.said);
+                  break;
+                }
+                sources = pair;
+                continue;
+              }
               var mended = mend(sources[complaint.stage], complaint.messages, complaint.line);
               if (mended === null) {
                 note(complaint.said);
@@ -1815,7 +2137,9 @@ public enum WallpaperEngineRuntime {
 
         // Draws a pass into `target` (null for none: the caller has one bound already).
         // `inputs` are the textures by slot: { texture, resolution }.
-        function drawPass(pass, target, inputs) {
+        // `layer` is the object the pass belongs to and `onScreen` where its rectangle lands on what
+        // is drawn on, for the shaders that ask.
+        function drawPass(pass, target, inputs, layer, onScreen) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
           gl.viewport(0, 0, target.width, target.height);
           gl.disable(gl.BLEND);
@@ -1834,7 +2158,18 @@ public enum WallpaperEngineRuntime {
             if (value.name === 'wallaero_Flip') {
               gl.uniform1f(uniform.location, -1);
             } else if (uniform.type === gl.FLOAT_MAT4) {
-              gl.uniformMatrix4fv(uniform.location, false, IDENTITY);
+              // An effect is drawn onto its layer's own picture, which needs no placing; how the
+              // layer itself stands on the scene — how large, how turned — a shader may ask.
+              var asked = IDENTITY;
+              if (value.name === 'g_LayerModelMatrix' && layer) {
+                asked = new Float32Array(standing(layer, true).matrix);
+              } else if (value.name === 'g_EffectModelViewProjectionMatrix' && onScreen) {
+                // From the corners of the layer's rectangle to where they are on the scene, as a
+                // shader that looks at the scene under the layer has to know.
+                asked = new Float32Array([onScreen[0] / 2, onScreen[1] / 2, 0, 0, onScreen[3] / 2, onScreen[4] / 2, 0, 0,
+                                          0, 0, 1, 0, onScreen[6], onScreen[7], 0, 1]);
+              }
+              gl.uniformMatrix4fv(uniform.location, false, asked);
             } else if (uniform.type === gl.FLOAT_MAT3) {
               gl.uniformMatrix3fv(uniform.location, false, new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]));
             } else {
@@ -1963,9 +2298,13 @@ public enum WallpaperEngineRuntime {
             try {
               script.made = compileScript(script.said.script,
                 ['engine', 'thisScene', 'thisLayer', 'thisObject', 'input', 'shared', 'console', 'localStorage', 'renderContext',
-                 'createScriptProperties', 'Vec2', 'Vec3', 'Vec4', 'Mat3', 'Mat4'],
-                [engineObject, sceneObject, layerObject(script.owner), lenient({}), inputObject, shared, consoleObject, storageObject, lenient({}),
-                 scriptSettings(script.said.scriptproperties), Vec2, Vec3, Vec4, Matrix, Matrix]);
+                 'createScriptProperties', 'Vec2', 'Vec3', 'Vec4', 'Mat3', 'Mat4',
+                 'MediaPlaybackEvent', 'MediaPropertiesEvent', 'MediaThumbnailEvent', 'MediaStatusEvent', 'MediaTimelineEvent'],
+                [engineObject, sceneObject, layerObject(script.owner),
+                 script.subject && script.owner ? effectObject(script.owner, script.subject) : layerObject(script.owner),
+                 inputObject, shared, consoleObject, storageObject, lenient({}),
+                 scriptSettings(script.said.scriptproperties), Vec2, Vec3, Vec4, Matrix, Matrix,
+                 MEDIA_PLAYBACK, lenient({}), lenient({}), lenient({}), lenient({})]);
             } catch (error) {
               note('a script of “' + (script.owner ? script.owner.name : 'the scene') + '” cannot be read: ' + error.message);
             }
@@ -2057,6 +2396,45 @@ public enum WallpaperEngineRuntime {
 
         var standsFor = new WeakMap(); // the object of the scene behind what a script has of it
 
+        // An effect of an object as scripts see it: to be switched on and off, its settings
+        // changed and the animations of its settings steered.
+        function effectObject(thing, effect) {
+          if (!effect.forScripts) {
+            effect.forScripts = lenient({
+              get name() { return effect.name; },
+              get visible() { return !!effect.shown.now; },
+              set visible(value) {
+                if (effect.shown.now === !!value) return;
+                effect.shown.now = !!value;
+                stale(thing);
+              },
+              getMaterialCount: function () { return effect.passes.length; },
+              setMaterialProperty: function (name, value) {
+                var list = typeof value === 'number' ? [value, value, value, value] : (value ? [value.x, value.y, value.z, value.w] : []);
+                effect.passes.forEach(function (pass) {
+                  (pass.values || []).forEach(function (each) {
+                    if (each.material !== name || !each.live) return;
+                    each.live.now = each.live.now.map(function (old, index) { return typeof list[index] === 'number' && isFinite(list[index]) ? list[index] : old; });
+                    stale(thing);
+                  });
+                });
+              },
+              // The animation of one of its settings, by name; with none named, the first.
+              getAnimation: function (wanted) {
+                var found = null;
+                effect.passes.forEach(function (pass) {
+                  (pass.values || []).forEach(function (each) {
+                    var motion = each.live && each.live.motion;
+                    if (motion && !motion.leader && !found && (wanted === undefined || motion.called === wanted)) found = motion;
+                  });
+                });
+                return found ? steered(found) : unsteered();
+              }
+            });
+          }
+          return effect.forScripts;
+        }
+
         // An object of the scene as its scripts see it: what they read is what shows, and what
         // they set shows from the next frame on.
         function layerObject(thing) {
@@ -2128,30 +2506,7 @@ public enum WallpaperEngineRuntime {
           object.getEffect = function (wanted) {
             var effects = thing.effects || [];
             var effect = typeof wanted === 'number' ? effects[wanted] : effects.filter(function (each) { return each.name === wanted; })[0];
-            if (!effect) return null;
-            if (!effect.forScripts) {
-              effect.forScripts = lenient({
-                get name() { return effect.name; },
-                get visible() { return !!effect.shown.now; },
-                set visible(value) {
-                  if (effect.shown.now === !!value) return;
-                  effect.shown.now = !!value;
-                  stale(thing);
-                },
-                getMaterialCount: function () { return effect.passes.length; },
-                setMaterialProperty: function (name, value) {
-                  var list = typeof value === 'number' ? [value, value, value, value] : (value ? [value.x, value.y, value.z, value.w] : []);
-                  effect.passes.forEach(function (pass) {
-                    (pass.values || []).forEach(function (each) {
-                      if (each.material !== name || !each.live) return;
-                      each.live.now = each.live.now.map(function (old, index) { return typeof list[index] === 'number' && isFinite(list[index]) ? list[index] : old; });
-                      stale(thing);
-                    });
-                  });
-                }
-              });
-            }
-            return effect.forScripts;
+            return effect ? effectObject(thing, effect) : null;
           };
           object.getAnimationLayerCount = function () { return thing.puppet && thing.puppet.moving ? 1 : 0; };
           ['getAnimationLayer', 'getTextureAnimation', 'getVideoTexture', 'getMaterial'].forEach(function (name) { object[name] = unsteered; });
@@ -2336,6 +2691,21 @@ public enum WallpaperEngineRuntime {
         // Tells the scripts of something that happened to the scene as a whole.
         function tellScripts(name, argument) {
           scripts.slice().forEach(function (script) { call(script, name, argument); });
+        }
+
+        // What plays on the Mac is not told to scenes. Their scripts are told so once, the way
+        // Wallpaper Engine tells them that nothing plays: a scene made to put its music widget
+        // away then does, rather than showing it with nothing in it.
+        var mediaTold = false;
+        function tellNoMedia() {
+          mediaTold = true;
+          var none = new Vec3(0, 0, 0);
+          tellScripts('mediaStatusChanged', { enabled: false });
+          tellScripts('mediaPlaybackChanged', { state: MEDIA_PLAYBACK.PLAYBACK_STOPPED });
+          tellScripts('mediaPropertiesChanged', { title: '', artist: '', subTitle: '', albumTitle: '', albumArtist: '', genres: '', contentType: '' });
+          tellScripts('mediaThumbnailChanged', { hasThumbnail: false, primaryColor: none, secondaryColor: none, tertiaryColor: none,
+                                                 textColor: new Vec3(1, 1, 1), highContrastColor: new Vec3(1, 1, 1) });
+          tellScripts('mediaTimelineChanged', { position: 0, duration: 0 });
         }
 
         // Tells the scripts what the mouse did. A script hears of it when the pointer is over the
@@ -2911,6 +3281,8 @@ public enum WallpaperEngineRuntime {
                           shown: live(use.visible, 0, true, thing, 'flag'), targets: (effect.fbos || []).map(function (target) {
               return { name: key(target.name), scale: Math.max(1, number(target.scale, 1)) };
             }) };
+            // A script behind something of the effect has the effect for its object.
+            if (built.shown.script) built.shown.script.subject = built;
             var whole = true;
             (effect.passes || []).forEach(function (step, index) {
               if (!whole) return;
@@ -2953,11 +3325,17 @@ public enum WallpaperEngineRuntime {
                   pass.inputs[slot] = { previous: true };
                 } else if (/^_rt_/.test(key(name))) {
                   pass.inputs[slot] = { target: key(name) };
+                  // An effect that looks at the scene under its layer shows another picture
+                  // whenever the scene does: what it made is not kept.
+                  if (key(name) === '_rt_fullframebuffer') thing.moving = true;
                 } else {
                   pass.inputs[slot] = { picture: shows(thing, texture(name)) };
                 }
               });
               if (pass.moving) thing.moving = true;
+              pass.values.forEach(function (value) {
+                if (value.live && value.live.script) value.live.script.subject = built;
+              });
               built.passes.push(pass);
             });
             if (whole && built.passes.length) thing.effects.push(built);
@@ -2968,6 +3346,12 @@ public enum WallpaperEngineRuntime {
           var modelName = String(plain(object.image) || '');
           var model = json(modelName);
           layer.kept = null;
+          // A picture the scene gives no area — a size of nought — is not drawn: it is there for
+          // what hangs on it, to be moved and shown together.
+          if (object.size !== undefined && object.size !== null) {
+            var area = numbers(object.size, 2, -1);
+            if (area[0] === 0 || area[1] === 0) return null;
+          }
           // Layers Wallpaper Engine has ready-made: one to put effects over others — it takes what
           // the scene shows under it, or holds the layers that hang on it — and one of a single
           // color, which a scene may also bring as a model of its own.
@@ -2975,6 +3359,8 @@ public enum WallpaperEngineRuntime {
             if (!layer.holds) layer.takesScene = true;
           } else if (/solidlayer/.test(key(modelName)) || (model && (model.solidlayer === true || /solidlayer/.test(key(String(model.material || '')))))) {
             layer.picture = flat(255, 255, 255, 255);
+            // One color all over: as large a picture as the layer is, as far as its effects can tell.
+            layer.plain = true;
           } else if (!model) {
             note('“' + layer.name + '”: its model ' + modelName + ' is not in the scene');
             return null;
@@ -3239,6 +3625,7 @@ public enum WallpaperEngineRuntime {
                     (layer.blendMode === 9 || layer.blending === 'additive' ? 'additive' : (layer.blending === 'normal' ? 'normal' : 'translucent'));
           var onto = surface;
           var place = placeOf(matrix, nominal);
+          var onScreen = place;
           // A picture that bends is drawn as its triangles, whose corners are counted in the
           // picture's own pixels from its middle.
           var mesh = layer.puppet || null;
@@ -3254,7 +3641,7 @@ public enum WallpaperEngineRuntime {
             var shown = frameAt(layer.picture, time);
             var first = shown ? shown.layer : layer.picture.layers[0];
             source = { texture: first.texture, frame: shown ? shown.frame : null, channels: layer.picture.channels,
-                       resolution: [first.width, first.height, first.width, first.height] };
+                       resolution: layer.plain ? [nominal[0], nominal[1], nominal[0], nominal[1]] : [first.width, first.height, first.width, first.height] };
           }
           if (!effects.length && source) {
             put(source, place, tint, how, mesh);
@@ -3367,7 +3754,7 @@ public enum WallpaperEngineRuntime {
               }
               var target = pass.target ? named[pass.target] : next();
               if (!target) return;
-              drawPass(pass, target, pass.inputs.map(input));
+              drawPass(pass, target, pass.inputs.map(input), layer, onScreen);
               if (!pass.target) {
                 held = target;
                 previous = { texture: target.texture, resolution: resolution };
@@ -3401,12 +3788,13 @@ public enum WallpaperEngineRuntime {
           'in vec4 a_Place;',  // where its middle is on the scene, its size and how far it is turned
           'in vec4 a_Color;',
           'in vec4 a_Frame;',  // where in the texture its picture is
+          'in vec4 a_More;',   // how many times longer than wide it is drawn
           'uniform mat2 u_Linear;',
           'uniform vec2 u_Scene;',
           'out vec2 v_Uv;',
           'out vec4 v_Color;',
           'void main() {',
-          '  vec2 corner = vec2(a_TexCoord.x - 0.5, 0.5 - a_TexCoord.y);',
+          '  vec2 corner = vec2(a_TexCoord.x - 0.5, (0.5 - a_TexCoord.y) * a_More.x);',
           '  float c = cos(a_Place.w);',
           '  float s = sin(a_Place.w);',
           '  vec2 at = a_Place.xy + u_Linear * (vec2(corner.x * c - corner.y * s, corner.x * s + corner.y * c) * a_Place.z);',
@@ -3430,9 +3818,10 @@ public enum WallpaperEngineRuntime {
           '  color = vec4(c.rgb * v_Color.rgb * u_Bright, c.a * v_Color.a);',
           '}'
         ].join('\n'), 'the player\'s own shader');
-        var FLOATS = 12; // to a particle, for the shader
+        var FLOATS = 16; // to a particle, for the shader
         // Particles drawn as a rope: one band through them all, in the order they were made, as
-        // wide as each is large. The picture is laid across the band.
+        // wide as each is large. The picture is laid across the band, and along it where the band
+        // is the tail of one particle.
         var ropeProgram = link([
           '#version 300 es',
           'in vec4 a_Place;',  // where a point of the band's edge is, and where across the picture
@@ -3442,7 +3831,7 @@ public enum WallpaperEngineRuntime {
           'out vec4 v_Color;',
           'void main() {',
           '  gl_Position = vec4(2.0 * a_Place.x / u_Scene.x - 1.0, 1.0 - 2.0 * a_Place.y / u_Scene.y, 0.0, 1.0);',
-          '  v_Uv = vec2(a_Place.z, 0.5);',
+          '  v_Uv = a_Place.zw;',
           '  v_Color = a_Color;',
           '}'
         ].join('\n'), [
@@ -3544,6 +3933,38 @@ public enum WallpaperEngineRuntime {
                 particle.vx += x * Math.cos(turn) - y * Math.sin(turn);
                 particle.vy += x * Math.sin(turn) + y * Math.cos(turn);
                 particle.vz += mix(offLeast[2], offMost[2], share);
+              };
+            case 'hsvcolorrandom':
+              // A color said as where on the wheel it is, how full and how light: each drawn by itself.
+              var hues = [number(said.huemin, 0), number(said.huemax, 1)];
+              if (hues[0] > 1.5 || hues[1] > 1.5) hues = [hues[0] / 360, hues[1] / 360];
+              var fullness = [number(said.saturationmin, 0), number(said.saturationmax, 1)];
+              var lightness = [number(said.valuemin, 0), number(said.valuemax, 1)];
+              return function (particle) {
+                var hue = ((pick(hues[0], hues[1]) % 1) + 1) % 1 * 6;
+                var full = Math.max(0, Math.min(1, pick(fullness[0], fullness[1]))), light = Math.max(0, Math.min(1, pick(lightness[0], lightness[1])));
+                function part(shift) {
+                  var k = (shift + hue) % 6;
+                  return light - light * full * Math.max(0, Math.min(k, 4 - k, 1));
+                }
+                particle.red = part(5);
+                particle.green = part(3);
+                particle.blue = part(1);
+              };
+            case 'mapsequencebetweencontrolpoints':
+              // One particle after another is put a step further along the way from one of the
+              // system's points to another: so many to the way, and then back or from the start.
+              var toWay = Math.max(2, Math.round(number(said.count, 2)));
+              var wayFrom = number(said.controlpointstart, 0), wayTo = number(said.controlpointend, 1);
+              var back = key(said.limitbehavior || 'repeat') === 'mirror';
+              return function (particle) {
+                var step = (particle.id - 1) % (back ? (toWay - 1) * 2 : toWay);
+                if (back && step >= toWay) step = (toWay - 1) * 2 - step;
+                var share = step / (toWay - 1);
+                var here = system.pointAt(wayFrom), there = system.pointAt(wayTo);
+                particle.x = mix(here[0], there[0], share);
+                particle.y = mix(here[1], there[1], share);
+                particle.z = mix(here[2], there[2], share);
               };
             default:
               note('“' + system.name + '”: what sets up a particle by “' + said.name + '” is not played');
@@ -3663,6 +4084,43 @@ public enum WallpaperEngineRuntime {
                 particle.vx -= dy * by;
                 particle.vy += dx * by;
               };
+            case 'remapvalue':
+              // One of a particle's properties follows a wave or a smooth wandering along its life,
+              // between two values. Each particle wanders its own way.
+              var remapped = key(said.output || '');
+              var way = key(said.transformfunction || 'linear');
+              var grain = number(said.transforminputscale, 1);
+              var lowest = numbers(said.outputrangemin, 3, 0), highest = numbers(said.outputrangemax, 3, 1);
+              var inFrom = number(said.inputrangemin, 0), inTo = number(said.inputrangemax, 1);
+              var how = key(said.operation || 'remap');
+              function wandered(particle, share, axis) {
+                var input = ramp(share, inFrom, inTo) * grain;
+                if (/noise/.test(way)) return smoothNoise(input + particle.seed * 97 + axis * 31.7, particle.seed * 53 + axis * 17.3, 4096, 61 + axis);
+                if (way === 'sine') return 0.5 + 0.5 * Math.sin(input * Math.PI * 2);
+                if (way === 'cosine') return 0.5 + 0.5 * Math.cos(input * Math.PI * 2);
+                if (way === 'square') return input % 1 < 0.5 ? 0 : 1;
+                if (way === 'saw') return ((input % 1) + 1) % 1;
+                if (way === 'triangle') return 1 - Math.abs(((input % 1) + 1) % 1 * 2 - 1);
+                return Math.max(0, Math.min(1, input));
+              }
+              function taken(old, value, seconds) {
+                return how === 'add' ? old + value * seconds : (how === 'multiply' ? old * value : value);
+              }
+              if (remapped === 'velocity') {
+                return function (particle, seconds, share) {
+                  particle.vx = taken(particle.vx, mix(lowest[0], highest[0], wandered(particle, share, 0)), seconds);
+                  particle.vy = taken(particle.vy, mix(lowest[1], highest[1], wandered(particle, share, 1)), seconds);
+                  particle.vz = taken(particle.vz, mix(lowest[2], highest[2], wandered(particle, share, 2)), seconds);
+                };
+              }
+              if (remapped === 'size') {
+                return function (particle, seconds, share) { particle.sizeNow *= mix(lowest[0], highest[0], wandered(particle, share, 0)); };
+              }
+              if (remapped === 'alpha' || remapped === 'opacity') {
+                return function (particle, seconds, share) { particle.alphaNow *= mix(lowest[0], highest[0], wandered(particle, share, 0)); };
+              }
+              note('“' + system.name + '”: a particle\'s “' + String(said.output) + '” changed by “remapvalue” is not played');
+              return null;
             default:
               note('“' + system.name + '”: what changes a particle by “' + said.name + '” is not played');
               return null;
@@ -3697,13 +4155,27 @@ public enum WallpaperEngineRuntime {
             system.alphaBy = number(over.alpha, 1);
             system.speedBy = number(over.speed, 1);
             system.lifeBy = number(over.lifetime, 1);
-            system.tint = over.colorn !== undefined ? color(over.colorn, 1) : [1, 1, 1];
+            system.tint = [1, 1, 1];
+            // The color the scene gives is the particles' color, whatever the system would have
+            // given them and however it would have changed it as they live: a fire that burns
+            // from yellow to red, given violet by the scene, is violet throughout.
+            system.recolor = over.colorn !== undefined ? color(over.colorn, 1) : (over.color !== undefined ? color(over.color, 255) : null);
+          };
+          // The color of a particle as it is drawn.
+          system.colorOf = function (particle, state) {
+            var own = system.recolor || [particle.red * particle.redNow, particle.green * particle.greenNow, particle.blue * particle.blueNow];
+            return [own[0] * system.tint[0] * state.color[0], own[1] * system.tint[1] * state.color[1], own[2] * system.tint[2] * state.color[2]];
           };
           system.settle();
           // The points a system's particles are counted from. One may follow the pointer: a
           // system that makes its particles there trails the mouse.
           var points = (Array.isArray(said.controlpoint) ? said.controlpoint : []).map(function (point) {
-            return { id: number(point.id, 0), follows: (number(point.flags, 0) & 1) !== 0, offset: numbers(point.offset, 3, 0) };
+            var id = number(point.id, 0);
+            // The scene may put a point of the system somewhere of its own choosing: a place on
+            // the scene, not one counted from the system.
+            var put = over['controlpoint' + id];
+            return { id: id, follows: (number(point.flags, 0) & 1) !== 0, offset: numbers(point.offset, 3, 0),
+                     onScene: put !== undefined && put !== null ? numbers(put, 3, 0) : null };
           });
           var pointerThere = [0, 0]; // the pointer, in the system's own coordinates
           function follows(index) {
@@ -3712,6 +4184,13 @@ public enum WallpaperEngineRuntime {
           system.pointAt = function (index) {
             var point = points.filter(function (each) { return each.id === index; })[0];
             if (!point) return [0, 0, 0];
+            if (point.onScene) {
+              var matrix = standing(system, true).matrix;
+              var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
+              if (Math.abs(area) < 1e-9) return point.offset;
+              var dx = point.onScene[0] - matrix[12], dy = point.onScene[1] - matrix[13];
+              return [(dx * matrix[5] - dy * matrix[4]) / area, (dy * matrix[0] - dx * matrix[1]) / area, point.onScene[2]];
+            }
             return point.follows ? [pointerThere[0] + point.offset[0], pointerThere[1] + point.offset[1], point.offset[2]] : point.offset;
           };
           function findPointer() {
@@ -3736,8 +4215,19 @@ public enum WallpaperEngineRuntime {
           system.initializers = (said.initializer || []).map(function (each) { return initializer(each, system); }).filter(Boolean);
           system.operators = (said.operator || []).map(function (each) { return operator(each, system); }).filter(Boolean);
           (said.renderer || []).forEach(function (renderer) {
-            if (key(renderer.name) === 'rope') system.rope = true;
-            else if (key(renderer.name) !== 'sprite') note('“' + name + '”: particles drawn as “' + renderer.name + '” are drawn as plain sprites');
+            var kind = key(renderer.name);
+            if (kind === 'rope') {
+              system.rope = true;
+            } else if (kind === 'spritetrail') {
+              // Stretched along its way: so many times its width to a unit of speed, within bounds.
+              system.trail = { by: number(renderer.length, 0.05), least: Math.max(0, number(renderer.minlength, 0)),
+                               most: Math.max(0, number(renderer.maxlength, 10)) };
+            } else if (kind === 'ropetrail') {
+              // A tail behind each particle, through where it has been in the last seconds.
+              system.tails = Math.max(0.02, number(renderer.length, 1));
+            } else if (kind !== 'sprite') {
+              note('“' + name + '”: particles drawn as “' + renderer.name + '” are drawn as plain sprites');
+            }
           });
           system.data = new Float32Array(system.most * FLOATS);
           system.buffer = gl.createBuffer();
@@ -3748,11 +4238,11 @@ public enum WallpaperEngineRuntime {
           gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 12);
           gl.bindBuffer(gl.ARRAY_BUFFER, system.buffer);
           gl.bufferData(gl.ARRAY_BUFFER, system.data.byteLength, gl.DYNAMIC_DRAW);
-          for (var attribute = 0; attribute < 3; attribute++) {
-            gl.enableVertexAttribArray(2 + attribute);
-            gl.vertexAttribPointer(2 + attribute, 4, gl.FLOAT, false, FLOATS * 4, attribute * 16);
-            gl.vertexAttribDivisor(2 + attribute, 1);
-          }
+          [2, 3, 4, 7].forEach(function (place, attribute) {
+            gl.enableVertexAttribArray(place);
+            gl.vertexAttribPointer(place, 4, gl.FLOAT, false, FLOATS * 4, attribute * 16);
+            gl.vertexAttribDivisor(place, 1);
+          });
           gl.bindVertexArray(null);
 
           function make(emitter) {
@@ -3820,6 +4310,14 @@ public enum WallpaperEngineRuntime {
               particle.shiftX = particle.shiftY = 0;
               var share = particle.age / particle.life;
               system.operators.forEach(function (change) { change(particle, seconds, share); });
+              if (system.tails) {
+                // Where it has been, a few times a tail's length, the oldest first.
+                var path = particle.path || (particle.path = []);
+                if (!path.length || system.age - path[path.length - 1][2] >= system.tails / 16) {
+                  path.push([particle.x + particle.shiftX, particle.y + particle.shiftY, system.age]);
+                }
+                while (path.length && system.age - path[0][2] > system.tails) path.shift();
+              }
               alive.push(particle);
             });
             system.particles = alive;
@@ -3856,18 +4354,26 @@ public enum WallpaperEngineRuntime {
                 y = middleY + (y - middleY) * near;
               }
               var at = i * FLOATS;
+              var turned = particle.angle, long = 1;
+              if (system.trail) {
+                var speed = Math.sqrt(particle.vx * particle.vx + particle.vy * particle.vy);
+                long = Math.max(system.trail.least, Math.min(system.trail.most, speed * system.trail.by));
+                if (speed > 0.0001) turned = Math.atan2(particle.vy, particle.vx) - Math.PI / 2;
+              }
               data[at] = x;
               data[at + 1] = y;
               data[at + 2] = particle.size * particle.sizeNow * system.sizeBy * near;
-              data[at + 3] = particle.angle;
-              data[at + 4] = particle.red * particle.redNow * system.tint[0] * state.color[0];
-              data[at + 5] = particle.green * particle.greenNow * system.tint[1] * state.color[1];
-              data[at + 6] = particle.blue * particle.blueNow * system.tint[2] * state.color[2];
-              data[at + 7] = Math.max(0, particle.alpha * particle.alphaNow * see);
+              data[at + 3] = turned;
+              var shade = system.colorOf(particle, state);
+              data[at + 4] = shade[0];
+              data[at + 5] = shade[1];
+              data[at + 6] = shade[2];
+              data[at + 7] = Math.max(0, Math.min(1, particle.alpha * particle.alphaNow * see));
               data[at + 8] = 0;
               data[at + 9] = 0;
               data[at + 10] = 1;
               data[at + 11] = 1;
+              data[at + 12] = long;
             }
             gl.useProgram(particleProgram.program);
             gl.enable(gl.BLEND);
@@ -3928,11 +4434,12 @@ public enum WallpaperEngineRuntime {
                   band[at] = spots[i][0] - dy * half * turn;
                   band[at + 1] = spots[i][1] + dx * half * turn;
                   band[at + 2] = side;
-                  band[at + 3] = 0;
-                  band[at + 4] = each.red * each.redNow * system.tint[0] * state.color[0];
-                  band[at + 5] = each.green * each.greenNow * system.tint[1] * state.color[1];
-                  band[at + 6] = each.blue * each.blueNow * system.tint[2] * state.color[2];
-                  band[at + 7] = Math.max(0, each.alpha * each.alphaNow * see);
+                  band[at + 3] = 0.5;
+                  var shade = system.colorOf(each, state);
+                  band[at + 4] = shade[0];
+                  band[at + 5] = shade[1];
+                  band[at + 6] = shade[2];
+                  band[at + 7] = Math.max(0, Math.min(1, each.alpha * each.alphaNow * see));
                 }
               }
               gl.useProgram(ropeProgram.program);
@@ -3949,6 +4456,73 @@ public enum WallpaperEngineRuntime {
               gl.bindBuffer(gl.ARRAY_BUFFER, bandBuffer);
               gl.bufferSubData(gl.ARRAY_BUFFER, 0, band.subarray(0, count * 16));
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, count * 2);
+              gl.bindVertexArray(null);
+            };
+          }
+
+          if (system.tails && ropeProgram) {
+            // A band to each particle, from where it was to where it is; the picture runs along
+            // it, its top at the particle. The bands are drawn as one, joined by corners that
+            // have no area.
+            var tailBand = new Float32Array(0);
+            var tailBuffer = gl.createBuffer();
+            var tailShape = gl.createVertexArray();
+            gl.bindVertexArray(tailShape);
+            gl.bindBuffer(gl.ARRAY_BUFFER, tailBuffer);
+            gl.enableVertexAttribArray(2);
+            gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, 0);
+            gl.enableVertexAttribArray(3);
+            gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 32, 16);
+            gl.bindVertexArray(null);
+            system.draw = function () {
+              var stands = standing(system);
+              if (!stands.visible || !system.particles.length) return;
+              var state = system.state;
+              var matrix = stands.matrix;
+              var wide = Math.sqrt(Math.abs(matrix[0] * matrix[5] - matrix[4] * matrix[1])) * system.sizeBy;
+              var see = system.alphaBy * stands.alpha;
+              var corners = [];
+              system.particles.forEach(function (particle) {
+                var spots = (particle.path || []).map(function (spot) { return [spot[0], spot[1]]; });
+                spots.push([particle.x + particle.shiftX, particle.y + particle.shiftY]);
+                if (spots.length < 2) return;
+                spots = spots.map(function (spot) {
+                  return [matrix[12] - surface.left + matrix[0] * spot[0] + matrix[4] * spot[1],
+                          matrix[13] - surface.bottom + matrix[1] * spot[0] + matrix[5] * spot[1]];
+                });
+                var tint = system.colorOf(particle, state).concat([Math.max(0, Math.min(1, particle.alpha * particle.alphaNow * see))]);
+                var half = particle.size * particle.sizeNow * wide / 2;
+                var first = corners.length;
+                spots.forEach(function (spot, index) {
+                  var before = spots[Math.max(0, index - 1)], after = spots[Math.min(spots.length - 1, index + 1)];
+                  var dx = after[0] - before[0], dy = after[1] - before[1];
+                  var far = Math.sqrt(dx * dx + dy * dy);
+                  var across = far > 0.0001 ? half / far : 0;
+                  for (var side = 0; side < 2; side++) {
+                    var turn = side ? 1 : -1;
+                    corners.push([spot[0] - dy * across * turn, spot[1] + dx * across * turn, side, 1 - index / (spots.length - 1)].concat(tint));
+                  }
+                });
+                // Joined to the band before it by its own first corner and that band's last, twice each.
+                if (first > 0) corners.splice(first, 0, corners[first - 1], corners[first]);
+              });
+              if (corners.length < 4) return;
+              if (tailBand.length < corners.length * 8) tailBand = new Float32Array(corners.length * 8 * 2);
+              corners.forEach(function (corner, index) { tailBand.set(corner, index * 8); });
+              gl.useProgram(ropeProgram.program);
+              gl.enable(gl.BLEND);
+              if (system.additive) gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
+              else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, system.picture.layers[0].texture);
+              gl.uniform1i(ropeProgram.uniforms.u_Texture.location, 0);
+              gl.uniform1i(ropeProgram.uniforms.u_Channels.location, CHANNELS[system.picture.channels] || 0);
+              gl.uniform1f(ropeProgram.uniforms.u_Bright.location, system.bright);
+              gl.uniform2f(ropeProgram.uniforms.u_Scene.location, surface.width, surface.height);
+              gl.bindVertexArray(tailShape);
+              gl.bindBuffer(gl.ARRAY_BUFFER, tailBuffer);
+              gl.bufferData(gl.ARRAY_BUFFER, tailBand.subarray(0, corners.length * 8), gl.DYNAMIC_DRAW);
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, corners.length);
               gl.bindVertexArray(null);
             };
           }
@@ -4379,6 +4953,7 @@ public enum WallpaperEngineRuntime {
           scripts.slice().forEach(function (script) {
             if (script.made === undefined) script.made = null;
           });
+          if (!mediaTold) tellNoMedia();
           objects.slice().forEach(function (object) {
             if (object.step && passed > 0 && standing(object).visible) object.step(passed);
           });
@@ -4524,6 +5099,7 @@ public enum WallpaperEngineRuntime {
         curve: curveOf,
         script: compileScript,
         mend: mend,
+        mendPair: mendPair,
         numbers: numbers,
         settings: scriptSettings
       };

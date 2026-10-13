@@ -1994,6 +1994,80 @@ final class WallpaperEngineShaderTests: XCTestCase {
         XCTAssertNil(try mend(["ERROR: 0:3: 'foo' : undeclared identifier"], at: 3))
     }
 
+    func testTwoShadersThatDeclareAValueDifferentlyAreMadeToAgree() throws {
+        // Direct3D makes each shader by itself and hands on what fits; here the two are one
+        // program and must say the same of what they share.
+        let vertex = "#version 300 es\nin vec2 a_TexCoord;\nout vec2 v_TexCoord;\nvoid main() {\n  v_TexCoord.xy = a_TexCoord;\n  gl_Position = vec4(0.0);\n}"
+        let fragment = "#version 300 es\nin vec4 v_TexCoord;\nout vec4 o;\nvoid main() {\n  o = vec4(v_TexCoord.xy, v_TexCoord.zw);\n}"
+        let said = ["Types of varying 'v_TexCoord' differ between VERTEX and FRAGMENT shaders."]
+        var pair = try XCTUnwrap(try player("mendPair").call(withArguments: [vertex, fragment, said]))
+        var mended = try XCTUnwrap(pair.forProperty("vertex")?.toString())
+        XCTAssertTrue(mended.contains("out vec4 v_TexCoord;"))
+        XCTAssertTrue(mended.contains("v_TexCoord.xy = a_TexCoord;"), "what was written to is still written to")
+        XCTAssertTrue(mended.contains("{ v_TexCoord = vec4(0.0);"), "what the vertex shader never set is nought")
+        XCTAssertEqual(pair.forProperty("fragment")?.toString(), fragment)
+
+        // The other way about, the fragment shader uses the parts it knew of.
+        let wide = "#version 300 es\nout vec4 v_TexCoord;\nvoid main() {\n  v_TexCoord = vec4(1.0);\n}"
+        let narrow = "#version 300 es\nuniform sampler2D t;\nin vec2 v_TexCoord;\nout vec4 o;\nvoid main() {\n  o = texture(t, v_TexCoord) + v_TexCoord.x;\n}"
+        pair = try XCTUnwrap(try player("mendPair").call(withArguments: [wide, narrow, said]))
+        mended = try XCTUnwrap(pair.forProperty("fragment")?.toString())
+        XCTAssertTrue(mended.contains("in vec4 v_TexCoord;"))
+        XCTAssertTrue(mended.contains("texture(t, v_TexCoord.xy) + v_TexCoord.x;"))
+        XCTAssertEqual(pair.forProperty("vertex")?.toString(), wide)
+
+        // A setting both take, of two sizes: no nought is written to it.
+        let first = "#version 300 es\nuniform vec2 u_ref;\nvoid main() {\n  gl_Position = vec4(u_ref, 0.0, 1.0);\n}"
+        let second = "#version 300 es\nuniform float u_ref;\nout vec4 o;\nvoid main() {\n  o = vec4(u_ref);\n}"
+        pair = try XCTUnwrap(try player("mendPair").call(withArguments: [first, second, ["Types of uniform 'u_ref' differ between VERTEX and FRAGMENT shaders."]]))
+        mended = try XCTUnwrap(pair.forProperty("fragment")?.toString())
+        XCTAssertTrue(mended.contains("uniform vec2 u_ref;"))
+        XCTAssertTrue(mended.contains("o = vec4(u_ref.x);"))
+        XCTAssertFalse(mended.contains("u_ref = "))
+
+        // What it cannot do anything about is left alone.
+        XCTAssertTrue(try XCTUnwrap(try player("mendPair").call(withArguments: [vertex, fragment, ["something else"]])).isNull)
+    }
+
+    func testANumberAskedAsAYesOrNoAndAValueHandedOnThatIsChangedAreMended() throws {
+        func mended(_ source: String, _ message: String, at line: Int) throws -> String? {
+            let result = try XCTUnwrap(try player("mend").call(withArguments: [source, [message], line]))
+            return result.isNull ? nil : result.toString()
+        }
+        // Direct3D takes anything but nought for a yes.
+        let asked = "void main() {\n  float outside = 1.0;\n  vec4 final = outside ? inSmooth : outSmooth;\n  if (outside) final.a = 0.0;\n  float c = a < b ? 1.0 : 0.0;\n}"
+        let refused = "ERROR: 0:3: '' : boolean expression expected"
+        XCTAssertEqual(try mended(asked, refused, at: 3)?.components(separatedBy: "\n")[2], "  vec4 final = ((outside) != 0.0) ? inSmooth : outSmooth;")
+        XCTAssertEqual(try mended(asked, refused, at: 4)?.components(separatedBy: "\n")[3], "  if ((outside) != 0.0) final.a = 0.0;")
+        XCTAssertNil(try mended(asked, refused, at: 5), "what is asked there is a yes or no already")
+
+        // A fragment shader may not change what it is handed; it changes a copy of its own.
+        let handed = "in vec2 v_TexCoord;\nvec2 twice() { return v_TexCoord * 2.0; }\nvoid main() {\n  v_TexCoord = twice();\n}"
+        let own = try XCTUnwrap(try mended(handed, "ERROR: 0:4: 'assign' : l-value required (can't modify an input \"v_TexCoord\")", at: 4))
+        XCTAssertTrue(own.hasPrefix("in vec2 v_TexCoord; vec2 wallaero_own_v_TexCoord;"))
+        XCTAssertTrue(own.contains("return wallaero_own_v_TexCoord * 2.0;"))
+        XCTAssertTrue(own.contains("void main() { wallaero_own_v_TexCoord = v_TexCoord;"))
+        XCTAssertTrue(own.contains("  wallaero_own_v_TexCoord = twice();"))
+        XCTAssertNil(try mended(own, "ERROR: 0:4: 'assign' : l-value required (can't modify an input \"v_TexCoord\")", at: 4), "once is enough")
+    }
+
+    func testWhatWallpaperEngineKeepsToItselfForEffectsIsThere() throws {
+        // A declaration with parts named after its value is that value whole.
+        let declared = try translate("varying vec4 v_Size.xy; // xy = size\nvoid main() {\n  gl_FragColor = v_Size;\n}")
+        XCTAssertTrue(declared.contains("in vec4 v_Size;"))
+        // The header for putting an effect's result together with the picture, by its switch.
+        let composed = "#include \"common_composite.h\"\nvoid main() {\n  gl_FragColor = ApplyComposite(vec4(0.0), vec4(1.0));\n}"
+        let blended = try translate(composed, switches: ["COMPOSITE": 1, "BLENDMODE": 31])
+        XCTAssertTrue(blended.contains("uniform float g_CompositeAlpha;"))
+        XCTAssertTrue(blended.contains("ApplyBlending(BLENDMODE"))
+        XCTAssertTrue(blended.contains("return A + B;"), "the mode that adds")
+        XCTAssertTrue(try translate(composed).contains("return made;"), "with the switch off the result stands in place of the picture")
+        // The blend modes by name, one handed to another.
+        let named = try translate("#include \"common_blending.h\"\nvoid main() {\n  vec3 a = BlendOpacity(vec3(0.5), vec3(0.2), BlendLinearDodge, 0.1);\n  gl_FragColor = vec4(BlendSoftLight(a, a), 1.0);\n}")
+        XCTAssertTrue(named.contains("#define BlendLinearDodge BlendAdd"))
+        XCTAssertTrue(named.contains("#define BlendOpacity(base, blend, F, O)"))
+    }
+
     func testEveryNameDeclaredAtOnceIsMendedByItself() throws {
         // Direct3D takes one number for a vector, also where several names are declared at once.
         let source = """
