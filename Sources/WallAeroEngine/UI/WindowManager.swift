@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// What the main window shows: the wallpaper selected in the library, and the settings at its
-/// side. Which settings are open is kept between launches.
+/// side. Whether the settings are there is kept between launches; which of them, is not — the
+/// window opens on the wallpaper's own.
 @MainActor
 final class MainWindowState: ObservableObject {
     /// The settings at the side of the window are of two kinds.
@@ -16,7 +17,6 @@ final class MainWindowState: ObservableObject {
     /// The width of the settings at the side of the window, in points.
     static let settingsWidth: CGFloat = 420
     private static let showsSettingsKey = "showsSettings"
-    private static let settingsTabKey = "settingsTab"
     private let defaults: UserDefaults?
 
     /// The wallpaper selected in the library.
@@ -30,9 +30,8 @@ final class MainWindowState: ObservableObject {
     @Published var showsSettings: Bool {
         didSet { defaults?.set(showsSettings, forKey: Self.showsSettingsKey) }
     }
-    @Published var settingsTab: SettingsTab {
-        didSet { defaults?.set(settingsTab.rawValue, forKey: Self.settingsTabKey) }
-    }
+    /// Which settings are open. Every time the window opens, the wallpaper's own.
+    @Published var settingsTab: SettingsTab = .wallpaper
 
     /// Without defaults nothing is read or remembered: the screenshot helper works that way,
     /// next to the copy in use.
@@ -40,7 +39,6 @@ final class MainWindowState: ObservableObject {
         self.defaults = defaults
         // Until the user hides them, the settings are there, showing the wallpaper's own.
         showsSettings = defaults?.object(forKey: Self.showsSettingsKey) as? Bool ?? true
-        settingsTab = defaults?.string(forKey: Self.settingsTabKey).flatMap(SettingsTab.init(rawValue:)) ?? .wallpaper
     }
 }
 
@@ -155,10 +153,12 @@ final class WindowManager: NSObject, NSWindowDelegate {
             guard let self else { return }
             if closing === self.libraryWindow {
                 self.libraryWindow = nil
-                // The window opens on the whole library next time, not on what was searched for.
+                // The window opens on the whole library next time, not on what was searched for,
+                // and on the wallpaper's settings, not on the app's.
                 self.state.searchText = ""
                 self.state.selectedTags = []
                 self.state.showsTagFilter = false
+                self.state.settingsTab = .wallpaper
             }
             if let id = self.editors.first(where: { $0.value.window === closing })?.key {
                 self.editors[id] = nil
