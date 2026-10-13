@@ -230,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowedContentTypes = MediaImporter.acceptedContentTypes
-        panel.message = NSLocalizedString("Choose videos, GIFs, pictures or a .zip archive with a wallpaper. Folders are searched too.", comment: "Open panel")
+        panel.message = NSLocalizedString("Choose videos, GIFs, pictures or an archive with a wallpaper. Folders are searched too.", comment: "Open panel")
         panel.prompt = NSLocalizedString("Add", comment: "Open panel button")
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK else { return }

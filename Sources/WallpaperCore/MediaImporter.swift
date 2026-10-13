@@ -8,7 +8,7 @@ public enum MediaImporter {
     /// Content types offered in the open panel.
     /// What the panel for adding wallpapers lets be chosen. An archive holds a wallpaper made
     /// for Wallpaper Engine, or a page, or videos and pictures; see `WallpaperLibrary.importArchive`.
-    public static let acceptedContentTypes: [UTType] = [.movie, .image, .zip]
+    public static let acceptedContentTypes: [UTType] = [.movie, .image] + Archive.fileExtensions.compactMap { UTType(filenameExtension: $0) }
 
     public static func canImport(_ url: URL) -> Bool {
         guard let type = contentType(of: url) else { return false }

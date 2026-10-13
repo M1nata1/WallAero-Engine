@@ -15,6 +15,8 @@ public enum ImportError: LocalizedError, Equatable {
     case unsupportedWallpaperEngineKind(String)
     /// One of Wallpaper Engine's own scenes with no picture in it that could be read.
     case noPicturesInScene
+    /// Settings made for another wallpaper, without the wallpaper they are for.
+    case settingsWithoutWallpaper
     case unreadableArchive
     /// The archive unpacks, but has no wallpaper, page, video or picture in it.
     case emptyArchive
@@ -52,6 +54,9 @@ public enum ImportError: LocalizedError, Equatable {
             )
         case .noPicturesInScene:
             return NSLocalizedString("This Wallpaper Engine scene has no pictures that could be read.", comment: "Import error")
+        case .settingsWithoutWallpaper:
+            return NSLocalizedString("These are only settings for another wallpaper, and that wallpaper is not here. Add the two together.",
+                                     comment: "Import error")
         case .unreadableArchive:
             return NSLocalizedString("The archive could not be unpacked.", comment: "Import error")
         case .emptyArchive:

@@ -127,6 +127,13 @@ struct BinaryReader {
         return true
     }
 
+    /// Goes on reading from another place of the data, counted from its start; false if it has no such place.
+    mutating func seek(to place: Int) -> Bool {
+        guard place >= 0, place <= data.count else { return false }
+        offset = place
+        return true
+    }
+
     /// A text with its length before it.
     mutating func text() -> String? {
         guard let length = uint32(), length <= 4096, let raw = bytes(Int(length)) else { return nil }

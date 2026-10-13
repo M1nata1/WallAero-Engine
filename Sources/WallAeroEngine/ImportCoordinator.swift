@@ -123,7 +123,10 @@ final class ImportCoordinator: ObservableObject {
         let wallpapers = inside.filter { WallpaperEngineProject(folder: $0) != nil }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
         if !wallpapers.isEmpty {
-            return wallpapers
+            // Settings made for another wallpaper are brought in together with it, as one
+            // wallpaper; a folder that has such settings is taken whole.
+            let hasSettings = wallpapers.contains { WallpaperEngineProject(folder: $0)?.kind == .preset }
+            return hasSettings ? [url] : wallpapers
         }
         guard let enumerator = FileManager.default.enumerator(
             at: url,

@@ -972,6 +972,81 @@ final class WallpaperEngineTests: XCTestCase {
         XCTAssertNil(WallpaperEngineProject(folder: wallpaper))
     }
 
+    func testAProjectSaysItsGenresItsKindAndWhomItIsFor() throws {
+        try write("<html></html>", to: "index.html")
+        // Genres of the Workshop, one the author made up, a repeat, the one that says nothing,
+        // and what is no name at all.
+        try write(#"{"file": "index.html", "type": "web", "contentrating": "Mature", "tags": ["Anime", "Sci-Fi", "Neverness to Everness", "anime", "Unspecified", 7, " "]}"#,
+                  to: "project.json")
+        let project = try XCTUnwrap(WallpaperEngineProject(folder: wallpaper))
+        XCTAssertEqual(project.tags.map(\.name), ["Anime", "Science fiction", "Neverness to Everness", "Web page", "For adults"])
+        XCTAssertEqual(project.tags.map(\.category), ["Genre", "Genre", "Genre", "Kind", "Age rating"])
+
+        // A project that says nothing of itself still has its kind.
+        try write(#"{"file": "index.html", "type": "web"}"#, to: "project.json")
+        XCTAssertEqual(WallpaperEngineProject(folder: wallpaper)?.tags, [WallpaperEngineProject.Tag(name: "Web page", category: "Kind")])
+        // One genre written as a text, a rating the app does not know.
+        try write(#"{"file": "index.html", "type": "web", "tags": "Relaxing", "contentrating": "Unknown"}"#, to: "project.json")
+        XCTAssertEqual(WallpaperEngineProject(folder: wallpaper)?.tags.map(\.name), ["Relaxing", "Web page"])
+    }
+
+    func testAWallpaperComesWithItsTagsAndOnlyNewOnesGetACategory() async throws {
+        let library = WallpaperLibrary(rootURL: root.appendingPathComponent("Library"))
+        // The user has a tag of their own already, and keeps it in no category.
+        let own = try await library.importFile(at: TestMedia.pngFile(in: root))
+        library.setTags(["anime"], for: own.id)
+
+        try write("<html></html>", to: "index.html")
+        try write(#"{"file": "index.html", "type": "web", "title": "Koi", "contentrating": "Everyone", "tags": ["Anime", "Relaxing"]}"#, to: "project.json")
+        let added = try await library.importItem(at: wallpaper, languages: ["en"])
+        XCTAssertEqual(added.first?.tagList, ["anime", "Relaxing", "Web page", "For everyone"], "the spelling in use is kept")
+        XCTAssertNil(library.category(of: "anime"), "a tag the user has stays where they keep it")
+        XCTAssertEqual(library.category(of: "Relaxing"), "Genre")
+        XCTAssertEqual(library.category(of: "Web page"), "Kind")
+        XCTAssertEqual(library.category(of: "For everyone"), "Age rating")
+
+        // Moved by the user, a tag is not put back by the next wallpaper that has it.
+        library.setCategory("Mood", ofTag: "Relaxing")
+        library.setCategory(nil, ofTag: "Web page")
+        let again = try await library.importItem(at: wallpaper, languages: ["en"])
+        XCTAssertEqual(again.first?.tagList, ["anime", "Relaxing", "Web page", "For everyone"])
+        XCTAssertEqual(library.category(of: "Relaxing"), "Mood")
+        XCTAssertNil(library.category(of: "Web page"))
+    }
+
+    func testAnArchiveOfAnotherKindIsUnpackedToo() async throws {
+        XCTAssertTrue(Archive.isArchive(URL(fileURLWithPath: "/tmp/1491259571_SITE.RAR")))
+        XCTAssertTrue(Archive.isArchive(URL(fileURLWithPath: "/tmp/wallpaper.7z")))
+        XCTAssertFalse(Archive.isArchive(URL(fileURLWithPath: "/tmp/wallpaper.mp4")))
+
+        try writePage()
+        // Names that are not plain Latin letters are common in wallpapers.
+        try "заметка".write(to: wallpaper.appendingPathComponent("说明 — заметка.txt"), atomically: true, encoding: .utf8)
+        let archive = root.appendingPathComponent("3808790239_SITE.7z")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/bsdtar")
+        process.arguments = ["--format", "7zip", "-cf", archive.path, "-C", root.path, wallpaper.lastPathComponent]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+
+        let library = WallpaperLibrary(rootURL: root.appendingPathComponent("Library"))
+        let added = try await library.importItem(at: archive, languages: ["en"])
+        XCTAssertEqual(added.map(\.name), ["Koi Pond"])
+        let page = library.projectURL(for: added[0]).appendingPathComponent("page")
+        XCTAssertEqual(try String(contentsOf: page.appendingPathComponent("说明 — заметка.txt"), encoding: .utf8), "заметка")
+
+        // What only calls itself an archive is refused as one.
+        let broken = root.appendingPathComponent("broken.rar")
+        try Data("not an archive".utf8).write(to: broken)
+        do {
+            _ = try await library.importItem(at: broken)
+            XCTFail("a file that is no archive was unpacked")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .unreadableArchive)
+        }
+    }
+
     func testWallpaperEngineWritesAColorAsThreeNumbers() {
         XCTAssertEqual(WallpaperEngineProject.hexColor("1 0 0"), "#FF0000")
         XCTAssertEqual(WallpaperEngineProject.hexColor("0.18 0.55 0.96"), "#2E8CF5")
@@ -1040,9 +1115,9 @@ final class WallpaperEngineSceneTests: XCTestCase {
     }
 
     private func texture(pixels: Data, format: Int, width: Int, height: Int, canvas: Int, version: Int = 2,
-                         packed: Bool = false, pictureFile: Bool = false, video: Bool = false) -> Data {
+                         packed: Bool = false, pictureFile: Bool = false, video: Bool = false, flags: Int = 2) -> Data {
         var file = Data("TEXV0005\0TEXI0001\0".utf8)
-        for value in [format, 2, canvas, canvas, width, height, 0] {
+        for value in [format, flags, canvas, canvas, width, height, 0] {
             file += number(value)
         }
         file += Data("TEXB000\(version)\0".utf8) + number(1)
@@ -1168,6 +1243,58 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertNil(WallpaperEngineTexture.image(from: texture(pixels: pixels, format: 0, width: 2, height: 2, canvas: 2, version: 4, video: true)))
     }
 
+    /// An MP4 file: a row of parts, each with its length and a name of four letters.
+    private func movie() -> Data {
+        func part(_ name: String, _ body: Data) -> Data {
+            withUnsafeBytes(of: UInt32(8 + body.count).bigEndian) { Data($0) } + Data(name.utf8) + body
+        }
+        return part("ftyp", Data("isomiso2avc1mp41".utf8)) + part("moov", Data(count: 24)) + part("mdat", Data([1, 2, 3, 4, 5]))
+    }
+
+    func testATextureThatHoldsAVideoGivesTheVideo() throws {
+        let movie = movie()
+        // The third version says so among the texture's flags, and has the video where the pixels would be.
+        let flagged = texture(pixels: movie, format: 0, width: 638, height: 746, canvas: 1024, version: 3, flags: 2 | 32)
+        let read = try XCTUnwrap(WallpaperEngineTexture.texture(from: flagged))
+        XCTAssertTrue(read.pictures.isEmpty)
+        XCTAssertEqual(read.video?.file, movie)
+        XCTAssertEqual([read.video?.width, read.video?.height], [638, 746])
+        XCTAssertTrue(read.isClamped)
+        XCTAssertNil(WallpaperEngineTexture.image(from: flagged), "a video is not a picture")
+
+        // The fourth version says so by a number of its own; more may stand before the video
+        // than before pixels, and what follows the video is not the video.
+        var later = Data("TEXV0005\0TEXI0001\0".utf8)
+        for value in [0, 2, 1024, 1024, 638, 746, 0] {
+            later += number(value)
+        }
+        let head: [Data] = [Data("TEXB0004\0".utf8), number(1), number(-1), number(1), number(1), number(2), text("{}"), number(1),
+                            number(638), number(746), number(0), number(0), number(movie.count)]
+        head.forEach { later += $0 }
+        later += movie
+        later += Data(repeating: 0xFF, count: 9)
+        XCTAssertEqual(WallpaperEngineTexture.texture(from: later)?.video?.file, movie)
+
+        // Flagged as a video, with none inside.
+        XCTAssertNil(WallpaperEngineTexture.texture(from: texture(pixels: Data(count: 64), format: 0, width: 4, height: 4, canvas: 4,
+                                                                 version: 3, flags: 32)))
+    }
+
+    func testAVideoOfASceneIsLaidOutAsAVideo() throws {
+        let json = #"{"objects": [{"name": "Film", "image": "models/Film.json"}]}"#
+        let files = [("scene.json", Data(json.utf8))]
+            + picture("Film", texture: texture(pixels: movie(), format: 0, width: 638, height: 746, canvas: 1024, version: 3, flags: 2 | 32))
+        let folder = root.appendingPathComponent("Scene")
+        _ = try WallpaperEngineScene.export(try XCTUnwrap(WallpaperEnginePackage(data: package(files))), into: folder)
+        let textures = try XCTUnwrap(try table(in: folder)["textures"] as? [String: Any])
+        let film = try XCTUnwrap(textures["materials/film"] as? [String: Any])
+        let name = try XCTUnwrap(film["video"] as? String)
+        XCTAssertTrue(name.hasPrefix("engine/tex/") && name.hasSuffix(".mp4"))
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent(name)), movie())
+        XCTAssertEqual([film["width"] as? Int, film["height"] as? Int], [638, 746])
+        XCTAssertNil(film["pictures"])
+    }
+
     func testPixelsPackedForAGraphicsCardAreUnpacked() throws {
         // One square of four by four: red and blue, each pixel's two bits picking red, blue
         // or one of the two colors between them, a row at a time.
@@ -1254,19 +1381,29 @@ final class WallpaperEngineSceneTests: XCTestCase {
     """#
 
     /// A puppet: a triangle on two bones, with an animation of two frames in which the
-    /// second bone moves ten to the right.
-    private func puppet(triangle: [UInt16] = [0, 1, 2], bones: [UInt32] = [0, 1, 1]) -> Data {
+    /// second bone moves ten to the right. `newer` lays the file out as later versions of
+    /// Wallpaper Engine do: more before the corners, a corner that also keeps which way it
+    /// faces and lies, more after the triangles, the bones and each animation, and a second
+    /// animation.
+    private func puppet(triangle: [UInt16] = [0, 1, 2], bones: [UInt32] = [0, 1, 1], newer: Bool = false) -> Data {
         func float(_ value: Float) -> Data { withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) } }
-        var file = Data("MDLV0013\0".utf8)
-        let head: [Data] = [number(9), number(1), number(1), Data("materials/Sky.json\0".utf8), number(0)]
+        var file = Data("MDLV00\(newer ? 23 : 13)\0".utf8)
+        let head: [Data] = [number(0x0180_0009), number(1), number(1), Data("materials/Sky.json\0".utf8), number(0)]
         head.forEach { file += $0 }
+        if newer {
+            file += Data(count: 24)
+            file += number(0x0180_000F)
+        }
         var corners = Data()
         for (index, place) in [(Float(-10), Float(5)), (10, 5), (0, -5)].enumerated() {
             let u: Float = place.0 / 20 + 0.5
             let v: Float = 0.5 - place.1 / 10
-            let corner: [Data] = [float(place.0), float(place.1), float(0),
-                                  number(Int(bones[index])), number(0), number(0), number(0),
-                                  float(1), float(0), float(0), float(0), float(u), float(v)]
+            var corner: [Data] = [float(place.0), float(place.1), float(0)]
+            if newer {
+                corner += [float(0), float(0), float(1), float(1), float(0), float(0), float(1)]
+            }
+            corner += [number(Int(bones[index])), number(0), number(0), number(0),
+                       float(1), float(0), float(0), float(0), float(u), float(v)]
             corner.forEach { corners += $0 }
         }
         file += number(corners.count)
@@ -1274,6 +1411,11 @@ final class WallpaperEngineSceneTests: XCTestCase {
         file += number(triangle.count * 2)
         for corner in triangle {
             file += withUnsafeBytes(of: corner.littleEndian) { Data($0) }
+        }
+        if newer {
+            // Which of the triangles belong together.
+            let parts: [Data] = [Data([0, 1]), number(16), number(0), number(0), number(0), number(triangle.count)]
+            parts.forEach { file += $0 }
         }
         var skeleton = Data()
         for (parent, x) in [(-1, Float(0)), (0, Float(3))] {
@@ -1284,21 +1426,35 @@ final class WallpaperEngineSceneTests: XCTestCase {
             }
             skeleton += Data([0])
         }
-        let rest: [Data] = [Data("MDLS0001\0".utf8), number(0), Data([2, 0, 0, 0]), skeleton,
-                            Data("MDLA0001\0".utf8), number(0), number(1),
-                            number(51), number(0), Data("Sway\0".utf8), Data("Loop\0".utf8), float(30), number(1), number(0), number(2)]
+        if newer {
+            // What makes the bones sway, for each of them.
+            let sway: [Data] = [Data(count: 11), Data([1]), float(10), float(6.5), float(6.5)]
+            sway.forEach { skeleton += $0 }
+        }
+        let rest: [Data] = [Data("MDLS000\(newer ? 4 : 1)\0".utf8), number(0), Data([2, 0, 0, 0]), skeleton,
+                            Data("MDLA000\(newer ? 6 : 1)\0".utf8), number(0), number(newer ? 2 : 1)]
         rest.forEach { file += $0 }
-        for x in [Float(0), Float(3)] {
-            file += number(0)
-            file += number(2 * 36)
-            let places: [Float] = [x, x > 0 ? x + 10 : x]
-            for moved in places {
-                for value in [moved, 0, 0, 0, 0, 0, 1, 1, 1] as [Float] {
-                    file += float(value)
+        let animations: [(id: Int, name: String, mode: String, rate: Float)] = newer
+            ? [(51, "Sway", "Loop", 30), (52, "动画 2", "single", 24)]
+            : [(51, "Sway", "Loop", 30)]
+        for animation in animations {
+            let start: [Data] = [number(animation.id), number(0), Data("\(animation.name)\0".utf8), Data("\(animation.mode)\0".utf8),
+                                 float(animation.rate), number(1), number(0), number(2)]
+            start.forEach { file += $0 }
+            for x in [Float(0), Float(3)] {
+                file += number(0)
+                file += number(2 * 36)
+                let places: [Float] = [x, x > 0 ? x + 10 : x]
+                for moved in places {
+                    for value in [moved, 0, 0, 0, 0, 0, 1, 1, 1] as [Float] {
+                        file += float(value)
+                    }
                 }
             }
+            // What follows an animation: a number, and in later versions more.
+            file += newer ? Data(count: 35) : number(0)
         }
-        return file + number(0)
+        return file
     }
 
     func testAPuppetIsReadWithItsBonesAndAnimations() throws {
@@ -1327,6 +1483,60 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertNil(WallpaperEnginePuppet(data: Data("MDLV0013".utf8)))
         // Cut short in its animations, it still has its shape and bones.
         XCTAssertEqual(WallpaperEnginePuppet(data: puppet().dropLast(40))?.animations.count, 0)
+    }
+
+    func testAPuppetOfALaterVersionIsRead() throws {
+        // Later versions put more before the corners, keep more in each, and put more after the
+        // triangles, the bones and every animation. The puppet read is the same.
+        let older = try XCTUnwrap(WallpaperEnginePuppet(data: puppet()))
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true)))
+        XCTAssertEqual(read.corners, older.corners)
+        XCTAssertEqual(read.triangles, [0, 1, 2])
+        XCTAssertEqual(read.bones, older.bones)
+        // Both of its animations, the second found past what follows the first.
+        XCTAssertEqual(read.animations.map(\.id), [51, 52])
+        XCTAssertEqual(read.animations.map(\.name), ["Sway", "动画 2"])
+        XCTAssertEqual(read.animations.map(\.mode), ["loop", "single"])
+        XCTAssertEqual(read.animations.map(\.framesPerSecond), [30, 24])
+        XCTAssertEqual(read.animations[1].frames, older.animations[0].frames)
+
+        // What must hold of it still must: a corner of the triangle that is not there, a bone
+        // that is not there.
+        XCTAssertNil(WallpaperEnginePuppet(data: puppet(triangle: [0, 1, 7], newer: true)))
+        XCTAssertNil(WallpaperEnginePuppet(data: puppet(bones: [0, 1, 5], newer: true)))
+    }
+
+    func testAPuppetWithoutBonesIsAPictureCutToItsShape() throws {
+        // Some files end after the triangles: corners that say nothing of bones, and no bones.
+        func float(_ value: Float) -> Data { withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) } }
+        var file = Data("MDLV0023\0".utf8)
+        let head: [Data] = [number(9), number(1), number(1), Data("materials/Sky.json\0".utf8), number(0), Data(count: 24), number(0xF)]
+        head.forEach { file += $0 }
+        var corners = Data()
+        for place in [(Float(-10), Float(5)), (10, 5), (0, -5)] {
+            let corner: [Float] = [place.0, place.1, 0, 0, 0, 1, 1, 0, 0, 1, place.0 / 20 + 0.5, 0.5 - place.1 / 10]
+            corner.forEach { corners += float($0) }
+        }
+        file += number(corners.count)
+        file += corners
+        file += number(6)
+        for corner in [0, 1, 2] as [UInt16] {
+            file += withUnsafeBytes(of: corner.littleEndian) { Data($0) }
+        }
+        file += Data(count: 7)
+
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: file))
+        XCTAssertEqual(read.triangles, [0, 1, 2])
+        // Every corner hangs whole on one bone that stays where it is.
+        XCTAssertEqual(Array(read.corners[0..<12]), [-10, 5, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0])
+        XCTAssertEqual(Array(read.corners[24..<28]), [0, -5, 0.5, 1])
+        XCTAssertEqual(read.bones.count, 1)
+        XCTAssertEqual(read.bones.first?.parent, -1)
+        XCTAssertTrue(read.animations.isEmpty)
+        // A corner the triangles name that is not there.
+        var broken = file
+        broken[broken.count - 9] = 9
+        XCTAssertNil(WallpaperEnginePuppet(data: broken))
     }
 
     private func scenePackage() throws -> Data {
@@ -1455,6 +1665,65 @@ final class WallpaperEngineSceneTests: XCTestCase {
         }
         XCTAssertEqual(try String(contentsOf: folder.appendingPathComponent("engine.js"), encoding: .utf8), WallpaperEngineRuntime.script)
         XCTAssertEqual(library.leftOutOnImport[added[0].id], .init(animations: 1, objects: 1))
+    }
+
+    func testSettingsMadeForAnotherWallpaperBringItInAsTheyHaveIt() async throws {
+        // As sites pack them: the wallpaper under its number, the settings made for it under theirs.
+        let both = root.appendingPathComponent("Both")
+        let base = both.appendingPathComponent("3122339805")
+        let settings = both.appendingPathComponent("3154017672")
+        let files = FileManager.default
+        try files.createDirectory(at: base, withIntermediateDirectories: true)
+        try files.createDirectory(at: settings.appendingPathComponent("files"), withIntermediateDirectories: true)
+        try scenePackage().write(to: base.appendingPathComponent("scene.pkg"))
+        try #"""
+        {"file": "scene.json", "type": "scene", "title": "Pixels", "tags": ["Pixel art"], "contentrating": "Everyone",
+         "general": {"properties": {
+          "greeting": {"order": 1, "text": "Greeting", "type": "textinput", "value": "Hello"},
+          "look": {"order": 3, "text": "Look", "type": "combo", "value": "2",
+                   "options": [{"label": "Day", "value": "1"}, {"label": "Night", "value": "2"}]},
+          "speed": {"order": 4, "text": "Speed", "type": "slider", "min": 0, "max": 2, "value": 1},
+          "picture": {"order": 5, "text": "Picture", "type": "scenetexture", "value": ""},
+          "other": {"order": 6, "text": "Other picture", "type": "scenetexture", "value": ""}
+        }}}
+        """#.write(to: base.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+        try TestMedia.writePNG(to: settings.appendingPathComponent("files/own.png"), size: CGSize(width: 8, height: 4))
+        try "kept to itself".write(to: both.appendingPathComponent("outside.png"), atomically: true, encoding: .utf8)
+        try #"""
+        {"dependency": "3122339805", "title": "y2k", "tags": ["Abstract"], "contentrating": "Mature",
+         "preset": {"greeting": "Hi", "look": "1", "speed": 7, "picture": "files/own.png", "other": "../outside.png", "gone": 1}}
+        """#.write(to: settings.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(WallpaperEngineProject(folder: settings)?.kind, .preset)
+        XCTAssertEqual(WallpaperEngineProject(folder: settings)?.dependency, "3122339805")
+
+        let library = WallpaperLibrary(rootURL: root.appendingPathComponent("Library"))
+        let added = try await library.importItem(at: both, languages: ["en"])
+        // One wallpaper, not two: the one the settings are for, as they have it.
+        XCTAssertEqual(added.map(\.name), ["y2k"])
+        XCTAssertEqual(library.items.count, 1)
+        XCTAssertEqual(added[0].tagList, ["Abstract", "Scene", "For adults"])
+        let folder = library.projectURL(for: added[0])
+        let scene = try SceneProject.read(from: folder)
+        XCTAssertEqual(scene.variables.map(\.property), ["greeting", "look", "speed"])
+        XCTAssertEqual(scene.variables[0].text, "Hi")
+        XCTAssertEqual(scene.variables[1].text, "Day")
+        XCTAssertEqual(scene.variables[2].number, 2, "no further than the setting goes")
+        // The picture the settings choose is a texture of the scene, named after the setting;
+        // a name that leads out of their folder is not followed.
+        let textures = try XCTUnwrap(try table(in: folder)["textures"] as? [String: Any])
+        let chosen = try XCTUnwrap(((textures["user/picture"] as? [String: Any])?["pictures"] as? [[String: Any]])?.first)
+        XCTAssertEqual([chosen["width"] as? Int, chosen["height"] as? Int], [8, 4])
+        XCTAssertTrue(files.fileExists(atPath: folder.appendingPathComponent(try XCTUnwrap(chosen["file"] as? String)).path))
+        XCTAssertNil(textures["user/other"])
+
+        // Settings alone are no wallpaper, and say so.
+        do {
+            _ = try await library.importItem(at: settings)
+            XCTFail("settings without their wallpaper were taken")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .settingsWithoutWallpaper)
+        }
+        XCTAssertEqual(library.items.count, 1)
     }
 
     func testOnlyScenesThatHoldOneGetThePlayer() throws {
@@ -1654,6 +1923,99 @@ final class WallpaperEngineShaderTests: XCTestCase {
         // What cannot be mended is left to be reported: a vector cannot grow, and other complaints.
         XCTAssertNil(try mend(["ERROR: 0:\(at): 'assign' : cannot convert from \(vector3) to \(vector4)"], at: at))
         XCTAssertNil(try mend(["ERROR: 0:3: 'foo' : undeclared identifier"], at: 3))
+    }
+
+    func testEveryNameDeclaredAtOnceIsMendedByItself() throws {
+        // Direct3D takes one number for a vector, also where several names are declared at once.
+        let source = """
+        varying vec2 v_TexCoord;
+        void main() {
+          vec2 uv = v_TexCoord.xy;
+          vec2 radial = 0.0, tangential = 0.0, center = (uv - 0.5);
+          gl_FragColor = vec4(radial + tangential + center, 0.0, 1.0);
+        }
+        """
+        var shader = try whole(source)
+        let at = try XCTUnwrap(shader.components(separatedBy: "\n").firstIndex { $0.contains("vec2 radial") }) + 1
+        let refused = "ERROR: 0:\(at): '=' : cannot convert from 'const float' to 'highp 2-component vector of float'"
+        func mended() throws -> String? {
+            let result = try XCTUnwrap(try player("mend").call(withArguments: [shader, [refused], at]))
+            return result.isNull ? nil : result.toString()
+        }
+        shader = try XCTUnwrap(try mended())
+        XCTAssertTrue(shader.contains("vec2 radial = vec2(0.0), tangential = 0.0, center = (uv - 0.5);"))
+        shader = try XCTUnwrap(try mended())
+        XCTAssertTrue(shader.contains("vec2 radial = vec2(0.0), tangential = vec2(0.0), center = (uv - 0.5);"))
+    }
+
+    func testTheRemainderSignAndAYesOrNoAreMended() throws {
+        // A translated shader counts in fractions, which have no sign for what a division
+        // leaves; and Direct3D takes a yes or no for a number.
+        let source = """
+        void main() {
+          uint low = frequency % RESOLUTION; uint next = (low + 1) % RESOLUTION;
+          float bar = 1.0;
+          bar *= isLeft;
+          gl_FragColor = vec4(bar);
+        }
+        """
+        var shader = try whole(source, switches: ["RESOLUTION": 32])
+        let at = try XCTUnwrap(shader.components(separatedBy: "\n").firstIndex { $0.contains("frequency % RESOLUTION") }) + 1
+        let remainder = "ERROR: 0:\(at): '%' : wrong operand types - no operation '%' exists that takes a left-hand operand of type 'highp float' and a right operand of type 'const float' (or there is no acceptable conversion)"
+        func mended(_ messages: [String], at line: Int) throws -> String? {
+            let result = try XCTUnwrap(try player("mend").call(withArguments: [shader, messages, line]))
+            return result.isNull ? nil : result.toString()
+        }
+        // One sign at a time, the first that is left.
+        shader = try XCTUnwrap(try mended([remainder], at: at))
+        XCTAssertTrue(shader.contains("float low = fmod(frequency, RESOLUTION); float next = (low + 1.0) % RESOLUTION;"))
+        shader = try XCTUnwrap(try mended([remainder], at: at))
+        XCTAssertTrue(shader.contains("float low = fmod(frequency, RESOLUTION); float next = fmod((low + 1.0), RESOLUTION);"))
+        XCTAssertNil(try mended([remainder], at: at))
+
+        let yesOrNo = try XCTUnwrap(shader.components(separatedBy: "\n").firstIndex { $0.contains("bar *= isLeft;") }) + 1
+        shader = try XCTUnwrap(try mended(["ERROR: 0:\(yesOrNo): 'assign' : cannot convert from 'bool' to 'highp float'"], at: yesOrNo))
+        XCTAssertTrue(shader.contains("bar *= float(isLeft);"))
+    }
+
+    func testTheBlursWallpaperEngineKeepsToItselfAreThere() throws {
+        // A shader includes them before it names its pictures, so they are replacements of
+        // text, made out where they are used.
+        let source = """
+        #include "common_blur.h"
+        varying vec4 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+          vec4 soft = blur13a(v_TexCoord.xy, v_TexCoord.zw);
+          gl_FragColor = vec4(blur7(v_TexCoord.xy, v_TexCoord.zw) + blur3a(v_TexCoord.xy, v_TexCoord.zw).rgb, soft.a);
+        }
+        """
+        let shader = try translate(source)
+        XCTAssertFalse(shader.contains("#error"))
+        for name in ["blur13a", "blur13", "blur7a", "blur7", "blur3a", "blur3"] {
+            XCTAssertTrue(shader.contains("#define \(name)(u, d) ("), name)
+        }
+        // Looked at in the middle and to both sides of it, along the direction given.
+        XCTAssertTrue(shader.contains("#define blur3a(u, d) (texture(g_Texture0, (u)) * 0.29411764705882354 + (texture(g_Texture0, (u) + (d) * 1.3333333333333333) + texture(g_Texture0, (u) - (d) * 1.3333333333333333)) * 0.35294117647058826)"))
+    }
+
+    func testAScriptsOwnSettingsFollowWhatTheSceneGives() throws {
+        context.evaluateScript("""
+        var given = { speed: { user: 'missing', value: 5 }, tone: '1 0.5 0', plain: 7 };
+        var made = window.WallaeroEngine.settings(given)()
+          .addSlider({ name: 'speed', value: 1 }).addColor({ name: 'tone', value: { x: 0, y: 0, z: 0 } })
+          .addSlider({ name: 'plain', value: 2 }).addCheckbox({ name: 'own', value: true }).finish();
+        """)
+        func says(_ what: String) -> String? { context.evaluateScript("String(\(what))")?.toString() }
+        // What the scene gives stands in for what the script declares; a color comes as a vector.
+        XCTAssertEqual([says("made.speed"), says("made.plain"), says("made.own"), says("made.tone.y")], ["5", "7", "true", "0.5"])
+        // The scene's value is asked anew every time, so that a setting of the wallpaper
+        // behind it may change while the scene plays.
+        context.evaluateScript("given.speed.value = 9;")
+        XCTAssertEqual(says("made.speed"), "9")
+        // What the script sets itself stays.
+        context.evaluateScript("made.speed = 3; given.speed.value = 11;")
+        XCTAssertEqual(says("made.speed"), "3")
     }
 
     func testTheTintBlendModeKeepsHowLightThePictureWas() throws {

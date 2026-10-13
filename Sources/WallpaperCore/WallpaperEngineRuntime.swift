@@ -242,7 +242,29 @@ public enum WallpaperEngineRuntime {
           '  vec3 n = normalize(modelTransform * normal);',
           '  return mat3(tangent, cross(n, tangent) * signedTangent.w, n);',
           '}'
-        ].join('\n')
+        ].join('\n'),
+
+        // Blurs along one direction: the picture in the shader's first slot, looked at in several
+        // places to both sides and weighed as a bell curve weighs them. They are written as
+        // replacements of text, not as functions: a shader includes this before it names its
+        // pictures. The ones ending in `a` keep how solid the picture is; the others give its
+        // color alone.
+        'common_blur.h': (function () {
+          // A blur over so many pixels, as a middle weight and pairs of distance and weight.
+          function blur(name, middle, pairs) {
+            var sum = 'texSample2D(g_Texture0, (u)) * ' + middle;
+            pairs.forEach(function (pair) {
+              sum += ' + (texSample2D(g_Texture0, (u) + (d) * ' + pair[0] + ') + texSample2D(g_Texture0, (u) - (d) * ' + pair[0] + ')) * ' + pair[1];
+            });
+            return ['#define ' + name + 'a(u, d) (' + sum + ')', '#define ' + name + '(u, d) ((' + sum + ').rgb)'];
+          }
+          return [].concat(
+            blur('blur13', '0.1964825501511404', [['1.411764705882353', '0.2969069646728344'], ['3.2941176470588234', '0.09447039785044732'],
+                                                  ['5.176470588235294', '0.010381362401148057']]),
+            blur('blur7', '0.2270270270', [['1.3846153846', '0.3162162162'], ['3.2307692308', '0.0702702703']]),
+            blur('blur3', '0.29411764705882354', [['1.3333333333333333', '0.35294117647058826']])
+          ).join('\n');
+        })()
       };
 
       // ------------------------------------------------------------------ shaders
@@ -673,7 +695,19 @@ public enum WallpaperEngineRuntime {
 
         // Two values of different sizes joined by a sign: the larger is cut to the smaller. A yes
         // or no joined to a number counts as one or nought.
-        var joined = /'([-+*\/])' : wrong operand types.*left-hand operand of type '([^']*)' and a right operand of type '([^']*)'/.exec(message);
+        var joined = /'([-+*\/%])' : wrong operand types.*left-hand operand of type '([^']*)' and a right operand of type '([^']*)'/.exec(message);
+        if (joined && joined[1] === '%') {
+          // What is left of a division. A translated shader counts in fractions, which have no
+          // sign for that; the function does what the sign did.
+          for (var sign = 0; sign < text.length; sign++) {
+            if (text.charAt(sign) !== '%' || text.charAt(sign + 1) === '=') continue;
+            var divided = valueBefore(text, sign), by = valueAfter(text, sign + 1);
+            if (divided[0] === divided[1] || by[0] === by[1]) continue;
+            lines[line - 1] = text.slice(0, divided[0]) + 'fmod(' + text.slice(divided[0], divided[1]) + ', ' + text.slice(by[0], by[1]) + ')' + text.slice(by[1]);
+            return lines.join('\n');
+          }
+          return null;
+        }
         if (joined) {
           var left = sizeNamed(joined[2]), right = sizeNamed(joined[3]);
           if (left === 0 || right === 0 || left === right) return null;
@@ -708,30 +742,34 @@ public enum WallpaperEngineRuntime {
         var convert = /cannot convert from '([^']*)' to '([^']*)'/.exec(message);
         if (convert) {
           var from = sizeNamed(convert[1]), to = sizeNamed(convert[2]);
-          if (typeof to !== 'number' || to === 0 || typeof from !== 'number' || from === 0 || (from !== 1 && from < to)) return null;
-          var type = to === 1 ? 'float' : 'vec' + to;
+          // A vector cannot grow; a yes or no counts as one or nought, and a number as a yes if it is not nought.
+          if (to === 0 || from === 0 || (typeof from === 'number' && typeof to === 'number' && from !== 1 && from < to)) return null;
+          var type = to === 'bool' ? 'bool' : (to === 1 ? 'float' : 'vec' + to);
           // The statements of the line, one after another: the first that gives a value to
           // something of that size, and has not been mended already, is mended.
           var names = declaredIn(source);
           var start = 0;
+          var kind = 0; // the size of the names a statement declares, one after another
           while (start < text.length) {
             var depth = 0, stop = -1, sign = -1;
             for (var i = start; i < text.length; i++) {
               var letter = text.charAt(i);
               if (letter === '(' || letter === '[') depth++;
               if (letter === ')' || letter === ']') depth--;
-              if (letter === ';' && depth === 0) {
+              // A statement ends here, or one of the names it declares does.
+              if ((letter === ';' || letter === ',') && depth === 0) {
                 stop = i;
                 break;
               }
               if (letter === '=' && depth === 0 && sign < 0 && text.charAt(i + 1) !== '=' && '=!<>'.indexOf(text.charAt(i - 1)) < 0) sign = i;
             }
             if (stop < 0) break;
+            // What is given a value, or only named: "vec3 b", "a.rgb", "b".
+            var target = text.slice(start, sign >= 0 ? sign : stop).replace(/[-+*\/]$/, '').trim();
+            var made = /^(?:const\s+)?(float|vec[234])\s+\w+$/.exec(target);
+            if (made) kind = made[1] === 'float' ? 1 : Number(made[1].charAt(3));
             if (sign >= 0) {
-              // What is given the value: "vec3 b", "a.rgb", "b".
-              var target = text.slice(start, sign).replace(/[-+*\/]$/, '').trim();
-              var made = /^(?:const\s+)?(float|vec[234])\s+\w+$/.exec(target);
-              var size = made ? (made[1] === 'float' ? 1 : Number(made[1].charAt(3))) : sizeWritten(target, names);
+              var size = made || (kind !== 0 && /^\w+$/.test(target)) ? kind : sizeWritten(target, names);
               var given = text.slice(sign + 1, stop).trim();
               var done = given.indexOf(type + '(') === 0 && valueAfter(given, 0)[1] === given.length;
               if ((size === 0 || size === to) && given !== '' && !done) {
@@ -739,6 +777,7 @@ public enum WallpaperEngineRuntime {
                 return lines.join('\n');
               }
             }
+            if (text.charAt(stop) === ';') kind = 0;
             start = stop + 1;
           }
           return null;
@@ -1124,13 +1163,30 @@ public enum WallpaperEngineRuntime {
       function scriptSettings(given) {
         return function () {
           var values = {};
+          function add(said) {
+            if (!said || said.name === undefined) return;
+            var own; // what the script itself has set it to
+            Object.defineProperty(values, said.name, {
+              enumerable: true,
+              configurable: true,
+              // Asked anew every time: a setting of the wallpaper may stand behind the value the
+              // scene gives, and may be changed while the scene plays.
+              get: function () {
+                if (own !== undefined) return own;
+                var value = given && typeof given === 'object' && said.name in given ? plain(given[said.name]) : said.value;
+                if (value === undefined || value === null) return said.value;
+                // A color comes as three numbers in a text; a script that declared one takes a vector.
+                if (typeof value === 'string' && said.value && typeof said.value === 'object' && 'x' in said.value) return new Vec3(value);
+                return value;
+              },
+              set: function (value) { own = value; }
+            });
+          }
           var builder = typeof Proxy === 'function' ? new Proxy({}, {
             get: function (object, name) {
               if (name === 'finish') return function () { return values; };
               return function (said) {
-                if (said && said.name !== undefined) {
-                  values[said.name] = given && said.name in given ? plain(given[said.name]) : said.value;
-                }
+                add(said);
                 return builder;
               };
             }
@@ -1421,6 +1477,86 @@ public enum WallpaperEngineRuntime {
           return fromPixels(new Uint8Array([red, green, blue, alpha]), 1, false);
         }
 
+        var films = [];   // the textures that are videos, each with the video it shows
+
+        // A texture that is a video. It plays by itself, over and over and without sound, at the
+        // speed the app plays the wallpaper at; every frame of it goes into the texture as it comes.
+        function film(entry) {
+          var layer = { texture: newTexture(entry.clamp !== false, entry.smooth !== false),
+                        width: number(entry.width, 0) || 1, height: number(entry.height, 0) || 1 };
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+          var result = { layers: [layer], width: layer.width, height: layer.height, channels: 'rgba', frames: null, ready: false };
+          var video = document.createElement('video');
+          video.muted = true;
+          video.defaultMuted = true;
+          video.loop = true;
+          video.playsInline = true;
+          video.preload = 'auto';
+          video.style.display = 'none';
+          // Whatever sound it has is not the wallpaper's.
+          video.wallaeroShare = 0;
+          var waited = true;
+          function settled() {
+            if (!waited) return;
+            waited = false;
+            loading--;
+            changed();
+          }
+          loading++;
+          video.addEventListener('loadeddata', settled);
+          video.addEventListener('error', function () {
+            if (waited) note('the video ' + entry.video + ' cannot be played; nothing shows in its place');
+            result.ready = true;
+            settled();
+          });
+          video.src = encodeURI(entry.video);
+          document.body.appendChild(video);
+          var host = window.__wallaeroHost;
+          if (host && host.autoplay) {
+            host.autoplay(video);
+          } else {
+            var started = video.play();
+            if (started && started['catch']) started['catch'](function () {});
+          }
+          // `users` are the objects that show it: what is kept of them is no longer good when the
+          // video has moved on.
+          result.film = { video: video, layer: layer, picture: result, shown: -1, users: [] };
+          films.push(result.film);
+          return result;
+        }
+
+        // Notes that an object shows a picture, which matters if the picture is a video.
+        function shows(thing, picture) {
+          if (picture && picture.film && picture.film.users.indexOf(thing) < 0) picture.film.users.push(thing);
+          return picture;
+        }
+
+        // Puts the frames the videos have come to into their textures; true if any was new.
+        function showFilms() {
+          var any = false;
+          films.forEach(function (each) {
+            var video = each.video;
+            if (video.readyState < 2 || video.currentTime === each.shown || !video.videoWidth) return;
+            each.shown = video.currentTime;
+            gl.bindTexture(gl.TEXTURE_2D, each.layer.texture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+            each.picture.ready = true;
+            each.users.forEach(stale);
+            any = true;
+          });
+          return any;
+        }
+
+        // A slot of a material may be left to a setting of the wallpaper: a picture the user is
+        // to choose. The name of the texture that came for it, if one did.
+        function chosenTexture(bound) {
+          var name = typeof bound === 'string' ? bound : (bound && typeof bound === 'object' && bound.type !== 'system' ? bound.name : null);
+          return typeof name === 'string' && pictures['user/' + key(name)] ? 'user/' + key(name) : null;
+        }
+
         // A texture by the name a material gives it: one of the scene's own, or one made here.
         // The scene's own arrive later; until then the texture is see-through.
         function texture(name) {
@@ -1428,7 +1564,9 @@ public enum WallpaperEngineRuntime {
           if (textureCache[id]) return textureCache[id];
           var entry = pictures[id] || pictures['materials/' + id];
           var result;
-          if (entry && entry.pictures && entry.pictures.length) {
+          if (entry && entry.video) {
+            result = film(entry);
+          } else if (entry && entry.pictures && entry.pictures.length) {
             result = { layers: [], width: entry.pictures[0].width, height: entry.pictures[0].height,
                        channels: entry.channels || 'rgba', frames: entry.frames || null, ready: false };
             var waiting = entry.pictures.length;
@@ -1535,7 +1673,6 @@ public enum WallpaperEngineRuntime {
         var pointerSeen = false; // whether the pointer is over the wallpaper, as far as is known
         var pointerBefore = [0.5, 0.5];
         var spectrum = null;    // 64 bands left, 64 right, once a shader asks for the sound
-        var wantsSound = false;
         var objects = [];
         var redraw = true;      // something changed that a still scene has to be drawn again for
 
@@ -1657,7 +1794,8 @@ public enum WallpaperEngineRuntime {
               return;
             }
             if (MOVING.test(name)) pass.moving = true;
-            if (/^g_AudioSpectrum/.test(name)) wantsSound = true;
+            // A shader that draws by the sound has the sound listened to.
+            if (/^g_AudioSpectrum/.test(name)) listen();
             var about = said.uniforms[name];
             var value = { name: name, uniform: uniform, live: null, material: about ? about.material : undefined };
             if (about) {
@@ -1751,7 +1889,9 @@ public enum WallpaperEngineRuntime {
           }
           // An animation plays from the scene's start, or waits for a script to play it; `at` is
           // how far it has played, in seconds. One that follows another plays as that one does.
-          var motion = curve ? { curve: curve, called: curve.called, at: 0, playing: !curve.startsPaused, speed: 1, leader: null } : null;
+          // Until one that waits has been played, the value stays as the scene gives it.
+          var motion = curve ? { curve: curve, called: curve.called, at: 0, playing: !curve.startsPaused, started: !curve.startsPaused,
+                                 speed: 1, leader: null } : null;
           if (motion) motions.push(motion);
           // `bound`: a setting of the wallpaper stands behind it.
           var value = { changes: !!curve, motion: motion, script: script, bound: !!(behind && behind.user !== undefined && behind.user !== null), now: base() };
@@ -1759,7 +1899,7 @@ public enum WallpaperEngineRuntime {
             // A script carries on from what the value is; anything else starts from what the
             // scene says.
             var result = script && script.made !== undefined ? value.now : base();
-            if (curve) result = curve((motion.leader || motion).at, result);
+            if (curve && (motion.leader || motion).started) result = curve((motion.leader || motion).at, result);
             if (script) result = runScript(script, result);
             value.now = result;
             return result;
@@ -1915,6 +2055,8 @@ public enum WallpaperEngineRuntime {
           get cursorLeftDown() { return pressed; }
         };
 
+        var standsFor = new WeakMap(); // the object of the scene behind what a script has of it
+
         // An object of the scene as its scripts see it: what they read is what shows, and what
         // they set shows from the next frame on.
         function layerObject(thing) {
@@ -2012,67 +2154,147 @@ public enum WallpaperEngineRuntime {
             return effect.forScripts;
           };
           object.getAnimationLayerCount = function () { return thing.puppet && thing.puppet.moving ? 1 : 0; };
-          // Other parts of an object a script may steer — the animation of a puppet, a video —
-          // take what they are told and do nothing with it.
-          function unsteered() {
-            return lenient({ visible: true, rate: 1, isPlaying: function () { return true; }, getFrame: function () { return 0; } });
-          }
           ['getAnimationLayer', 'getTextureAnimation', 'getVideoTexture', 'getMaterial'].forEach(function (name) { object[name] = unsteered; });
-          // An animation of one of the object's values, by the name the scene gives it: to be
-          // played, paused and stopped. One that has run to its end plays from its start.
+          // An animation of one of the object's values, by the name the scene gives it.
           object.getAnimation = function (wanted) {
-            var found = null;
-            Object.keys(thing.lives).forEach(function (name) {
-              var motion = thing.lives[name].motion;
-              if (motion && !motion.leader && !found && (wanted === undefined || motion.called === wanted)) found = motion;
-            });
-            if (!found) return unsteered();
-            if (!found.forScripts) {
-              found.forScripts = lenient({
-                get name() { return found.called; },
-                get fps() { return found.curve.rate; },
-                get frameCount() { return found.curve.frames; },
-                get duration() { return found.curve.frames / found.curve.rate; },
-                get rate() { return found.speed; },
-                set rate(value) { found.speed = Number(value) || 0; },
-                play: function () {
-                  if (found.curve.mode === 'single' && found.at * found.curve.rate >= found.curve.frames) found.at = 0;
-                  found.playing = true;
-                  changed();
-                },
-                pause: function () { found.playing = false; },
-                stop: function () {
-                  found.playing = false;
-                  found.at = 0;
-                  changed();
-                },
-                isPlaying: function () { return found.playing; },
-                getFrame: function () { return found.at * found.curve.rate; },
-                setFrame: function (frame) {
-                  found.at = Math.max(0, Number(frame) || 0) / found.curve.rate;
-                  changed();
-                }
-              });
-            }
-            return found.forScripts;
+            var found = motionOf(thing, wanted);
+            return found ? steered(found) : unsteered();
           };
           thing.forScripts = lenient(object);
+          standsFor.set(thing.forScripts, thing);
           return thing.forScripts;
         }
 
+        // Parts of an object a script may steer that are not played — the animation of a puppet,
+        // a video — take what they are told and do nothing with it.
+        function unsteered() {
+          return lenient({ visible: true, rate: 1, isPlaying: function () { return true; }, getFrame: function () { return 0; } });
+        }
+
+        // The animation of one of an object's values that goes by a name; with no name, its first.
+        function motionOf(thing, wanted) {
+          var found = null;
+          Object.keys(thing.lives).forEach(function (name) {
+            var motion = thing.lives[name].motion;
+            if (motion && !motion.leader && !found && (wanted === undefined || motion.called === wanted)) found = motion;
+          });
+          return found;
+        }
+
+        // An animation as scripts steer it: played, paused and stopped. One that has run to its
+        // end plays from its start.
+        function steered(found) {
+          if (!found.forScripts) {
+            found.forScripts = lenient({
+              get name() { return found.called; },
+              get fps() { return found.curve.rate; },
+              get frameCount() { return found.curve.frames; },
+              get duration() { return found.curve.frames / found.curve.rate; },
+              get rate() { return found.speed; },
+              set rate(value) { found.speed = Number(value) || 0; },
+              play: function () {
+                if (found.curve.mode === 'single' && found.at * found.curve.rate >= found.curve.frames) found.at = 0;
+                found.playing = true;
+                found.started = true;
+                changed();
+              },
+              pause: function () { found.playing = false; },
+              stop: function () {
+                found.playing = false;
+                found.started = false;
+                found.at = 0;
+                changed();
+              },
+              isPlaying: function () { return found.playing; },
+              getFrame: function () { return found.at * found.curve.rate; },
+              setFrame: function (frame) {
+                found.at = Math.max(0, Number(frame) || 0) / found.curve.rate;
+                found.started = true;
+                changed();
+              }
+            });
+          }
+          return found.forScripts;
+        }
+
         function find(wanted) {
-          if (wanted && wanted.forScripts) return wanted;
+          if (wanted && typeof wanted === 'object') return standsFor.get(wanted) || (things.indexOf(wanted) >= 0 ? wanted : null);
           var named = things.filter(function (thing) { return thing.name === wanted; })[0];
           return named || things.filter(function (thing) { return thing.id !== undefined && String(thing.id) === String(wanted); })[0] ||
                  (typeof wanted === 'number' ? things[wanted] || null : null);
         }
 
+        var made = 0; // how many layers the scripts have made
+
         var sceneObject = lenient({
+          // An animation by its name, whichever object it belongs to.
+          getAnimation: function (wanted) {
+            for (var i = 0; i < things.length; i++) {
+              var found = motionOf(things[i], wanted);
+              if (found) return steered(found);
+            }
+            return unsteered();
+          },
           getLayer: function (wanted) { return find(wanted) ? layerObject(find(wanted)) : null; },
           getLayerByID: function (wanted) { return find(wanted) ? layerObject(find(wanted)) : null; },
           getLayerCount: function () { return things.length; },
           enumerateLayers: function () { return things.map(layerObject); },
           getLayerIndex: function (wanted) { return things.indexOf(find(wanted)); },
+          // What the scene says of a layer, as it was before anything changed it.
+          getInitialLayerConfig: function (wanted) { return find(wanted) ? find(wanted).said : null; },
+          // A layer made while the scene plays, above the others: from the name of a picture's
+          // model, or from what an object of a scene is described by.
+          createLayer: function (config) {
+            var said = {};
+            if (typeof config === 'string') {
+              said.image = config;
+            } else {
+              Object.keys(config || {}).forEach(function (name) {
+                var value = config[name];
+                // A place, a size or a color may come as a script has them, not as a scene writes them.
+                said[name] = value && typeof value === 'object' && typeof value.x === 'number' ? String(value) : value;
+              });
+            }
+            made++;
+            if (said.id === undefined || byId[String(said.id)]) said.id = 'made ' + made;
+            var thing;
+            try {
+              thing = add(said);
+            } catch (error) {
+              note('a layer a script makes cannot be made: ' + error.message);
+              return lenient({});
+            }
+            settleIn(thing);
+            changed();
+            return layerObject(thing);
+          },
+          destroyLayer: function (wanted) {
+            var thing = find(wanted);
+            if (!thing) return false;
+            [objects, things].forEach(function (list) {
+              if (list.indexOf(thing) >= 0) list.splice(list.indexOf(thing), 1);
+            });
+            if (thing.heldBy) thing.heldBy.held = thing.heldBy.held.filter(function (each) { return each !== thing; });
+            if (thing.id !== undefined && byId[String(thing.id)] === thing) delete byId[String(thing.id)];
+            scripts = scripts.filter(function (script) { return script.owner !== thing; });
+            if (thing.sound) thing.sound.stop();
+            changed();
+            return true;
+          },
+          // Puts a layer at another place in the order the layers are drawn in, the first lowest.
+          sortLayer: function (wanted, index) {
+            var thing = find(wanted);
+            var to = Math.round(Number(index));
+            if (!thing || !isFinite(to)) return false;
+            [objects, things].forEach(function (list) {
+              var from = list.indexOf(thing);
+              if (from < 0) return;
+              list.splice(from, 1);
+              list.splice(Math.max(0, Math.min(list.length, to)), 0, thing);
+            });
+            changed();
+            return true;
+          },
           getCameraTransforms: function () {
             return { eye: new Vec3(0, 0, 1), center: new Vec3(0, 0, 0), up: new Vec3(0, 1, 0), zoom: 1 };
           },
@@ -2113,14 +2335,14 @@ public enum WallpaperEngineRuntime {
 
         // Tells the scripts of something that happened to the scene as a whole.
         function tellScripts(name, argument) {
-          scripts.forEach(function (script) { call(script, name, argument); });
+          scripts.slice().forEach(function (script) { call(script, name, argument); });
         }
 
         // Tells the scripts what the mouse did. A script hears of it when the pointer is over the
         // object it belongs to.
         function tellPointer(kind) {
           var world = inputObject.cursorWorldPosition;
-          scripts.forEach(function (script) {
+          scripts.slice().forEach(function (script) {
             var made = script.made;
             var thing = script.owner;
             if (!made || !thing || !thing.state || !thing.size || thing.solid === false) return;
@@ -2708,7 +2930,8 @@ public enum WallpaperEngineRuntime {
               var count = Math.max((own.textures || []).length, (chosen.textures || []).length);
               for (var slot = 0; slot < count; slot++) {
                 var given = (chosen.textures || [])[slot];
-                names[slot] = given !== null && given !== undefined ? given : ((own.textures || [])[slot] || null);
+                names[slot] = chosenTexture((chosen.usertextures || [])[slot]) || chosenTexture((own.usertextures || [])[slot]) ||
+                              (given !== null && given !== undefined ? given : ((own.textures || [])[slot] || null));
               }
               var pass = buildPass(own.shader, merged(own.combos, chosen.combos),
                                    merged(own.constantshadervalues, chosen.constantshadervalues), names, what, thing);
@@ -2731,7 +2954,7 @@ public enum WallpaperEngineRuntime {
                 } else if (/^_rt_/.test(key(name))) {
                   pass.inputs[slot] = { target: key(name) };
                 } else {
-                  pass.inputs[slot] = { picture: texture(name) };
+                  pass.inputs[slot] = { picture: shows(thing, texture(name)) };
                 }
               });
               if (pass.moving) thing.moving = true;
@@ -2748,7 +2971,7 @@ public enum WallpaperEngineRuntime {
           // Layers Wallpaper Engine has ready-made: one to put effects over others — it takes what
           // the scene shows under it, or holds the layers that hang on it — and one of a single
           // color, which a scene may also bring as a model of its own.
-          if (/composelayer|fullscreenlayer/.test(key(modelName))) {
+          if (/composelayer|fullscreenlayer|projectlayer/.test(key(modelName))) {
             if (!layer.holds) layer.takesScene = true;
           } else if (/solidlayer/.test(key(modelName)) || (model && (model.solidlayer === true || /solidlayer/.test(key(String(model.material || '')))))) {
             layer.picture = flat(255, 255, 255, 255);
@@ -2758,7 +2981,9 @@ public enum WallpaperEngineRuntime {
           }
           var base = (model && (json(model.material) || {}).passes || [])[0] || {};
           layer.blending = key(base.blending || 'translucent');
-          if (base.textures && base.textures[0]) layer.picture = texture('materials/' + base.textures[0]);
+          var chosenPicture = chosenTexture((base.usertextures || [])[0]);
+          if (chosenPicture) layer.picture = shows(layer, texture(chosenPicture));
+          else if (base.textures && base.textures[0]) layer.picture = shows(layer, texture('materials/' + base.textures[0]));
           if (!layer.picture && !layer.takesScene && !layer.holds) {
             note('“' + layer.name + '” has no picture');
             return null;
@@ -2879,8 +3104,10 @@ public enum WallpaperEngineRuntime {
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
           thing.picture = { layers: [entry], width: 1, height: 1, channels: 'rgba', frames: null, ready: true };
           // The box the scene gives the text: as wide as the text was when the scene was saved and
-          // as high as a line of it, in the font it names. It says where the text's edges are held.
+          // as high as its lines, in the font it names — with the room it leaves for effects on
+          // every side, if it has effects. It says how wide the letters of that font are.
           var given = numbers(object.size, 2, 0);
+          var roomy = Array.isArray(object.effects) && object.effects.length > 0;
           thing.size = given[0] > 0 ? given : [1, 1];
           var saved = object.text && typeof object.text === 'object' && !Array.isArray(object.text) ? object.text.value : object.text;
           saved = typeof saved === 'string' ? saved : '';
@@ -2920,7 +3147,8 @@ public enum WallpaperEngineRuntime {
             var squeeze = 1;
             if (given[0] > 0 && saved !== '' && saved.indexOf('\n') < 0 && !(widest > 0)) {
               var measured = pen.measureText(saved).width;
-              if (measured > 0) squeeze = Math.max(0.5, Math.min(1.5, given[0] / measured));
+              var savedWidth = given[0] - (roomy ? padding * 2 : 0);
+              if (measured > 0 && savedWidth > 0) squeeze = Math.max(0.5, Math.min(1.5, savedWidth / measured));
               if (Math.abs(squeeze - 1) < 0.03) squeeze = 1;
             }
             var lines = String(state.text).split('\n');
@@ -2972,10 +3200,12 @@ public enum WallpaperEngineRuntime {
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, paper);
             entry.width = paper.width;
             entry.height = paper.height;
-            // The text grows from the edge it is aligned to; in the middle, from its middle.
-            var box = given[0] > 0 ? given : content;
-            thing.shift = [across === 'left' ? (content[0] - box[0]) / 2 : (across === 'right' ? (box[0] - content[0]) / 2 : 0),
-                           down === 'top' ? (box[1] - content[1]) / 2 : (down === 'bottom' ? (content[1] - box[1]) / 2 : 0)];
+            // The side the text is aligned to is at its place, and the text grows away from it;
+            // aligned to the middle, it has its middle there. Up and down the text counts from
+            // the top of its first line to the line its last letters stand on: what hangs below
+            // that line is not counted.
+            thing.shift = [across === 'left' ? content[0] / 2 : (across === 'right' ? -content[0] / 2 : 0),
+                           down === 'top' ? -content[1] / 2 : (down === 'bottom' ? content[1] / 2 - fall : -fall / 2)];
             thing.size = [width, height];
             stale(thing);
           };
@@ -3852,7 +4082,8 @@ public enum WallpaperEngineRuntime {
           if (object.parent !== undefined && object.parent !== null) hasChildren[String(object.parent)] = true;
         });
 
-        all.forEach(function (object) {
+        // Puts an object on the scene, above what is there.
+        function add(object) {
           var hidden = object.visible === false;
           var make = object.image ? buildImage : (object.particle ? buildParticles : (object.sound ? buildSound :
                      (object.text !== undefined ? buildText : null)));
@@ -3868,13 +4099,13 @@ public enum WallpaperEngineRuntime {
             thing.held = [];
           }
           // What is hidden for good is only there for what hangs on it to be hidden with it.
-          if (hidden && !scripted) return;
+          if (hidden && !scripted) return thing;
           if (!make) {
             // Something with only a place holds the objects that hang on it together.
             if (!hidden && (object.model || object.light || object.camera)) {
               note('“' + thing.name + '” is ' + (object.model ? 'a 3D model' : (object.light ? 'a light' : 'a camera')) + ', which is not played');
             }
-            return;
+            return thing;
           }
           function finish() {
             var built = null;
@@ -3903,9 +4134,11 @@ public enum WallpaperEngineRuntime {
               thing.draw();
             };
           }
-        });
+          return thing;
+        }
+
         // Each object is drawn by the nearest layer above it that holds layers, if there is one.
-        objects.forEach(function (thing) {
+        function settleIn(thing) {
           var up = thing;
           for (var depth = 0; depth < 64 && up.parent !== undefined; depth++) {
             up = byId[String(up.parent)];
@@ -3916,7 +4149,10 @@ public enum WallpaperEngineRuntime {
               return;
             }
           }
-        });
+        }
+
+        all.forEach(add);
+        objects.forEach(settleIn);
 
         // Whether anything of the scene is another picture every frame.
         function isMoving() {
@@ -3937,7 +4173,7 @@ public enum WallpaperEngineRuntime {
         function isLively() {
           return timers.length > 0 || audioBuffers.length > 0 || eye.settling || scripts.some(function (script) {
             return script.made === undefined || !!(script.made && script.made.update && !(script.failures > 3));
-          });
+          }) || films.some(function (each) { return !each.video.paused && !each.video.ended && !each.video.error; });
         }
 
         // --- Moving with the pointer ---------------------------------------------------------
@@ -4092,7 +4328,7 @@ public enum WallpaperEngineRuntime {
           gl.clearColor(clear[0], clear[1], clear[2], 1);
           gl.clear(gl.COLOR_BUFFER_BIT);
           surface = { target: sceneTarget, copy: copyTarget, width: sceneWidth, height: sceneHeight, left: 0, bottom: 0 };
-          objects.forEach(function (object) {
+          objects.slice().forEach(function (object) {
             // What a layer holds is drawn by that layer.
             if (object.heldBy) return;
             gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
@@ -4126,6 +4362,7 @@ public enum WallpaperEngineRuntime {
           resize();
           serveScripts();
           look(passed);
+          if (showFilms()) dirty = true;
           // Animations move on; one that plays once stops at its end.
           motions.forEach(function (motion) {
             if (motion.leader || !motion.playing) return;
@@ -4136,12 +4373,13 @@ public enum WallpaperEngineRuntime {
               motion.playing = false;
             }
           });
-          things.forEach(function (thing) { refresh(thing, false); });
+          // A script may make a layer, or put one elsewhere, while the objects are gone through.
+          things.slice().forEach(function (thing) { refresh(thing, false); });
           // A script nothing has asked for by now belongs to something that could not be made.
-          scripts.forEach(function (script) {
+          scripts.slice().forEach(function (script) {
             if (script.made === undefined) script.made = null;
           });
-          objects.forEach(function (object) {
+          objects.slice().forEach(function (object) {
             if (object.step && passed > 0 && standing(object).visible) object.step(passed);
           });
           // Drawn anew only when it would come out another picture: a scene whose scripts only
@@ -4218,6 +4456,12 @@ public enum WallpaperEngineRuntime {
             canvas.removeEventListener('webglcontextlost', lost);
             canvas.removeEventListener('webglcontextrestored', restored);
             players.forEach(function (each) { each.stop(); });
+            films.forEach(function (each) {
+              each.video.pause();
+              each.video.removeAttribute('src');
+              each.video.load();
+              each.video.remove();
+            });
             var lose = again ? null : gl.getExtension('WEBGL_lose_context');
             if (lose) lose.loseContext();
           },
@@ -4234,7 +4478,7 @@ public enum WallpaperEngineRuntime {
             });
             if (!any || stopped) return;
             clear = numbers(general.clearcolor, 3, 0);
-            things.forEach(function (thing) { refresh(thing, true); });
+            things.slice().forEach(function (thing) { refresh(thing, true); });
             tellScripts('applyUserProperties', other);
             changed();
           },
@@ -4275,12 +4519,13 @@ public enum WallpaperEngineRuntime {
         // The translation of a shader alone, for whoever wants to see or check it.
         translate: translate,
         annotations: annotations,
-        // The way a value changes over time, a script made ready, a refused shader mended and
-        // numbers read from a text: also for checking.
+        // The way a value changes over time, a script made ready and the settings it declares, a
+        // refused shader mended and numbers read from a text: also for checking.
         curve: curveOf,
         script: compileScript,
         mend: mend,
-        numbers: numbers
+        numbers: numbers,
+        settings: scriptSettings
       };
     })();
 

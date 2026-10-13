@@ -9,7 +9,7 @@ import ImageIO
 /// The picture sits in the corner of a canvas with sides that are powers of two, as graphics
 /// cards like them, so it is cut out of that. Its pixels are stored plainly, packed the way
 /// graphics cards unpack them (DXT), or as a whole PNG or JPEG file, and may be compressed
-/// with LZ4 on top.
+/// with LZ4 on top. In place of a picture a texture may hold a video, as an MP4 file.
 enum WallpaperEngineTexture {
     /// The longest side read. Larger than any wallpaper, and it bounds the memory a file that
     /// lies about its size can ask for.
@@ -52,6 +52,15 @@ enum WallpaperEngineTexture {
         var isClamped: Bool
         var isSmooth: Bool
         var frames: [Frame]
+        /// The video the texture holds in place of pictures, if it holds one.
+        var video: Video?
+    }
+
+    /// A video a texture holds, as the file it is, and the size it is shown at.
+    struct Video {
+        var file: Data
+        var width: Int
+        var height: Int
     }
 
     struct Picture {
@@ -85,12 +94,23 @@ enum WallpaperEngineTexture {
             guard let kind = reader.int32() else { return nil }
             isPictureFile = kind != -1
         }
+        // Bits of the flags: 1 for "not smoothed", 2 for "ends at its edges", 4 for an
+        // animation, 32 for a video.
+        var holdsVideo = flags & 32 != 0
         if version >= 4 {
-            // The fourth version is the third with one more number, which says that a video
-            // stands in place of the picture. A video is not read.
-            guard let isVideo = reader.int32(), isVideo == 0 else { return nil }
+            // The fourth version is the third with one more number, which also says that a
+            // video stands in place of the picture.
+            guard let isVideo = reader.int32() else { return nil }
+            holdsVideo = holdsVideo || isVideo != 0
         }
         let sides = 1...longestSide
+        if holdsVideo {
+            // What stands before the video differs between the versions; the video itself says
+            // where it begins and how long it is.
+            guard !onlyFirstPicture, let file = movie(in: data, from: reader.offset) else { return nil }
+            return Texture(pictures: [], channels: .color, isClamped: flags & 2 != 0, isSmooth: flags & 1 == 0, frames: [],
+                           video: Video(file: file, width: sides.contains(width) ? width : 0, height: sides.contains(height) ? height : 0))
+        }
         var pictures: [Picture] = []
         for index in 0..<imageCount {
             guard let mipmapCount = reader.int32(), (1...64).contains(mipmapCount) else { return nil }
@@ -153,9 +173,42 @@ enum WallpaperEngineTexture {
         case .rg88 where !isPictureFile: channels = .double
         default: channels = .color
         }
-        // Bits of the flags: 1 for "not smoothed", 2 for "ends at its edges", 4 for an animation.
         return Texture(pictures: pictures, channels: channels, isClamped: flags & 2 != 0, isSmooth: flags & 1 == 0,
-                       frames: onlyFirstPicture ? [] : frames(&reader, pictureCount: pictures.count))
+                       frames: onlyFirstPicture ? [] : frames(&reader, pictureCount: pictures.count), video: nil)
+    }
+
+    /// The MP4 file that begins within the next bytes of the data, cut out by what the file
+    /// says of itself: it is a row of parts, each starting with its length and a name of four
+    /// letters, and the first of them is named `ftyp`.
+    static func movie(in data: Data, from start: Int) -> Data? {
+        guard start >= 0, start < data.count else { return nil }
+        let from = data.startIndex + start
+        guard let mark = data.range(of: Data("ftyp".utf8), in: from..<min(data.endIndex, from + 1024)), mark.lowerBound - 4 >= from else {
+            return nil
+        }
+        func number(at place: Int, bytes: Int) -> UInt64 {
+            (0..<bytes).reduce(UInt64(0)) { $0 << 8 | UInt64(data[place + $1]) }
+        }
+        let begin = mark.lowerBound - 4
+        var at = begin
+        while at + 8 <= data.endIndex {
+            guard data[(at + 4)..<(at + 8)].allSatisfy({ $0 >= 0x20 && $0 < 0x7F }) else { break }
+            var length = number(at: at, bytes: 4)
+            if length == 0 {
+                // "To the end of the file."
+                at = data.endIndex
+                break
+            }
+            if length == 1 {
+                guard at + 16 <= data.endIndex else { break }
+                length = number(at: at + 8, bytes: 8)
+            }
+            guard length >= 8, length <= UInt64(data.endIndex - at) else { break }
+            at += Int(length)
+        }
+        // A file type alone is no video.
+        guard at - begin > 32 else { return nil }
+        return data.subdata(in: begin..<at)
     }
 
     /// The frames of an animated texture, which follow its pictures; none if it has none or

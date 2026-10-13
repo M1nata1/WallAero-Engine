@@ -8,12 +8,19 @@ import Foundation
 /// the triangles. Like everything in a scene's package it comes from the web: every length the
 /// file states is checked against the file before it is believed.
 ///
-///     MDLVnnnn  three numbers, the material's name, a number,
-///               the corners: place (3), bones (4), their weights (4), place in the picture (2),
+///     MDLVnnnn  three numbers, the material's name, then — after a few numbers that differ
+///               from one version of the format to the next —
+///               the corners: place (3), in later versions the way the corner faces (3) and
+///               lies (4), bones (4), their weights (4), place in the picture (2),
 ///               the triangles: three corners each
 ///     MDLSnnnn  the bones: parent and where the bone is from it, as a matrix
 ///     MDLAnnnn  the animations: name, how it repeats, frames a second, and for every bone
 ///               its place, turn and scale in every frame
+///
+/// The versions differ in what lies between these parts, so the parts are found by their
+/// marks and by what must hold of them rather than by counting bytes from the start. A file
+/// may also end after its triangles: a picture cut to its shape that nothing bends. Its
+/// corners then say nothing of bones.
 struct WallpaperEnginePuppet {
     struct Bone: Equatable {
         /// The bone this one hangs on; −1 for one that hangs on nothing.
@@ -42,51 +49,35 @@ struct WallpaperEnginePuppet {
     var animations: [Animation]
 
     static let floatsPerCorner = 12
-    private static let cornerSize = 52
+    /// How long a corner may be: with its place alone, or also with the way it faces, the way
+    /// it lies, or both. Its bones, their weights and its place in the picture are always
+    /// its last forty bytes; in a file without bones only the place in the picture ends it.
+    private static let cornerSizes = [52, 64, 68, 80]
+    private static let bonesAndWeights = 32
     private static let frameSize = 36
 
     init?(data: Data) {
         var reader = BinaryReader(data)
         guard reader.textToZero()?.hasPrefix("MDLV") == true,
               reader.uint32() != nil, reader.uint32() != nil, reader.uint32() != nil,
-              reader.textToZero(atMost: 1024) != nil, reader.uint32() != nil,
-              let cornerBytes = reader.uint32().map(Int.init), cornerBytes > 0, cornerBytes % Self.cornerSize == 0,
-              cornerBytes <= 16 * 1024 * 1024, let packed = reader.bytes(cornerBytes)
+              reader.textToZero(atMost: 1024) != nil
         else {
             return nil
         }
-        let cornerCount = cornerBytes / Self.cornerSize
-        var corners: [Float] = []
-        corners.reserveCapacity(cornerCount * Self.floatsPerCorner)
-        var cornerReader = BinaryReader(packed)
-        for _ in 0..<cornerCount {
-            guard let x = cornerReader.float32(), let y = cornerReader.float32(), cornerReader.float32() != nil else { return nil }
-            var hangsOn: [Float] = []
-            for _ in 0..<4 {
-                guard let bone = cornerReader.uint32() else { return nil }
-                hangsOn.append(Float(bone))
-            }
-            var weights: [Float] = []
-            for _ in 0..<4 {
-                guard let weight = cornerReader.float32() else { return nil }
-                weights.append(weight)
-            }
-            guard let u = cornerReader.float32(), let v = cornerReader.float32() else { return nil }
-            corners += [x, y, u, v] + hangsOn + weights
+        guard let bonesAt = Self.place(of: "MDLS", in: data, from: reader.offset) else {
+            // No bones: the picture hangs whole on one that stays where it is.
+            guard let mesh = Self.mesh(in: data, from: reader.offset, before: data.count, onBones: false) else { return nil }
+            corners = mesh.corners
+            triangles = mesh.triangles
+            bones = [Bone(parent: -1, matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])]
+            animations = []
+            return
         }
-        guard corners.allSatisfy(\.isFinite),
-              let triangleBytes = reader.uint32().map(Int.init), triangleBytes > 0, triangleBytes % 6 == 0,
-              let packedTriangles = reader.bytes(triangleBytes)
-        else {
-            return nil
-        }
-        let triangles = packedTriangles.withUnsafeBytes { raw in
-            (0..<(triangleBytes / 2)).map { UInt16(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self)) }
-        }
-        guard triangles.allSatisfy({ Int($0) < cornerCount }) else { return nil }
+        guard let mesh = Self.mesh(in: data, from: reader.offset, before: bonesAt, onBones: true) else { return nil }
+        let cornerCount = mesh.corners.count / Self.floatsPerCorner
 
         // The bones.
-        guard reader.textToZero()?.hasPrefix("MDLS") == true, reader.uint32() != nil,
+        guard reader.seek(to: bonesAt), reader.textToZero()?.hasPrefix("MDLS") == true, reader.uint32() != nil,
               let boneCount = reader.uint16(), boneCount > 0, boneCount <= 1024, reader.uint16() != nil
         else {
             return nil
@@ -110,58 +101,163 @@ struct WallpaperEnginePuppet {
         }
         // A corner hangs on bones the puppet has.
         for corner in 0..<cornerCount {
-            for slot in 4..<8 where corners[corner * Self.floatsPerCorner + slot] >= Float(boneCount) {
+            for slot in 4..<8 where mesh.corners[corner * Self.floatsPerCorner + slot] >= Float(boneCount) {
                 return nil
             }
         }
 
-        self.corners = corners
-        self.triangles = triangles
+        corners = mesh.corners
+        triangles = mesh.triangles
         self.bones = bones
-        animations = Self.animations(&reader, boneCount: Int(boneCount))
+        animations = Self.animations(in: data, from: reader.offset, boneCount: Int(boneCount))
     }
 
-    /// The animations that follow the bones: as many of them as can be read.
-    private static func animations(_ reader: inout BinaryReader, boneCount: Int) -> [Animation] {
-        guard reader.textToZero()?.hasPrefix("MDLA") == true, reader.uint32() != nil,
+    /// Where a mark of the file stands, looking from a place on.
+    private static func place(of mark: String, in data: Data, from start: Int) -> Int? {
+        guard start >= 0, start < data.count,
+              let found = data.range(of: Data(mark.utf8), in: (data.startIndex + start)..<data.endIndex)
+        else {
+            return nil
+        }
+        return found.lowerBound - data.startIndex
+    }
+
+    private static func number(in data: Data, at place: Int) -> Int? {
+        guard place >= 0, place + 4 <= data.count else { return nil }
+        let from = data.startIndex + place
+        return (0..<4).reduce(0) { $0 | Int(data[from + $1]) << (8 * $1) }
+    }
+
+    /// The corners and the triangles. What lies between the material's name and them differs
+    /// from version to version, and so does how long a corner is. They are where a length
+    /// stands that is so many whole corners, followed by a length that is so many whole
+    /// triangles of those very corners, all of it before the bones — and where every corner
+    /// then reads as one: on a few bones, by weights that are shares. Of the lengths a corner
+    /// may have, the one by which the triangles use every corner is tried first.
+    private static func mesh(in data: Data, from start: Int, before end: Int, onBones: Bool) -> (corners: [Float], triangles: [UInt16])? {
+        guard start >= 0, end <= data.count, start < end else { return nil }
+        for place in start..<min(start + 512, end - 8) {
+            guard let cornerBytes = number(in: data, at: place), cornerBytes > 0, cornerBytes <= 16 * 1024 * 1024,
+                  place + 4 + cornerBytes + 4 <= end,
+                  let triangleBytes = number(in: data, at: place + 4 + cornerBytes), triangleBytes > 0, triangleBytes % 6 == 0,
+                  place + 4 + cornerBytes + 4 + triangleBytes <= end
+            else {
+                continue
+            }
+            let trianglesAt = data.startIndex + place + 4 + cornerBytes + 4
+            let triangles = data.subdata(in: trianglesAt..<(trianglesAt + triangleBytes)).withUnsafeBytes { raw in
+                (0..<(triangleBytes / 2)).map { UInt16(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self)) }
+            }
+            let packed = data.subdata(in: (data.startIndex + place + 4)..<(data.startIndex + place + 4 + cornerBytes))
+            let last = Int(triangles.max() ?? 0)
+            let sizes = cornerSizes.map { onBones ? $0 : $0 - bonesAndWeights }.filter { cornerBytes % $0 == 0 }
+            for size in sizes.filter({ cornerBytes / $0 == last + 1 }) + sizes.filter({ cornerBytes / $0 != last + 1 }) {
+                guard last < cornerBytes / size, let corners = corners(in: packed, each: size, onBones: onBones) else { continue }
+                return (corners, triangles)
+            }
+        }
+        return nil
+    }
+
+    /// The corners out of their bytes, if the bytes are corners of that length: nil if one of
+    /// them hangs on what cannot be a bone or by what cannot be a weight. Corners that say
+    /// nothing of bones all hang on the first one.
+    private static func corners(in packed: Data, each size: Int, onBones: Bool) -> [Float]? {
+        let count = packed.count / size
+        var corners: [Float] = []
+        corners.reserveCapacity(count * floatsPerCorner)
+        let whole = packed.withUnsafeBytes { raw -> Bool in
+            func float(_ at: Int) -> Float {
+                Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: at, as: UInt32.self)))
+            }
+            for corner in 0..<count {
+                let base = corner * size
+                // Its bones, their weights and its place in the picture end the corner.
+                let x = float(base), y = float(base + 4)
+                var hangsOn: [Float] = [0, 0, 0, 0]
+                var weights: [Float] = [1, 0, 0, 0]
+                if onBones {
+                    let rest = base + size - 40
+                    for slot in 0..<4 {
+                        let bone = UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: rest + slot * 4, as: UInt32.self))
+                        let weight = float(rest + 16 + slot * 4)
+                        guard bone < 1024, weight.isFinite, weight >= -0.001, weight <= 1.001 else { return false }
+                        hangsOn[slot] = Float(bone)
+                        weights[slot] = weight
+                    }
+                }
+                let u = float(base + size - 8), v = float(base + size - 4)
+                guard x.isFinite, y.isFinite, u.isFinite, v.isFinite, abs(x) < 1_000_000, abs(y) < 1_000_000,
+                      abs(u) < 1024, abs(v) < 1024
+                else {
+                    return false
+                }
+                corners += [x, y, u, v] + hangsOn + weights
+            }
+            return true
+        }
+        return whole ? corners : nil
+    }
+
+    /// The animations that follow the bones: as many of them as can be read. Between the
+    /// bones and the animations, and after each animation, lies what differs from version to
+    /// version; an animation is known by how it begins, and looked for from where the one
+    /// before it ended.
+    private static func animations(in data: Data, from start: Int, boneCount: Int) -> [Animation] {
+        guard let mark = place(of: "MDLA", in: data, from: start) else { return [] }
+        var reader = BinaryReader(data)
+        guard reader.seek(to: mark), reader.textToZero()?.hasPrefix("MDLA") == true, reader.uint32() != nil,
               let count = reader.uint32(), count <= 4096
         else {
             return []
         }
         var animations: [Animation] = []
-        for index in 0..<Int(count) {
-            // A number follows every animation but the last thing in the file is one too.
-            if index > 0, reader.uint32() == nil { break }
-            guard let id = reader.int32(), reader.int32() != nil,
-                  let name = reader.textToZero(atMost: 1024), let mode = reader.textToZero(),
-                  let framesPerSecond = reader.float32(), framesPerSecond > 0, framesPerSecond <= 1000,
-                  let length = reader.int32(), length > 0, length <= 1_000_000, reader.int32() != nil,
-                  let animated = reader.uint32(), Int(animated) == boneCount
-            else {
-                break
+        var place = reader.offset
+        for _ in 0..<Int(count) {
+            var found: (animation: Animation, end: Int)?
+            for skipped in 0...512 {
+                found = animation(in: data, at: place + skipped, boneCount: boneCount)
+                if found != nil { break }
             }
-            var frames: [Float] = []
-            var frameCount = 0
-            var whole = true
-            for _ in 0..<boneCount {
-                guard reader.int32() != nil, let size = reader.uint32().map(Int.init), size > 0, size % frameSize == 0,
-                      frameCount == 0 || size / frameSize == frameCount, let packed = reader.bytes(size)
-                else {
-                    whole = false
-                    break
-                }
-                frameCount = size / frameSize
-                packed.withUnsafeBytes { raw in
-                    for at in 0..<(size / 4) {
-                        frames.append(Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: at * 4, as: UInt32.self))))
-                    }
-                }
-            }
-            guard whole, frames.allSatisfy(\.isFinite) else { break }
-            animations.append(Animation(id: id, name: name, mode: mode.lowercased(), framesPerSecond: Double(framesPerSecond),
-                                        length: length, frameCount: frameCount, frames: frames))
+            guard let found else { break }
+            animations.append(found.animation)
+            place = found.end
         }
         return animations
+    }
+
+    /// The animation that begins at a place of the file, and where it ends; nil if what is
+    /// there is no animation.
+    private static func animation(in data: Data, at place: Int, boneCount: Int) -> (animation: Animation, end: Int)? {
+        var reader = BinaryReader(data)
+        guard reader.seek(to: place),
+              let id = reader.int32(), id >= 0, id < 100_000_000, reader.int32() != nil,
+              let name = reader.textToZero(atMost: 1024), let mode = reader.textToZero(atMost: 16),
+              ["loop", "single", "mirror"].contains(mode.lowercased()),
+              let framesPerSecond = reader.float32(), framesPerSecond > 0, framesPerSecond <= 1000,
+              let length = reader.int32(), length > 0, length <= 1_000_000, reader.int32() != nil,
+              let animated = reader.uint32(), Int(animated) == boneCount
+        else {
+            return nil
+        }
+        var frames: [Float] = []
+        var frameCount = 0
+        for _ in 0..<boneCount {
+            guard reader.int32() != nil, let size = reader.uint32().map(Int.init), size > 0, size % frameSize == 0,
+                  frameCount == 0 || size / frameSize == frameCount, let packed = reader.bytes(size)
+            else {
+                return nil
+            }
+            frameCount = size / frameSize
+            packed.withUnsafeBytes { raw in
+                for at in 0..<(size / 4) {
+                    frames.append(Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: at * 4, as: UInt32.self))))
+                }
+            }
+        }
+        guard frames.allSatisfy(\.isFinite) else { return nil }
+        return (Animation(id: id, name: name, mode: mode.lowercased(), framesPerSecond: Double(framesPerSecond),
+                          length: length, frameCount: frameCount, frames: frames), reader.offset)
     }
 
     /// The puppet as the page takes it: the long lists of numbers as text (base64 of the

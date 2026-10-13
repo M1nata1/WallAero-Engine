@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 
 /// Brings one of Wallpaper Engine's own scenes into a scene of this app.
 ///
@@ -13,7 +14,7 @@ import Foundation
 ///
 ///     engine/files.js    – the scene's text files, the list of its pictures, sounds and fonts,
 ///                          and its puppets: pictures that bend, with their bones and animations
-///     engine/tex/        – the pictures
+///     engine/tex/        – the pictures, and the videos that stand in place of pictures
 ///     engine/sounds/     – the sounds
 ///     engine/fonts/      – the fonts its texts are written in
 public enum WallpaperEngineScene {
@@ -37,7 +38,9 @@ public enum WallpaperEngineScene {
     }
 
     /// Lays the scene out in `folder/engine`. Throws when the scene has nothing to draw.
-    static func export(_ package: WallpaperEnginePackage, into folder: URL) throws -> LeftOut {
+    /// - Parameter chosen: the pictures chosen for the settings of the scene that take a
+    ///   picture, by the settings' names.
+    static func export(_ package: WallpaperEnginePackage, into folder: URL, chosen: [String: URL] = [:]) throws -> LeftOut {
         guard let description = package.json(named: "scene.json") else { throw ImportError.unreadable }
         let objects = (description["objects"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
         guard objects.contains(where: { $0["image"] != nil || $0["particle"] != nil || $0["text"] != nil }) else {
@@ -71,6 +74,16 @@ public enum WallpaperEngineScene {
                 texts[key] = text
             case "tex":
                 guard let data = package.data(named: name), let texture = WallpaperEngineTexture.texture(from: data) else { continue }
+                if let video = texture.video {
+                    number += 1
+                    let fileName = "\(number).mp4"
+                    try video.file.write(to: pictures.appendingPathComponent(fileName))
+                    textures[(key as NSString).deletingPathExtension] = [
+                        "video": "\(folderName)/tex/\(fileName)", "width": video.width, "height": video.height,
+                        "clamp": texture.isClamped, "smooth": texture.isSmooth,
+                    ] as [String: Any]
+                    continue
+                }
                 var written: [[String: Any]] = []
                 for picture in texture.pictures {
                     number += 1
@@ -119,6 +132,14 @@ public enum WallpaperEngineScene {
             }
         }
 
+        // A picture chosen for a setting is a texture like the scene's own, named after the setting.
+        for (setting, file) in chosen.sorted(by: { $0.key < $1.key }) {
+            number += 1
+            if let texture = chosenTexture(from: file, numbered: number, in: pictures) {
+                textures["user/\(setting.lowercased())"] = texture
+            }
+        }
+
         // The files go to the page as a script: a page opened from a file may load a script of
         // its folder, while reading a file takes a setting pages do not always have. What the
         // scene's files say is only ever data there — texts in a table.
@@ -130,6 +151,38 @@ public enum WallpaperEngineScene {
         try script.write(to: engine.appendingPathComponent(filesName), options: .atomic)
 
         return leftOut(of: objects, in: package, puppets: Set(puppets.keys))
+    }
+
+    /// A picture chosen for a setting of the scene, as a texture: a picture is written out as
+    /// one, a video is taken as it is, and a picture that moves becomes a video, as Wallpaper
+    /// Engine itself makes of one. Nil when the file is neither.
+    private static func chosenTexture(from file: URL, numbered number: Int, in pictures: URL) -> [String: Any]? {
+        let kind = file.pathExtension.lowercased()
+        func video(_ fileName: String, width: Int, height: Int) -> [String: Any] {
+            ["video": "\(folderName)/tex/\(fileName)", "width": width, "height": height, "clamp": true, "smooth": true]
+        }
+        if ["mp4", "m4v", "mov", "webm"].contains(kind) {
+            let fileName = "\(number).\(kind)"
+            guard (try? FileManager.default.copyItem(at: file, to: pictures.appendingPathComponent(fileName))) != nil else { return nil }
+            return video(fileName, width: 0, height: 0)
+        }
+        guard let source = CGImageSourceCreateWithURL(file as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              image.width <= WallpaperEngineTexture.longestSide, image.height <= WallpaperEngineTexture.longestSide
+        else {
+            return nil
+        }
+        if AnimatedImageConverter.isAnimated(source) {
+            let fileName = "\(number).mov"
+            if (try? AnimatedImageConverter.convertSynchronously(source: file, to: pictures.appendingPathComponent(fileName),
+                                                                enlarging: false, progress: { _ in })) != nil {
+                return video(fileName, width: image.width, height: image.height)
+            }
+        }
+        let fileName = "\(number).png"
+        guard (try? Thumbnailer.writePNG(image, to: pictures.appendingPathComponent(fileName))) != nil else { return nil }
+        return ["pictures": [["file": "\(folderName)/tex/\(fileName)", "width": image.width, "height": image.height]],
+                "channels": WallpaperEngineTexture.Channels.color.rawValue, "clamp": true, "smooth": true]
     }
 
     /// The name a file of the scene is known by: Wallpaper Engine is a Windows program, where

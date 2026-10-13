@@ -13,6 +13,9 @@ public struct WallpaperEngineProject: Equatable, Sendable {
         /// played as the background of a scene, see `WallpaperEngineScene`, with its settings
         /// as the scene's variables.
         case scene
+        /// Settings alone, made for another wallpaper, which the project names: what the
+        /// Workshop calls a preset. It is brought in as that wallpaper with these settings.
+        case preset
         /// Anything else, by the name the project gives it: an application. These need
         /// Wallpaper Engine itself to draw them.
         case other(String)
@@ -21,7 +24,7 @@ public struct WallpaperEngineProject: Equatable, Sendable {
     public static let projectFileName = "project.json"
 
     public let folder: URL
-    public let title: String?
+    public private(set) var title: String?
     public let kind: Kind
     /// The page or the video, relative to the folder.
     public let file: String?
@@ -29,7 +32,33 @@ public struct WallpaperEngineProject: Equatable, Sendable {
     public let previewFile: String?
     /// The wallpaper's own settings — the project's `general.properties` — as variables of a
     /// scene. A page or a scene of Wallpaper Engine's has them; a video has none.
-    public let variables: [WallpaperScene.Variable]
+    public private(set) var variables: [WallpaperScene.Variable]
+    /// What the wallpaper says of itself, as tags: its genres, its kind and whom it is fit for.
+    public private(set) var tags: [Tag]
+    /// The pictures chosen for the settings of a scene that take a picture, by the settings' names.
+    public private(set) var chosenPictures: [String: URL]
+    /// The number the Workshop knows the wallpaper by, when the project says it.
+    public let workshopID: String?
+    /// For settings made for another wallpaper: the Workshop's number of that wallpaper.
+    public let dependency: String?
+
+    /// The values settings made for another wallpaper give its settings, by their names.
+    private let presetValues: [String: WallpaperScene.Variable.OptionValue]
+    /// The names of the settings that take a picture.
+    private let pictureSettings: [String]
+    private let genres: [String]
+    private let rating: String?
+
+    /// A tag a wallpaper comes with, and the category such tags belong to.
+    public struct Tag: Equatable, Sendable {
+        public let name: String
+        public let category: String
+
+        public init(name: String, category: String) {
+            self.name = name
+            self.category = category
+        }
+    }
 
     /// Reads the folder; nil when it holds no Wallpaper Engine project.
     /// - Parameter languages: the languages to name the settings in, the most wanted first.
@@ -51,7 +80,12 @@ public struct WallpaperEngineProject: Equatable, Sendable {
         }
         let file = inside(project["file"])
         let type = (project["type"] as? String)?.lowercased() ?? ""
+        let dependency = (project["dependency"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? (project["dependency"] as? NSNumber).map { $0.stringValue }
+        let preset = project["preset"] as? [String: Any]
         switch type {
+        case _ where dependency != nil && preset != nil && project["file"] == nil:
+            kind = .preset
         case "web":
             kind = .web
         case "video":
@@ -71,14 +105,88 @@ public struct WallpaperEngineProject: Equatable, Sendable {
 
         self.folder = folder
         self.file = file
+        self.dependency = dependency
+        workshopID = (project["workshopid"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? (project["workshopid"] as? NSNumber).map { $0.stringValue }
         title = (project["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         previewFile = inside(project["preview"])
         let general = project["general"] as? [String: Any] ?? [:]
+        let properties = general["properties"] as? [String: Any] ?? [:]
         variables = kind == .web || kind == .scene
-            ? Self.variables(properties: general["properties"] as? [String: Any] ?? [:],
-                             localization: general["localization"] as? [String: Any] ?? [:],
-                             languages: languages)
+            ? Self.variables(properties: properties, localization: general["localization"] as? [String: Any] ?? [:], languages: languages)
             : []
+        presetValues = (preset ?? [:]).compactMapValues(Self.optionValue)
+        // A setting of a scene may take a picture; one may be set from the start.
+        var pictureSettings: [String] = []
+        var chosenPictures: [String: URL] = [:]
+        for (name, property) in properties {
+            guard let property = property as? [String: Any], (property["type"] as? String)?.lowercased() == "scenetexture" else { continue }
+            pictureSettings.append(name)
+            if let picture = inside(property["value"]) {
+                chosenPictures[name] = folder.appendingPathComponent(picture)
+            }
+        }
+        self.pictureSettings = pictureSettings.sorted()
+        self.chosenPictures = chosenPictures
+        genres = (project["tags"] as? [Any])?.compactMap { $0 as? String } ?? (project["tags"] as? String).map { [$0] } ?? []
+        rating = project["contentrating"] as? String
+        tags = Self.tags(genres: genres, kind: kind, rating: rating)
+    }
+
+    /// The wallpaper as settings made for it have it: under their name, with the values they
+    /// give its settings and the pictures they choose, and with what they say of themselves.
+    func taking(_ preset: WallpaperEngineProject) -> WallpaperEngineProject {
+        var result = self
+        result.title = preset.title ?? title
+        result.variables = variables.map { variable in
+            guard let name = variable.property, let value = preset.presetValues[name] else { return variable }
+            var variable = variable
+            switch (variable.kind, value) {
+            case (.color, .text(let text)):
+                variable.color = Self.hexColor(text) ?? variable.color
+            case (.number, .number(let number)):
+                variable.number = min(max(number, variable.minimum), variable.maximum)
+            case (.toggle, .flag(let flag)):
+                variable.isOn = flag
+            case (.toggle, .number(let number)):
+                variable.isOn = number != 0
+            case (.text, .text(let text)):
+                variable.text = text
+            case (.choice, _):
+                if let chosen = variable.values?.firstIndex(where: { Self.plain($0) == Self.plain(value) }), chosen < variable.options.count {
+                    variable.text = variable.options[chosen]
+                }
+            default:
+                break
+            }
+            return variable
+        }
+        for name in pictureSettings {
+            // A name that leads out of the settings' folder is not followed.
+            guard case .text(let picture)? = preset.presetValues[name], !picture.isEmpty, Archive.staysInside(picture) else { continue }
+            let file = preset.folder.appendingPathComponent(picture)
+            if FileManager.default.fileExists(atPath: file.path) {
+                result.chosenPictures[name] = file
+            }
+        }
+        result.tags = Self.tags(genres: preset.genres.isEmpty ? genres : preset.genres, kind: kind, rating: preset.rating ?? rating)
+        return result
+    }
+
+    /// The projects as they are brought in. Settings made for another wallpaper become that
+    /// wallpaper with those settings when it lies next to them — sites pack the two together —
+    /// and the wallpaper is then not brought in a second time as it was made.
+    static func settled(_ projects: [WallpaperEngineProject]) -> [WallpaperEngineProject] {
+        func base(of preset: WallpaperEngineProject) -> WallpaperEngineProject? {
+            projects.first { $0.kind != .preset && ($0.folder.lastPathComponent == preset.dependency || $0.workshopID == preset.dependency) }
+        }
+        let used = Set(projects.filter { $0.kind == .preset }.compactMap { base(of: $0)?.folder })
+        return projects.compactMap { project in
+            if project.kind == .preset {
+                return base(of: project)?.taking(project) ?? project
+            }
+            return used.contains(project.folder) ? nil : project
+        }
     }
 
     /// The projects in a folder: the folder's own, or those of the folders right inside it. An
@@ -93,6 +201,68 @@ public struct WallpaperEngineProject: Equatable, Sendable {
         return inside
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             .compactMap { WallpaperEngineProject(folder: $0, languages: languages) }
+    }
+
+    // MARK: - Tags
+
+    /// The genres of the Workshop, by the names a project has them under, each with its name here.
+    private static let genres: [String: String] = [
+        "abstract": NSLocalizedString("Abstract", comment: "Wallpaper genre"),
+        "animal": NSLocalizedString("Animals", comment: "Wallpaper genre"),
+        "anime": NSLocalizedString("Anime", comment: "Wallpaper genre"),
+        "cartoon": NSLocalizedString("Cartoons", comment: "Wallpaper genre"),
+        "cgi": NSLocalizedString("Computer graphics", comment: "Wallpaper genre"),
+        "cyberpunk": NSLocalizedString("Cyberpunk", comment: "Wallpaper genre"),
+        "fantasy": NSLocalizedString("Fantasy", comment: "Wallpaper genre"),
+        "game": NSLocalizedString("Games", comment: "Wallpaper genre"),
+        "girls": NSLocalizedString("Girls", comment: "Wallpaper genre"),
+        "guys": NSLocalizedString("Guys", comment: "Wallpaper genre"),
+        "landscape": NSLocalizedString("Landscapes", comment: "Wallpaper genre"),
+        "medieval": NSLocalizedString("Medieval", comment: "Wallpaper genre"),
+        "memes": NSLocalizedString("Memes", comment: "Wallpaper genre"),
+        "mmd": NSLocalizedString("MMD", comment: "Wallpaper genre"),
+        "music": NSLocalizedString("Music", comment: "Wallpaper genre"),
+        "nature": NSLocalizedString("Nature", comment: "Wallpaper genre"),
+        "pixel art": NSLocalizedString("Pixel art", comment: "Wallpaper genre"),
+        "relaxing": NSLocalizedString("Relaxing", comment: "Wallpaper genre"),
+        "retro": NSLocalizedString("Retro", comment: "Wallpaper genre"),
+        "sci-fi": NSLocalizedString("Science fiction", comment: "Wallpaper genre"),
+        "sports": NSLocalizedString("Sports", comment: "Wallpaper genre"),
+        "technology": NSLocalizedString("Technology", comment: "Wallpaper genre"),
+        "television": NSLocalizedString("Television", comment: "Wallpaper genre"),
+        "vehicle": NSLocalizedString("Vehicles", comment: "Wallpaper genre"),
+    ]
+
+    /// The tags of a project. Its genres are named in the app's language where they are the
+    /// Workshop's own and left as written where the author made them up; "Unspecified" is no
+    /// genre. A project of a kind the app does not take, or without a rating, has no tag for it.
+    static func tags(genres: [String], kind: Kind, rating: String?) -> [Tag] {
+        var tags: [Tag] = []
+        let genreCategory = NSLocalizedString("Genre", comment: "Category of tags a wallpaper comes with")
+        for genre in genres {
+            let trimmed = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= 60, trimmed.lowercased() != "unspecified" else { continue }
+            tags.append(Tag(name: Self.genres[trimmed.lowercased()] ?? trimmed, category: genreCategory))
+        }
+
+        let kindCategory = NSLocalizedString("Kind", comment: "Category of tags a wallpaper comes with")
+        switch kind {
+        case .scene: tags.append(Tag(name: NSLocalizedString("Scene", comment: "Kind of wallpaper, as a tag"), category: kindCategory))
+        case .video: tags.append(Tag(name: NSLocalizedString("Video", comment: "Kind of wallpaper, as a tag"), category: kindCategory))
+        case .web: tags.append(Tag(name: NSLocalizedString("Web page", comment: "Kind of wallpaper, as a tag"), category: kindCategory))
+        case .preset, .other: break
+        }
+
+        let ratingCategory = NSLocalizedString("Age rating", comment: "Category of tags a wallpaper comes with")
+        switch rating?.lowercased() {
+        case "everyone": tags.append(Tag(name: NSLocalizedString("For everyone", comment: "Age rating of a wallpaper"), category: ratingCategory))
+        case "questionable": tags.append(Tag(name: NSLocalizedString("Questionable", comment: "Age rating of a wallpaper"), category: ratingCategory))
+        case "mature": tags.append(Tag(name: NSLocalizedString("For adults", comment: "Age rating of a wallpaper"), category: ratingCategory))
+        default: break
+        }
+        // One name is one tag, whatever it was a tag of first.
+        var seen: Set<String> = []
+        return tags.filter { seen.insert($0.name.lowercased()).inserted }
     }
 
     // MARK: - Settings

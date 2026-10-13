@@ -62,14 +62,15 @@ public enum AnimatedImageConverter {
     }
 
     /// Size of the encoded video for an animation of the given size, and whether to scale it
-    /// with nearest-neighbour sampling.
-    static func outputSize(forWidth width: Int, height: Int) -> (width: Int, height: Int, nearestNeighbor: Bool) {
+    /// with nearest-neighbour sampling. A small animation that is to fill the screen is
+    /// enlarged; one that is a part of a scene is left at its size.
+    static func outputSize(forWidth width: Int, height: Int, enlarging: Bool = true) -> (width: Int, height: Int, nearestNeighbor: Bool) {
         let longest = max(width, height, 1)
         var scale = 1.0
         var nearestNeighbor = false
         if longest > maximumDimension {
             scale = Double(maximumDimension) / Double(longest)
-        } else if longest * 2 <= upscaleTarget {
+        } else if enlarging, longest * 2 <= upscaleTarget {
             scale = Double(upscaleTarget / longest)
             nearestNeighbor = true
         }
@@ -110,7 +111,8 @@ public enum AnimatedImageConverter {
         }
     }
 
-    static func convertSynchronously(source url: URL, to destination: URL, progress: (Double) -> Void) throws -> Output {
+    static func convertSynchronously(source url: URL, to destination: URL, enlarging: Bool = true,
+                                     progress: (Double) -> Void) throws -> Output {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
             throw ImportError.unreadable
         }
@@ -121,7 +123,7 @@ public enum AnimatedImageConverter {
 
         let delays = frameDelays(of: source)
         let duration = delays.reduce(0, +)
-        let size = outputSize(forWidth: firstFrame.width, height: firstFrame.height)
+        let size = outputSize(forWidth: firstFrame.width, height: firstFrame.height, enlarging: enlarging)
         let framesPerSecond = Double(frameCount) / max(duration, 0.001)
 
         try? FileManager.default.removeItem(at: destination)

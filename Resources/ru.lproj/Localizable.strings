@@ -52,7 +52,7 @@
 "MP4, MOV, M4V, GIF, APNG, WebP, HEIC, PNG and JPEG are supported." = "Поддерживаются MP4, MOV, M4V, GIF, APNG, WebP, HEIC, PNG и JPEG.";
 "Choose Files…" = "Выбрать файлы…";
 "Drop to Add" = "Отпустите, чтобы добавить";
-"Choose videos, GIFs, pictures or a .zip archive with a wallpaper. Folders are searched too." = "Выберите видео, GIF, изображения или архив .zip с обоями. Можно выбрать и папку.";
+"Choose videos, GIFs, pictures or an archive with a wallpaper. Folders are searched too." = "Выберите видео, GIF, изображения или архив с обоями. Можно выбрать и папку.";
 "Add" = "Добавить";
 
 /* Settings */
@@ -274,8 +274,44 @@
 "Scheme color" = "Цвет схемы";
 "This Wallpaper Engine wallpaper is of the “%@” kind. Only web pages, scenes and videos can be opened." = "Это обои Wallpaper Engine типа «%@». Открываются только веб-страницы, сцены и видео.";
 "This Wallpaper Engine scene has no pictures that could be read." = "В этой сцене Wallpaper Engine нет картинок, которые удалось прочитать.";
+"These are only settings for another wallpaper, and that wallpaper is not here. Add the two together." = "Это только настройки для других обоев, а самих обоев здесь нет. Добавьте их вместе.";
 "“%@” was added in part" = "Обои «%@» добавлены частично";
 "Some wallpapers were added in part" = "Некоторые обои добавлены частично";
 "3D models and lights of a Wallpaper Engine scene are not played and are left out, and a picture whose bones cannot be read stands still." = "3D-модели и источники света в сценах Wallpaper Engine не поддерживаются и пропущены, а картинка, кости которой не удалось прочитать, стоит неподвижно.";
 "The archive could not be unpacked." = "Не удалось распаковать архив.";
 "The archive has no wallpaper in it: no web page, video or picture." = "В архиве нет обоев: ни веб-страницы, ни видео, ни картинки.";
+
+/* Tags a Wallpaper Engine wallpaper comes with */
+"Genre" = "Жанр";
+"Kind" = "Тип";
+"Age rating" = "Возрастной рейтинг";
+"Scene" = "Сцена";
+"Video" = "Видео";
+"Web page" = "Веб-страница";
+"For everyone" = "Для всех";
+"Questionable" = "Сомнительное";
+"For adults" = "Для взрослых";
+"Abstract" = "Абстракция";
+"Animals" = "Животные";
+"Anime" = "Аниме";
+"Cartoons" = "Мультфильмы";
+"Computer graphics" = "Компьютерная графика";
+"Cyberpunk" = "Киберпанк";
+"Fantasy" = "Фэнтези";
+"Games" = "Игры";
+"Girls" = "Девушки";
+"Guys" = "Парни";
+"Landscapes" = "Пейзажи";
+"Medieval" = "Средневековье";
+"Memes" = "Мемы";
+"MMD" = "MMD";
+"Music" = "Музыка";
+"Nature" = "Природа";
+"Pixel art" = "Пиксель-арт";
+"Relaxing" = "Спокойные";
+"Retro" = "Ретро";
+"Science fiction" = "Научная фантастика";
+"Sports" = "Спорт";
+"Technology" = "Технологии";
+"Television" = "Телевидение";
+"Vehicles" = "Транспорт";

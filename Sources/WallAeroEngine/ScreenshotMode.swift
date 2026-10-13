@@ -268,6 +268,9 @@ enum ScreenshotMode {
                     let added = try await library.importItem(at: source, languages: Bundle.main.preferredLocalizations)
                     for item in added {
                         print("\(source.lastPathComponent) → “\(item.name)” [\(item.sourceFormat)] \(item.fileName), thumbnail: \(item.thumbnailFileName != nil)")
+                        if !item.tagList.isEmpty {
+                            print("  tags: " + item.tagList.map { "\($0) (\(library.category(of: $0) ?? "—"))" }.joined(separator: ", "))
+                        }
                         guard library.isScene(item), let scene = try? SceneProject.read(from: library.projectURL(for: item)) else { continue }
                         print("  background: \(scene.background.kind.rawValue) \(scene.background.source ?? "")")
                         for layer in scene.layers {
