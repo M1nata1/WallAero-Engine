@@ -246,7 +246,7 @@ final class WallpaperManager: NSObject, ObservableObject {
         for screen in screens.values {
             let item = assignments.wallpaperID(forDisplay: screen.displayID).flatMap(library.item(withID:))
             // Before the wallpaper is shown, so that a page is loaded once, the way it is to draw.
-            screen.view.setDrawing(frameRate: preferences.frameRate, atFullDensity: preferences.drawsAtFullDensity)
+            screen.view.setDrawing(frameRate: preferences.frameRate, renderScale: preferences.renderScale)
             screen.show(item, from: library)
         }
         reloadMusic()
@@ -275,7 +275,7 @@ final class WallpaperManager: NSObject, ObservableObject {
             }
             let audible = isAudible && screen.displayID == audibleDisplay
             screen.view.setAudio(muted: !audible, volume: Float(preferences.volume))
-            screen.view.setDrawing(frameRate: preferences.frameRate, atFullDensity: preferences.drawsAtFullDensity)
+            screen.view.setDrawing(frameRate: preferences.frameRate, renderScale: preferences.renderScale)
         }
         music.volume = Float(preferences.volume)
     }

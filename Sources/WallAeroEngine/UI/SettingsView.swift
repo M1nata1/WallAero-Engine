@@ -58,7 +58,11 @@ struct SettingsView: View {
                         Text(String(format: NSLocalizedString("%d fps", comment: "A frame rate to choose: frames per second"), rate)).tag(rate)
                     }
                 }
-                Toggle("Draw web wallpapers at Retina resolution", isOn: $preferences.drawsAtFullDensity)
+                Picker("Render scale of web wallpapers", selection: $preferences.renderScale) {
+                    ForEach(Preferences.renderScales, id: \.self) { scale in
+                        Text("\(scale.formatted())×").tag(scale)
+                    }
+                }
             }
 
             CursorSettingsSection()

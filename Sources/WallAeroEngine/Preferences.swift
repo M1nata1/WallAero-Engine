@@ -21,8 +21,26 @@ extension Wallpaper.Settings.Scaling: Identifiable {
 final class Preferences: ObservableObject {
     static let playbackRates: [Double] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]
     /// The frame rates a web wallpaper may be held to. Sixty is what the screen shows; thirty,
-    /// the usual choice for a wallpaper, halves the work.
-    static let frameRates = [15, 20, 30, 60]
+    /// the usual choice for a wallpaper, halves the work; twenty-four is the rate of film.
+    static let frameRates = [15, 24, 30, 60]
+
+    /// The scales a web wallpaper's scripts may draw at, as parts of the display's own
+    /// resolution each way: at 0.5 a canvas has half the width and height, a quarter of the pixels.
+    static let renderScales: [Double] = [0.25, 0.5, 0.75, 1]
+
+    /// The scale to use for one that was stored: the nearest offered one, and the display's
+    /// own resolution if none was ever chosen.
+    static func renderScale(forStored stored: Double?) -> Double {
+        guard let stored, stored > 0 else { return 1 }
+        return renderScales.min { abs($0 - stored) < abs($1 - stored) } ?? 1
+    }
+
+    /// The rate to use for one that was stored: itself if it is offered, the nearest offered
+    /// one if it no longer is, and thirty if none was ever chosen.
+    static func frameRate(forStored stored: Int) -> Int {
+        guard stored > 0 else { return 30 }
+        return frameRates.min { abs($0 - stored) < abs($1 - stored) } ?? 30
+    }
 
     static func title(forRate rate: Double) -> String {
         if rate == 1 {
@@ -44,6 +62,8 @@ final class Preferences: ObservableObject {
         static let pauseOnBattery = "pauseOnBattery"
         static let pauseInLowPowerMode = "pauseInLowPowerMode"
         static let frameRate = "frameRate"
+        static let renderScale = "renderScale"
+        /// What the render scale was before it had steps: a switch, off for half the scale.
         static let drawsAtFullDensity = "drawsAtFullDensity"
         static let setsSystemWallpaper = "setsSystemWallpaper"
     }
@@ -87,10 +107,10 @@ final class Preferences: ObservableObject {
     @Published var frameRate: Int {
         didSet { defaults.set(frameRate, forKey: Key.frameRate) }
     }
-    /// Whether a web wallpaper's scripts draw at a Retina display's full density: four times
-    /// the pixels of a plain display, and that much more work for the graphics chip.
-    @Published var drawsAtFullDensity: Bool {
-        didSet { defaults.set(drawsAtFullDensity, forKey: Key.drawsAtFullDensity) }
+    /// The part of the display's resolution a web wallpaper's scripts draw at; one of
+    /// `renderScales`. The graphics chip's work goes with the pixels: at 0.5, a quarter.
+    @Published var renderScale: Double {
+        didSet { defaults.set(renderScale, forKey: Key.renderScale) }
     }
     /// Also set a still frame as the regular macOS wallpaper, which shows on the lock screen,
     /// in Mission Control and whenever the app is not running.
@@ -109,7 +129,6 @@ final class Preferences: ObservableObject {
             Key.pauseOnBattery: false,
             Key.pauseInLowPowerMode: true,
             Key.frameRate: 30,
-            Key.drawsAtFullDensity: true,
             Key.setsSystemWallpaper: false,
         ])
         scaling = ScalingMode(rawValue: defaults.string(forKey: Key.scaling) ?? "") ?? .fill
@@ -119,9 +138,10 @@ final class Preferences: ObservableObject {
         pauseWhenCovered = defaults.bool(forKey: Key.pauseWhenCovered)
         pauseOnBattery = defaults.bool(forKey: Key.pauseOnBattery)
         pauseInLowPowerMode = defaults.bool(forKey: Key.pauseInLowPowerMode)
-        let storedFrameRate = defaults.integer(forKey: Key.frameRate)
-        frameRate = Self.frameRates.contains(storedFrameRate) ? storedFrameRate : 30
-        drawsAtFullDensity = defaults.bool(forKey: Key.drawsAtFullDensity)
+        frameRate = Self.frameRate(forStored: defaults.integer(forKey: Key.frameRate))
+        // Whoever had switched drawing at Retina resolution off had half the scale.
+        let hadPlainDensity = (defaults.object(forKey: Key.drawsAtFullDensity) as? Bool) == false
+        renderScale = Self.renderScale(forStored: (defaults.object(forKey: Key.renderScale) as? Double) ?? (hadPlainDensity ? 0.5 : nil))
         setsSystemWallpaper = defaults.bool(forKey: Key.setsSystemWallpaper)
     }
 }

@@ -37,14 +37,14 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         }
     }
 
-    /// Whether the page is told of the display's full density. A page sizes what it draws by
-    /// that: on a Retina display it fills four times the pixels it would on a plain one. With
-    /// this off it is told of a plain display; text and pictures of the page stay sharp, only
-    /// what its scripts draw — canvases — is drawn smaller and stretched. A change shows once
-    /// the page is loaded anew, which changing it while the page is shown does.
-    var drawsAtFullDensity = true {
+    /// The part of the display's density the page is told of; 1 is all of it. A page sizes
+    /// what it draws by the density: at 0.5 a canvas has half the width and height. Text and
+    /// pictures of the page stay sharp, only what its scripts draw — canvases — is drawn
+    /// smaller and stretched. A change shows once the page is loaded anew, which changing it
+    /// while the page is shown does.
+    var renderScale = 1.0 {
         didSet {
-            guard drawsAtFullDensity != oldValue, webView != nil else { return }
+            guard renderScale != oldValue, webView != nil else { return }
             reloadPage()
         }
     }
@@ -367,7 +367,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         }
         let drawing = Self.drawingScript
             .replacingOccurrences(of: "__FRAME_RATE__", with: String(max(0, frameRate)))
-            .replacingOccurrences(of: "__DENSITY__", with: drawsAtFullDensity ? "0" : "1")
+            .replacingOccurrences(of: "__RENDER_SCALE__", with: String(max(0.05, min(1, renderScale))))
         controller.addUserScript(WKUserScript(source: drawing, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         controller.addUserScript(WKUserScript(source: Self.frameScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
@@ -697,9 +697,9 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         };
         window.cancelAnimationFrame = function (id) { waiting.delete(id); };
       }
-      // The density the page is told of: at most this many pixels to a point, 0 for the display's own.
-      var density = __DENSITY__;
-      if (density > 0) {
+      // The density the page is told of: this part of the display's own.
+      var scale = __RENDER_SCALE__;
+      if (scale > 0 && scale < 1) {
         var own = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio') ||
                   Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'devicePixelRatio');
         var real = window.devicePixelRatio;
@@ -707,7 +707,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
           Object.defineProperty(window, 'devicePixelRatio', {
             configurable: true,
             enumerable: true,
-            get: function () { return Math.min(own && own.get ? own.get.call(window) : real, density); }
+            get: function () { return (own && own.get ? own.get.call(window) : real) * scale; }
           });
         } catch (error) {}
       }

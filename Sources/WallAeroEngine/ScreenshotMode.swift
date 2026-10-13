@@ -755,8 +755,9 @@ enum ScreenshotMode {
     ///
     /// `--full-screen` makes the window as large as the main display, which is what a wallpaper
     /// costs for real, and `--zoomed` as large as a window gets short of that, to serve as one
-    /// lying over the desktop. `--fps <n>` and `--plain-density` are the app's two settings for
-    /// what a web wallpaper costs: its frame rate, and drawing without a Retina display's density.
+    /// lying over the desktop. `--fps <n>` and `--render-scale <part>` are the app's two settings
+    /// for what a web wallpaper costs: its frame rate, and the part of the display's resolution
+    /// it draws at.
     static var energyTestTarget: URL? {
         values(of: "--energy-test").last.map { URL(fileURLWithPath: $0) }
     }
@@ -792,9 +793,9 @@ enum ScreenshotMode {
         let view = WallpaperView(frame: NSRect(origin: .zero, size: size))
         window.contentView = view
         view.setPlaying(true, rate: 1)
-        // `--fps <n>` and `--plain-density`: the app's own two ways of making a page cost less.
+        // `--fps <n>` and `--render-scale <part>`: the app's own two ways of making a page cost less.
         view.setDrawing(frameRate: values(of: "--fps").last.flatMap(Int.init) ?? 0,
-                        atFullDensity: !arguments.contains("--plain-density"))
+                        renderScale: values(of: "--render-scale").last.flatMap(Double.init) ?? 1)
         var isFolder: ObjCBool = false
         FileManager.default.fileExists(atPath: target.path, isDirectory: &isFolder)
         if isFolder.boolValue, let project = WebProject(folder: target) {
