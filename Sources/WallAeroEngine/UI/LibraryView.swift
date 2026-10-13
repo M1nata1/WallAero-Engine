@@ -99,7 +99,10 @@ struct LibraryView: View {
     @State private var isDropTargeted = false
     @State private var renamingItem: Wallpaper?
     @State private var newName = ""
-    @State private var deletingItem: Wallpaper?
+    /// The wallpapers the user is being asked about deleting.
+    @State private var deletingIDs: [UUID] = []
+    /// How high the part of the window is that shows the wallpapers, between its bars.
+    @State private var gridRoom: CGFloat = 0
     @State private var taggingItem: Wallpaper?
     @State private var newTag = ""
 
@@ -109,7 +112,12 @@ struct LibraryView: View {
         nonmutating set { state.selection = newValue }
     }
 
-    private var selectedItem: Wallpaper? { selection.flatMap(library.item(withID:)) }
+    /// The wallpaper selected, when it is one.
+    private var selectedItem: Wallpaper? {
+        state.picked.ids.count == 1 ? selection.flatMap(library.item(withID:)) : nil
+    }
+    /// The wallpapers selected, of those shown and in their order.
+    private var selectedShown: [Wallpaper] { shownItems.filter { state.picked.ids.contains($0.id) } }
     /// The wallpapers the search and the ticked tags leave.
     private var shownItems: [Wallpaper] {
         // The ticked tags by category: within one any will do, between them each counts.
@@ -135,6 +143,18 @@ struct LibraryView: View {
                 // A tag taken off its last wallpaper is gone from the list, and from the filter.
                 state.selectedTags.formIntersection(tags)
             }
+            .onChange(of: shownItems.map(\.id)) { shown in
+                // What the search or the tags hide is no longer selected.
+                state.picked.keep(shown)
+            }
+            .onChange(of: state.command) { command in
+                guard let command else { return }
+                state.command = nil
+                switch command {
+                case .selectAll: state.picked.selectAll(shownItems.map(\.id))
+                case .deleteSelected: deletingIDs = selectedShown.map(\.id)
+                }
+            }
             .alert("Rename Wallpaper", isPresented: isRenaming) {
                 TextField("Name", text: $newName)
                 Button("Rename") {
@@ -155,12 +175,15 @@ struct LibraryView: View {
             }
             .confirmationDialog(deletionTitle, isPresented: isDeleting, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
-                    if let item = deletingItem {
-                        delete(item)
-                    }
+                    delete(deletingIDs)
                 }
             } message: {
-                Text("The wallpaper will be removed from the library. The original file is not affected.")
+                if deletingIDs.count > 1 {
+                    Text(String(format: NSLocalizedString("%d wallpapers will be removed from the library. The original files are not affected.",
+                                                          comment: "Delete confirmation for several wallpapers"), deletingIDs.count))
+                } else {
+                    Text("The wallpaper will be removed from the library. The original file is not affected.")
+                }
             }
     }
 
@@ -281,21 +304,51 @@ struct LibraryView: View {
                         WallpaperTile(
                             item: item,
                             thumbnailURL: library.thumbnailURL(for: item),
-                            isSelected: selection == item.id,
+                            isSelected: state.picked.ids.contains(item.id),
                             isCurrent: currentID == item.id
                         )
                         .onTapGesture(count: 2) { apply(item) }
-                        .simultaneousGesture(TapGesture().onEnded { selection = item.id })
+                        .simultaneousGesture(TapGesture().onEnded { click(item) })
                         .contextMenu { contextMenu(for: item) }
                     }
                 }
                 .padding(16)
+                // As high as the room there is at least, so that a click below the last row
+                // is a click beside the wallpapers too.
+                .frame(maxWidth: .infinity, minHeight: max(0, gridRoom - 1), alignment: .topLeading)
+                .background { deselecting }
+            }
+            .background {
+                GeometryReader { area in
+                    let room = area.size.height - area.safeAreaInsets.top - area.safeAreaInsets.bottom
+                    Color.clear
+                        .onAppear { gridRoom = room }
+                        .onChange(of: room) { gridRoom = $0 }
+                }
             }
         }
     }
 
+    /// What lies behind the wallpapers: a click beside them, between them or below, selects
+    /// none of them.
+    private var deselecting: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture { state.picked.select(nil) }
+    }
+
+    /// The menu of a wallpaper; of one among several selected, the menu of them all.
     @ViewBuilder
     private func contextMenu(for item: Wallpaper) -> some View {
+        if state.picked.ids.count > 1, state.picked.ids.contains(item.id) {
+            Button(deleteSelectedTitle, role: .destructive) { deletingIDs = selectedShown.map(\.id) }
+        } else {
+            menuOfOne(item)
+        }
+    }
+
+    @ViewBuilder
+    private func menuOfOne(_ item: Wallpaper) -> some View {
         Button("Set as Wallpaper") { apply(item) }
         if manager.displays.count > 1 {
             Menu("Set for Display") {
@@ -341,7 +394,7 @@ struct LibraryView: View {
             NSWorkspace.shared.activateFileViewerSelecting([library.fileURL(for: item)])
         }
         Divider()
-        Button("Delete…", role: .destructive) { deletingItem = item }
+        Button("Delete…", role: .destructive) { deletingIDs = [item.id] }
     }
 
     // MARK: - Footer
@@ -366,6 +419,10 @@ struct LibraryView: View {
             Spacer(minLength: 12)
             if case .display(let displayID) = target, manager.hasOwnWallpaper(displayID) {
                 Button("Same as All Displays") { manager.followAllDisplays(displayID) }
+                    .barButtonStyle()
+            }
+            if selectedShown.count > 1 {
+                Button(deleteSelectedTitle) { deletingIDs = selectedShown.map(\.id) }
                     .barButtonStyle()
             }
             if currentID != nil {
@@ -401,11 +458,22 @@ struct LibraryView: View {
         manager.setWallpaper(item.id, for: target)
     }
 
-    private func delete(_ item: Wallpaper) {
-        if selection == item.id {
-            selection = nil
-        }
-        library.remove([item.id])
+    /// A click selects the wallpaper alone; with Command it joins those selected or leaves
+    /// them, with Shift all from the one clicked before to it are selected.
+    private func click(_ item: Wallpaper) {
+        let keys = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
+        let kind: WallpaperSelection.Click = keys.contains(.command) ? .toggling : (keys.contains(.shift) ? .extending : .alone)
+        state.picked.click(item.id, kind, in: shownItems.map(\.id))
+    }
+
+    private func delete(_ ids: [UUID]) {
+        library.remove(Set(ids))
+        state.picked.keep(shownItems.map(\.id))
+    }
+
+    private var deleteSelectedTitle: String {
+        String(format: NSLocalizedString("Delete %d Wallpapers…", comment: "Button and menu item; the argument is how many are selected"),
+               selectedShown.count)
     }
 
     private var isRenaming: Binding<Bool> {
@@ -428,11 +496,15 @@ struct LibraryView: View {
     }
 
     private var isDeleting: Binding<Bool> {
-        Binding(get: { deletingItem != nil }, set: { if !$0 { deletingItem = nil } })
+        Binding(get: { !deletingIDs.isEmpty }, set: { if !$0 { deletingIDs = [] } })
     }
 
     private var deletionTitle: String {
-        String(format: NSLocalizedString("Delete “%@”?", comment: "Delete confirmation"), deletingItem?.name ?? "")
+        if deletingIDs.count > 1 {
+            return String(format: NSLocalizedString("Delete %d Wallpapers?", comment: "Delete confirmation for several wallpapers"), deletingIDs.count)
+        }
+        let name = deletingIDs.first.flatMap(library.item(withID:))?.name ?? ""
+        return String(format: NSLocalizedString("Delete “%@”?", comment: "Delete confirmation"), name)
     }
 
     private static func fileURLs(from providers: [NSItemProvider]) async -> [URL] {

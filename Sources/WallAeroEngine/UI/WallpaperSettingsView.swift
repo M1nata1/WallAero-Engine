@@ -13,7 +13,9 @@ struct WallpaperSettingsView: View {
     let edit: (Wallpaper) -> Void
 
     private var item: Wallpaper? {
-        (state.selection ?? manager.shownWallpaperID).flatMap(library.item(withID:))
+        // Several selected have no settings to show: they are not one wallpaper.
+        guard state.picked.ids.count <= 1 else { return nil }
+        return (state.selection ?? manager.shownWallpaperID).flatMap(library.item(withID:))
     }
 
     /// The scene of the wallpaper the settings are for, once it has been read.
@@ -49,9 +51,16 @@ struct WallpaperSettingsView: View {
                 }
                 .formStyle(.grouped)
             } else {
-                Text("No wallpaper selected")
-                    .foregroundStyle(.secondary)
-                    .padding(24)
+                Group {
+                    if state.picked.ids.count > 1 {
+                        Text(String(format: NSLocalizedString("%d wallpapers selected", comment: "In place of a wallpaper's settings"),
+                                    state.picked.ids.count))
+                    } else {
+                        Text("No wallpaper selected")
+                    }
+                }
+                .foregroundStyle(.secondary)
+                .padding(24)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

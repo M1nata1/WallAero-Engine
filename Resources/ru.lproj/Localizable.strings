@@ -43,6 +43,9 @@
 "Rename…" = "Переименовать…";
 "Show in Finder" = "Показать в Finder";
 "Delete…" = "Удалить…";
+"Delete %d Wallpapers…" = "Удалить выбранные (%d)…";
+"Delete %d Wallpapers?" = "Удалить выбранные обои?";
+"%d wallpapers will be removed from the library. The original files are not affected." = "Из библиотеки будет удалено обоев: %d. Исходные файлы останутся на месте.";
 "Same as All Displays" = "Как на всех дисплеях";
 "Turn Off" = "Выключить";
 "Adding “%@”… (%d more in queue)" = "Добавляется «%@»… (в очереди ещё %d)";
@@ -251,6 +254,7 @@
 "settings.tab.wallpaper" = "Обои";
 "settings.tab.general" = "Общие";
 "No wallpaper selected" = "Обои не выбраны";
+"%d wallpapers selected" = "Выбрано обоев: %d";
 "Details" = "Сведения";
 "Properties" = "Свойства";
 "Scene" = "Сцена";

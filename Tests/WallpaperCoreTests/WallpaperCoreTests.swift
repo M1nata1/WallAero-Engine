@@ -714,6 +714,75 @@ final class WallpaperSceneTests: XCTestCase {
     }
 }
 
+/// Which wallpapers of the library are selected, as clicks change it.
+final class WallpaperSelectionTests: XCTestCase {
+    private let ids = (0..<6).map { _ in UUID() }
+
+    func testAClickSelectsOneAndCommandAddsAndTakesAway() {
+        var selection = WallpaperSelection()
+        selection.click(ids[0], .alone, in: ids)
+        XCTAssertEqual(selection.ids, [ids[0]])
+        XCTAssertEqual(selection.last, ids[0])
+        selection.click(ids[2], .toggling, in: ids)
+        XCTAssertEqual(selection.ids, [ids[0], ids[2]])
+        XCTAssertEqual(selection.last, ids[2])
+        // Taken away again, the one that is left is the one selected last.
+        selection.click(ids[2], .toggling, in: ids)
+        XCTAssertEqual(selection.ids, [ids[0]])
+        XCTAssertEqual(selection.last, ids[0])
+        selection.click(ids[0], .toggling, in: ids)
+        XCTAssertTrue(selection.ids.isEmpty)
+        XCTAssertNil(selection.last)
+        // A plain click lets go of all the others.
+        selection.click(ids[4], .toggling, in: ids)
+        selection.click(ids[5], .toggling, in: ids)
+        selection.click(ids[1], .alone, in: ids)
+        XCTAssertEqual(selection.ids, [ids[1]])
+    }
+
+    func testShiftSelectsTheRunFromTheOneClickedBefore() {
+        var selection = WallpaperSelection()
+        // With none clicked before, it is a plain click.
+        selection.click(ids[3], .extending, in: ids)
+        XCTAssertEqual(selection.ids, [ids[3]])
+        selection.click(ids[1], .extending, in: ids)
+        XCTAssertEqual(selection.ids, Set(ids[1...3]))
+        XCTAssertEqual(selection.last, ids[1])
+        // The run still starts where it did.
+        selection.click(ids[5], .extending, in: ids)
+        XCTAssertEqual(selection.ids, Set(ids[3...5]))
+        // One added with Command is where the next run starts.
+        selection.click(ids[0], .toggling, in: ids)
+        selection.click(ids[1], .extending, in: ids)
+        XCTAssertEqual(selection.ids, Set(ids[0...1]))
+        // The one clicked before is not among those shown any more: a plain click.
+        selection.click(ids[4], .alone, in: ids)
+        selection.click(ids[2], .extending, in: Array(ids[0...2]))
+        XCTAssertEqual(selection.ids, [ids[2]])
+    }
+
+    func testAllAreSelectedAndWhatIsOutOfSightIsLetGo() {
+        var selection = WallpaperSelection()
+        selection.click(ids[2], .alone, in: ids)
+        selection.selectAll(ids)
+        XCTAssertEqual(selection.ids, Set(ids))
+        XCTAssertEqual(selection.last, ids[2])
+        // The search leaves three: only they stay selected, and so can be deleted.
+        selection.keep(Array(ids[3...5]))
+        XCTAssertEqual(selection.ids, Set(ids[3...5]))
+        XCTAssertEqual(selection.last, ids[5])
+        selection.keep([])
+        XCTAssertTrue(selection.ids.isEmpty)
+        XCTAssertNil(selection.last)
+        selection.selectAll([])
+        XCTAssertTrue(selection.ids.isEmpty)
+        selection.select(ids[1])
+        XCTAssertEqual(selection.last, ids[1])
+        selection.select(nil)
+        XCTAssertEqual(selection, WallpaperSelection())
+    }
+}
+
 final class WebProjectTests: XCTestCase {
     private var root: URL!
 

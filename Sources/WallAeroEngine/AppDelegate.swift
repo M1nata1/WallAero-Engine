@@ -86,7 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         manager = WallpaperManager(library: library, preferences: preferences)
         importer = ImportCoordinator(library: library, manager: manager)
         super.init()
-        windows = WindowManager(main: { [unowned self] in
+        // The helper that takes pictures runs next to the copy in use: its window neither
+        // reads nor leaves anything of how the user keeps theirs.
+        let helps = ScreenshotMode.outputDirectory != nil
+        windows = WindowManager(state: helps ? MainWindowState(defaults: nil) : nil, remembersFrames: !helps, main: { [unowned self] in
             AnyView(
                 MainView(actions: LibraryActions(
                     addFiles: { [unowned self] in addWallpapers(nil) },
@@ -105,6 +108,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let directory = ScreenshotMode.outputDirectory, CommandLine.arguments.contains("--select-test") {
+            // The library's own window and menu, to check selecting several wallpapers and
+            // deleting them.
+            NSApp.mainMenu = makeMainMenu()
+            watchDeleteKey()
+            ScreenshotMode.selectTest(windows: windows, library: library, in: directory)
+            return
+        }
         if let directory = ScreenshotMode.outputDirectory {
             // Documentation helper; runs alongside the copy in use, so it skips the checks below.
             ScreenshotMode.run(to: directory, library: library, preferences: preferences,
@@ -115,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         NSApp.mainMenu = makeMainMenu()
+        watchDeleteKey()
         manager.start()
         cursorSettings.reapplyIfNeeded()
         statusMenu = StatusMenuController(library: library, manager: manager, actions: .init(
@@ -178,6 +190,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showSearch(_ sender: Any?) {
         windows.showSearch()
+    }
+
+    /// Whether a command of the Edit menu is meant for the library: its window is the one in
+    /// use, and the cursor is not in a text.
+    private var libraryTakesCommands: Bool {
+        guard let window = windows.libraryWindow, window.isKeyWindow else { return false }
+        return !(window.firstResponder is NSText)
+    }
+
+    /// Select All: the text the cursor is in, or else every wallpaper the library shows.
+    @objc func selectAllOfIt(_ sender: Any?) {
+        guard libraryTakesCommands else {
+            NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: sender)
+            return
+        }
+        windows.state.command = .selectAll
+    }
+
+    /// Delete: asks about deleting the wallpapers selected in the library.
+    @objc func deleteSelectedWallpapers(_ sender: Any?) {
+        windows.state.command = .deleteSelected
+    }
+
+    /// The Delete key in the library, by itself or with Command, is the Delete of the menu.
+    /// A key pressed without Command is not looked up in the menu unless everything in the
+    /// window has passed it on, which the window's content need not do; so it is taken here.
+    private func watchDeleteKey() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let keys = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // 51 is Delete, 117 the Delete that deletes forward.
+            guard let self, [51, 117].contains(event.keyCode), keys.isEmpty || keys == .command,
+                  self.libraryTakesCommands, !self.windows.state.picked.ids.isEmpty
+            else {
+                return event
+            }
+            self.deleteSelectedWallpapers(nil)
+            return nil
+        }
     }
 
     /// Opens a wallpaper in the scene editor. A video or a picture first becomes a scene with
@@ -340,7 +390,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: NSLocalizedString("Cut", comment: "Menu item"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: NSLocalizedString("Copy", comment: "Menu item"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: NSLocalizedString("Paste", comment: "Menu item"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: NSLocalizedString("Select All", comment: "Menu item"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(withTitle: NSLocalizedString("Select All", comment: "Menu item"), action: #selector(selectAllOfIt(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        // The Delete key by itself, as in Photos and Mail, and with Command, as in the Finder.
+        for keys in [[], [.command]] as [NSEvent.ModifierFlags] {
+            let delete = editMenu.addItem(withTitle: NSLocalizedString("Delete", comment: "Menu item"),
+                                          action: #selector(deleteSelectedWallpapers(_:)), keyEquivalent: "\u{8}")
+            delete.keyEquivalentModifierMask = keys
+            delete.isAlternate = !keys.isEmpty
+        }
 
         let windowMenu = NSMenu(title: NSLocalizedString("Window", comment: "Menu title"))
         windowMenu.addItem(withTitle: NSLocalizedString("Minimize", comment: "Menu item"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
@@ -354,5 +412,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mainMenu.addItem(item)
         }
         return mainMenu
+    }
+}
+
+extension AppDelegate: NSMenuItemValidation {
+    /// Delete is for the wallpapers selected in the library, and there is nothing to delete
+    /// when none is, or when the keys go to a text.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(deleteSelectedWallpapers(_:)) {
+            return libraryTakesCommands && !windows.state.picked.ids.isEmpty
+        }
+        return true
     }
 }

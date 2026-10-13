@@ -100,6 +100,132 @@ enum ScreenshotMode {
         }
     }
 
+    /// `--select-test`, with `--screenshots <folder>` and `--library <folder>`: opens the library
+    /// with the app's own menu and does to it what a user would with the mouse and the keys —
+    /// a click, a click with Command, one with Shift, Command-A, the Delete key, the button
+    /// that confirms — saying after each how many wallpapers are selected and how many there
+    /// are, and taking pictures (`select-1.png`, …). **It deletes wallpapers**, so it only
+    /// works on a library named for it, never on the one in use.
+    static func selectTest(windows: WindowManager, library: WallpaperLibrary, in directory: URL) {
+        guard libraryFolder != nil else {
+            print("--select-test deletes wallpapers: name a library for it with --library <folder>")
+            exit(2)
+        }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        applyRequestedAppearance()
+        Task {
+            // Without the settings at its side the window has five wallpapers in a row.
+            windows.state.showsSettings = false
+            windows.showLibrary()
+            guard let window = windows.libraryWindow else { exit(1) }
+            let state = windows.state
+            var step = 0
+            @MainActor func pause(_ seconds: Double = 0.5) async {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            }
+            @MainActor func report(_ what: String) async {
+                await pause()
+                step += 1
+                let names = library.items.filter { state.picked.ids.contains($0.id) }.map(\.name).joined(separator: ", ")
+                print("\(step). \(what): \(state.picked.ids.count) selected of \(library.items.count) [\(names)]; "
+                    + "asked to confirm: \(window.attachedSheet != nil); keys go to \(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nothing")"
+                    + "\(window.isKeyWindow ? "" : ", the window is not the one in use")")
+                var image: CGImage?
+                if #available(macOS 14.4, *) {
+                    image = try? await captureWithScreenCaptureKit(window)
+                }
+                if let image = image ?? drawViews(of: window) {
+                    write(image, to: directory.appendingPathComponent("select-\(step).png"))
+                }
+            }
+            /// The middle of a wallpaper's picture, counted along the first row.
+            @MainActor func tile(_ number: Int) -> NSPoint {
+                let top = window.contentLayoutRect.maxY - CGFloat(values(of: "--grid-top").last.flatMap(Double.init) ?? 60)
+                return NSPoint(x: 16 + LibraryView.tileWidth / 2 + CGFloat(number - 1) * (LibraryView.tileWidth + 16), y: top - 16 - 60)
+            }
+            /// The helper's window has to be the one in use for what is done to it to count,
+            /// and someone at the Mac may have clicked elsewhere meanwhile.
+            @MainActor func comeForward() async {
+                guard !window.isKeyWindow, window.attachedSheet == nil else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                await pause(0.4)
+            }
+            @MainActor func click(at point: NSPoint, _ keys: NSEvent.ModifierFlags = []) async {
+                await comeForward()
+                for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(with: kind, location: point, modifierFlags: keys,
+                                                      timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                      context: nil, eventNumber: 0, clickCount: 1, pressure: kind == .leftMouseDown ? 1 : 0) {
+                        NSApp.postEvent(event, atStart: false)
+                    }
+                    await pause(0.08)
+                }
+            }
+            @MainActor func press(_ characters: String, code: UInt16, _ keys: NSEvent.ModifierFlags = []) async {
+                await comeForward()
+                for kind in [NSEvent.EventType.keyDown, .keyUp] {
+                    if let event = NSEvent.keyEvent(with: kind, location: .zero, modifierFlags: keys,
+                                                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                    context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                                    isARepeat: false, keyCode: code) {
+                        NSApp.postEvent(event, atStart: false)
+                    }
+                    await pause(0.08)
+                }
+            }
+            await pause(1)
+            await report("as it opens")
+            await click(at: tile(1))
+            await report("a click on the first")
+            await click(at: tile(3), .command)
+            await report("Command and a click on the third")
+            await click(at: tile(4), .shift)
+            await report("Shift and a click on the fourth")
+            await click(at: tile(1), .command)
+            await report("Command and a click on the first")
+            await click(at: NSPoint(x: tile(1).x + LibraryView.tileWidth / 2 + 8, y: tile(1).y))
+            await report("a click between the first and the second")
+            await click(at: tile(2))
+            await click(at: tile(3), .command)
+            await report("the second and the third selected")
+            await click(at: NSPoint(x: tile(5).x, y: 120))
+            await report("a click below the wallpapers")
+            await press("a", code: 0, .command)
+            await report("Command-A")
+            await click(at: tile(2), .command)
+            await report("Command and a click on the second")
+            // A key equivalent names the Delete key by the backspace character; an event made
+            // here has to carry the same one to be matched.
+            await press("\u{8}", code: 51)
+            await report("the Delete key")
+            if window.attachedSheet == nil {
+                await press("\u{8}", code: 51, .command)
+                await report("Command and the Delete key")
+            }
+            // The button that confirms is the one that is not Cancel.
+            @MainActor func buttons(in view: NSView) -> [NSButton] {
+                ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons(in:))
+            }
+            if let sheet = window.attachedSheet, let content = sheet.contentView {
+                let all = buttons(in: content)
+                print("   the sheet's buttons: \(all.map(\.title))")
+                all.first { $0.keyEquivalent != "\u{1b}" && !$0.title.isEmpty && $0.hasDestructiveAction }?.performClick(nil)
+                    ?? all.first { $0.keyEquivalent != "\u{1b}" && !$0.title.isEmpty }?.performClick(nil)
+            }
+            await report("confirmed")
+            // In a text the Delete key deletes letters, whatever is selected in the library.
+            await click(at: tile(1))
+            windows.showSearch()
+            await pause(0.3)
+            await press("w", code: 13)
+            let typed = state.searchText
+            await press("\u{7F}", code: 51)
+            await report("the Delete key in the search field, which read “\(typed)” and now reads “\(state.searchText)”")
+            exit(0)
+        }
+    }
+
     /// `--watch-theme <seconds>`, with `--screenshots`: keeps the main window open with the
     /// settings at its side and takes a picture of it every second (`theme-1.png`, …), to see
     /// whether it follows the Mac's accent color and appearance when they change meanwhile.

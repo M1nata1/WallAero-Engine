@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WallpaperCore
 
 /// What the main window shows: the wallpaper selected in the library, and the settings at its
 /// side. Whether the settings are there is kept between launches; which of them, is not — the
@@ -19,8 +20,21 @@ final class MainWindowState: ObservableObject {
     private static let showsSettingsKey = "showsSettings"
     private let defaults: UserDefaults?
 
-    /// The wallpaper selected in the library.
-    @Published var selection: UUID?
+    /// What a command of the menu asks of the library, which takes it and lets it go.
+    enum LibraryCommand {
+        case selectAll
+        case deleteSelected
+    }
+
+    /// The wallpapers selected in the library: one, whose settings are at the side, or
+    /// several, to be deleted together.
+    @Published var picked = WallpaperSelection()
+    /// The wallpaper selected in the library, the last of several. Set, it is selected alone.
+    var selection: UUID? {
+        get { picked.last }
+        set { picked.select(newValue) }
+    }
+    @Published var command: LibraryCommand?
     /// What the search field holds, and the tags ticked in the list next to it. Neither
     /// outlives the window.
     @Published var searchText = ""
