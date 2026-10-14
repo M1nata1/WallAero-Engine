@@ -1611,7 +1611,26 @@ public enum WallpaperEngineRuntime {
           context.fillStyle = gradient;
           context.fillRect(0, 0, size, size);
         }
-        if (/fog|smoke|cloud|mist|steam|dust|haze/.test(name)) {
+        if (/shaft|godray|sunbeam|sunray|light_ray/.test(name)) {
+          // Light falling through: soft rays from the middle outward, of many widths, fading as
+          // they go, with nothing bright where they meet. Such a picture is made large and turned.
+          for (var ray = 0; ray < 18; ray++) {
+            var toward = hash(ray, 4, 7) * Math.PI * 2;
+            var wide = (0.01 + hash(ray, 5, 7) * 0.05) * Math.PI;
+            var strong = 0.12 + hash(ray, 6, 7) * 0.25;
+            var shaft = context.createRadialGradient(half, half, 0, half, half, half);
+            shaft.addColorStop(0, 'rgba(255,255,255,0)');
+            shaft.addColorStop(0.08, 'rgba(255,255,255,' + strong + ')');
+            shaft.addColorStop(0.55, 'rgba(255,255,255,' + strong * 0.45 + ')');
+            shaft.addColorStop(1, 'rgba(255,255,255,0)');
+            context.fillStyle = shaft;
+            context.beginPath();
+            context.moveTo(half, half);
+            context.arc(half, half, half, toward - wide / 2, toward + wide / 2);
+            context.closePath();
+            context.fill();
+          }
+        } else if (/fog|smoke|cloud|mist|steam|dust|haze/.test(name)) {
           // A puff: many soft blots, more of them toward the middle.
           for (var blot = 0; blot < 40; blot++) {
             var angle = hash(blot, 1, 3) * Math.PI * 2;
@@ -3077,19 +3096,55 @@ public enum WallpaperEngineRuntime {
           }
           bones.forEach(function (bone, index) { bone.back = undone(atRest(index, 0)); });
 
-          // The animation that plays: the first of the layers the scene has switched on.
-          var playing = null;
+          // Points other objects of the scene hang on, by name: the bone each is on, and where it
+          // is from the bone.
+          var points = {};
+          (said.attachments || []).forEach(function (point) {
+            var matrix = point.matrix || [];
+            var bone = number(point.bone, -1);
+            if (typeof point.name !== 'string' || !bones[bone]) return;
+            points[point.name] = { bone: bone, rest: [matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13]] };
+          });
+
+          // The animations the scene has switched on, in its order. Of those that set the bones,
+          // the first that has not come to its end plays — one that plays once gives way to the
+          // next when it is over — and those that add to them move the bones further, each by
+          // how far it takes them from where they are at rest.
+          var playing = [];
           (layers || []).forEach(function (layer) {
             if (flag(layer.visible, true) === false) return;
             var animation = (said.animations || []).filter(function (each) { return each.id === number(layer.animation, -1); })[0];
             if (!animation) return;
-            if (playing) {
-              note('“' + name + '” plays several animations at once; only the first is played');
-              return;
-            }
-            playing = { frames: numbersOf(animation.frames, Float32Array), frameCount: animation.frameCount, length: animation.length,
-                        rate: animation.fps * number(layer.rate, 1), mode: animation.mode };
+            playing.push({ frames: numbersOf(animation.frames, Float32Array), frameCount: animation.frameCount, length: animation.length,
+                           rate: animation.fps * number(layer.rate, 1), mode: animation.mode, adds: flag(layer.additive, false),
+                           blend: Math.max(0, Math.min(1, number(layer.blend, 1))) });
           });
+          var setting = playing.filter(function (layer) { return !layer.adds; });
+          var adding = playing.filter(function (layer) { return layer.adds; });
+          // Each bone at rest from its parent, as the frames have it: place, turn, scale.
+          bones.forEach(function (bone) {
+            var rest = bone.rest;
+            bone.still = [rest[4], rest[5], Math.atan2(rest[1], rest[0]), Math.sqrt(rest[0] * rest[0] + rest[1] * rest[1]),
+                          Math.sqrt(rest[2] * rest[2] + rest[3] * rest[3])];
+          });
+          // Where an animation has a bone at a moment: place, turn, scale.
+          function sample(layer, index, seconds) {
+            var at = seconds * layer.rate;
+            if (layer.mode === 'mirror') {
+              at = at % (layer.length * 2);
+              if (at > layer.length) at = layer.length * 2 - at;
+            } else if (layer.mode === 'single') {
+              at = Math.min(at, layer.length);
+            } else {
+              at = at % layer.length;
+            }
+            var before = Math.min(Math.floor(at), layer.frameCount - 1);
+            var after = Math.min(before + 1, layer.frameCount - 1);
+            var share = at - before;
+            var one = (index * layer.frameCount + before) * 9, two = (index * layer.frameCount + after) * 9;
+            function value(part) { return layer.frames[one + part] + (layer.frames[two + part] - layer.frames[one + part]) * share; }
+            return [value(0), value(1), value(5), value(6), value(7)];
+          }
 
           var places = new Float32Array(count * 2);
           var texture = new Float32Array(count * 2);
@@ -3114,29 +3169,36 @@ public enum WallpaperEngineRuntime {
           gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
           gl.bindVertexArray(null);
 
-          var puppet = { shape: shape, count: triangles.length, moving: !!playing };
+          var puppet = { shape: shape, count: triangles.length, moving: playing.length > 0 };
+          // Where a point to hang things on is as the picture was last posed, in the picture's own
+          // pixels from its middle; null for a point the puppet does not have.
+          puppet.attachment = function (name) {
+            var point = points[name];
+            if (!point) return null;
+            var bone = bones[point.bone];
+            return joined(playing.length && bone.moved ? bone.moved : atRest(point.bone, 0), point.rest);
+          };
           // Puts every corner where the bones are at a moment.
           puppet.pose = function (seconds) {
-            if (!playing) return;
-            var at = seconds * playing.rate;
-            if (playing.mode === 'mirror') {
-              at = at % (playing.length * 2);
-              if (at > playing.length) at = playing.length * 2 - at;
-            } else if (playing.mode === 'single') {
-              at = Math.min(at, playing.length);
-            } else {
-              at = at % playing.length;
-            }
-            var before = Math.min(Math.floor(at), playing.frameCount - 1);
-            var after = Math.min(before + 1, playing.frameCount - 1);
-            var share = at - before;
-            var frames = playing.frames;
+            if (!playing.length) return;
+            var base = setting.filter(function (layer) { return layer.mode !== 'single' || seconds * layer.rate < layer.length; })[0] ||
+                       setting[setting.length - 1] || null;
             // Each bone from its parent in this frame: scaled, turned, then moved.
             bones.forEach(function (bone, index) {
-              var one = (index * playing.frameCount + before) * 9, two = (index * playing.frameCount + after) * 9;
-              function value(part) { return frames[one + part] + (frames[two + part] - frames[one + part]) * share; }
-              var cos = Math.cos(value(5)), sin = Math.sin(value(5));
-              bone.now = [cos * value(6), sin * value(6), -sin * value(7), cos * value(7), value(0), value(1)];
+              var pose = base ? sample(base, index, seconds) : bone.still.slice();
+              if (base && base.blend < 1) {
+                for (var part = 0; part < 5; part++) pose[part] = bone.still[part] + (pose[part] - bone.still[part]) * base.blend;
+              }
+              adding.forEach(function (layer) {
+                var more = sample(layer, index, seconds);
+                pose[0] += (more[0] - bone.still[0]) * layer.blend;
+                pose[1] += (more[1] - bone.still[1]) * layer.blend;
+                pose[2] += (more[2] - bone.still[2]) * layer.blend;
+                if (bone.still[3] > 1e-6) pose[3] *= 1 + (more[3] / bone.still[3] - 1) * layer.blend;
+                if (bone.still[4] > 1e-6) pose[4] *= 1 + (more[4] / bone.still[4] - 1) * layer.blend;
+              });
+              var cos = Math.cos(pose[2]), sin = Math.sin(pose[2]);
+              bone.now = [cos * pose[3], sin * pose[3], -sin * pose[4], cos * pose[4], pose[0], pose[1]];
               bone.done = false;
             });
             function whole(index, depth) {
@@ -3260,6 +3322,11 @@ public enum WallpaperEngineRuntime {
           if (parent && parent !== thing) {
             var up = standing(parent, whole, (depth || 0) + 1);
             above = up.visible;
+            // One that hangs on a point of a picture that bends — a head — goes where the point
+            // is, and is placed from there.
+            var name = thing.said ? plain(thing.said.attachment) : null;
+            var point = typeof name === 'string' && name && parent.puppet && parent.puppet.attachment ? parent.puppet.attachment(name) : null;
+            if (point) matrix = times([point[0], point[1], 0, 0, point[2], point[3], 0, 0, 0, 0, 1, 0, point[4], point[5], 0, 1], matrix);
             // Drawn into the layer that holds it, an object is placed in that layer's own
             // coordinates; the layer's place is added when the layer is drawn.
             if (!parent.holds || whole) matrix = times(up.matrix, matrix);

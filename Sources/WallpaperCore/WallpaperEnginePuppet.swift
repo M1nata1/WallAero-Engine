@@ -14,6 +14,8 @@ import Foundation
 ///               lies (4), bones (4), their weights (4), place in the picture (2),
 ///               the triangles: three corners each
 ///     MDLSnnnn  the bones: parent and where the bone is from it, as a matrix
+///     MDATnnnn  in some files, points other objects of the scene may hang on — a head, a
+///               hand: the bone, a name, and where the point is from the bone, as a matrix
 ///     MDLAnnnn  the animations: name, how it repeats, frames a second, and for every bone
 ///               its place, turn and scale in every frame
 ///
@@ -26,6 +28,15 @@ struct WallpaperEnginePuppet {
         /// The bone this one hangs on; −1 for one that hangs on nothing.
         var parent: Int
         /// Where it is from its parent, at rest: a matrix of four by four, column by column.
+        var matrix: [Float]
+    }
+
+    /// A point of the picture another object of the scene may hang on, to go where the point
+    /// goes as the bones move: a hat on a head, say.
+    struct Attachment: Equatable {
+        var name: String
+        var bone: Int
+        /// Where it is from the bone: a matrix of four by four, column by column.
         var matrix: [Float]
     }
 
@@ -46,6 +57,7 @@ struct WallpaperEnginePuppet {
     var corners: [Float]
     var triangles: [UInt16]
     var bones: [Bone]
+    var attachments: [Attachment]
     var animations: [Animation]
 
     static let floatsPerCorner = 12
@@ -70,6 +82,7 @@ struct WallpaperEnginePuppet {
             corners = mesh.corners
             triangles = mesh.triangles
             bones = [Bone(parent: -1, matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])]
+            attachments = []
             animations = []
             return
         }
@@ -109,7 +122,32 @@ struct WallpaperEnginePuppet {
         corners = mesh.corners
         triangles = mesh.triangles
         self.bones = bones
+        attachments = Self.attachments(in: data, from: reader.offset, boneCount: Int(boneCount))
         animations = Self.animations(in: data, from: reader.offset, boneCount: Int(boneCount))
+    }
+
+    /// The points to hang other objects on, if the file has them, before its animations. A
+    /// part that does not read whole is left out: the puppet is the same without it.
+    private static func attachments(in data: Data, from start: Int, boneCount: Int) -> [Attachment] {
+        guard let mark = place(of: "MDAT", in: data, from: start) else { return [] }
+        if let animationsAt = place(of: "MDLA", in: data, from: start), animationsAt < mark { return [] }
+        var reader = BinaryReader(data)
+        guard reader.seek(to: mark), reader.textToZero()?.hasPrefix("MDAT") == true, reader.uint32() != nil,
+              let count = reader.uint16(), count <= 1024
+        else {
+            return []
+        }
+        var attachments: [Attachment] = []
+        for _ in 0..<count {
+            guard let bone = reader.uint16(), Int(bone) < boneCount, let name = reader.textToZero(atMost: 1024) else { return [] }
+            var matrix: [Float] = []
+            for _ in 0..<16 {
+                guard let value = reader.float32(), value.isFinite else { return [] }
+                matrix.append(value)
+            }
+            attachments.append(Attachment(name: name, bone: Int(bone), matrix: matrix))
+        }
+        return attachments
     }
 
     /// Where a mark of the file stands, looking from a place on.
@@ -278,6 +316,7 @@ struct WallpaperEnginePuppet {
             "corners": packed(corners),
             "triangles": triangleData.base64EncodedString(),
             "bones": bones.map { ["parent": $0.parent, "matrix": $0.matrix.map(Double.init)] as [String: Any] },
+            "attachments": attachments.map { ["name": $0.name, "bone": $0.bone, "matrix": $0.matrix.map(Double.init)] as [String: Any] },
             "animations": animations.map {
                 ["id": $0.id, "name": $0.name, "mode": $0.mode, "fps": $0.framesPerSecond, "length": $0.length,
                  "frameCount": $0.frameCount, "frames": packed($0.frames)] as [String: Any]

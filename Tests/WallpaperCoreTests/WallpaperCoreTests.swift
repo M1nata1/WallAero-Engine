@@ -1512,7 +1512,8 @@ final class WallpaperEngineSceneTests: XCTestCase {
     /// Wallpaper Engine do: more before the corners, a corner that also keeps which way it
     /// faces and lies, more after the triangles, the bones and each animation, and a second
     /// animation.
-    private func puppet(triangle: [UInt16] = [0, 1, 2], bones: [UInt32] = [0, 1, 1], newer: Bool = false) -> Data {
+    private func puppet(triangle: [UInt16] = [0, 1, 2], bones: [UInt32] = [0, 1, 1], newer: Bool = false,
+                        attachedTo attachmentBone: UInt16? = nil) -> Data {
         func float(_ value: Float) -> Data { withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) } }
         var file = Data("MDLV00\(newer ? 23 : 13)\0".utf8)
         let head: [Data] = [number(0x0180_0009), number(1), number(1), Data("materials/Sky.json\0".utf8), number(0)]
@@ -1558,8 +1559,16 @@ final class WallpaperEngineSceneTests: XCTestCase {
             let sway: [Data] = [Data(count: 11), Data([1]), float(10), float(6.5), float(6.5)]
             sway.forEach { skeleton += $0 }
         }
-        let rest: [Data] = [Data("MDLS000\(newer ? 4 : 1)\0".utf8), number(0), Data([2, 0, 0, 0]), skeleton,
-                            Data("MDLA000\(newer ? 6 : 1)\0".utf8), number(0), number(newer ? 2 : 1)]
+        var rest: [Data] = [Data("MDLS000\(newer ? 4 : 1)\0".utf8), number(0), Data([2, 0, 0, 0]), skeleton]
+        if let attachmentBone {
+            // A point to hang things on: a head, five across and seven up from its bone.
+            rest += [Data("MDAT0001\0".utf8), number(0), Data([1, 0]), withUnsafeBytes(of: attachmentBone.littleEndian) { Data($0) },
+                     Data("头\0".utf8)]
+            for value in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 7, 0, 1] as [Float] {
+                rest.append(float(value))
+            }
+        }
+        rest += [Data("MDLA000\(newer ? 6 : 1)\0".utf8), number(0), number(newer ? 2 : 1)]
         rest.forEach { file += $0 }
         let animations: [(id: Int, name: String, mode: String, rate: Float)] = newer
             ? [(51, "Sway", "Loop", 30), (52, "动画 2", "single", 24)]
@@ -1631,6 +1640,20 @@ final class WallpaperEngineSceneTests: XCTestCase {
         // that is not there.
         XCTAssertNil(WallpaperEnginePuppet(data: puppet(triangle: [0, 1, 7], newer: true)))
         XCTAssertNil(WallpaperEnginePuppet(data: puppet(bones: [0, 1, 5], newer: true)))
+    }
+
+    func testAPuppetHasPointsOtherObjectsHangOn() throws {
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true, attachedTo: 1)))
+        XCTAssertEqual(read.attachments.map(\.name), ["头"])
+        XCTAssertEqual(read.attachments.first?.bone, 1)
+        XCTAssertEqual(read.attachments.first.map { Array($0.matrix[12...13]) }, [5, 7])
+        XCTAssertEqual(read.animations.map(\.id), [51, 52], "the animations after them are read as before")
+        XCTAssertEqual((read.table["attachments"] as? [[String: Any]])?.first?["name"] as? String, "头")
+        // One on a bone the puppet does not have is left out, and the puppet with it.
+        let wrong = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true, attachedTo: 9)))
+        XCTAssertEqual(wrong.attachments, [])
+        XCTAssertEqual(wrong.bones, read.bones)
+        XCTAssertEqual(try XCTUnwrap(WallpaperEnginePuppet(data: puppet())).attachments, [])
     }
 
     func testAPuppetWithoutBonesIsAPictureCutToItsShape() throws {
