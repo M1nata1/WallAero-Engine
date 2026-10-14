@@ -1577,6 +1577,27 @@ public enum WallpaperEngineRuntime {
       }
 
       // The shapes of particles, drawn white on nothing; a particle's own color tints them.
+      // A drop on glass, as clear as the glass: a darker rim, a glint where the light falls on it.
+      function beadPixels(size) {
+        var canvas = document.createElement('canvas');
+        canvas.width = canvas.height = size;
+        var context = canvas.getContext('2d');
+        var half = size / 2;
+        var body = context.createRadialGradient(half * 1.08, half * 1.1, 0, half, half, half * 0.9);
+        body.addColorStop(0, 'rgba(255,255,255,0.10)');
+        body.addColorStop(0.7, 'rgba(255,255,255,0.04)');
+        body.addColorStop(0.86, 'rgba(0,0,0,0.28)');
+        body.addColorStop(1, 'rgba(0,0,0,0)');
+        context.fillStyle = body;
+        context.fillRect(0, 0, size, size);
+        var glint = context.createRadialGradient(half * 0.68, half * 0.62, 0, half * 0.68, half * 0.62, half * 0.22);
+        glint.addColorStop(0, 'rgba(255,255,255,0.85)');
+        glint.addColorStop(1, 'rgba(255,255,255,0)');
+        context.fillStyle = glint;
+        context.fillRect(0, 0, size, size);
+        return context.getImageData(0, 0, size, size).data;
+      }
+
       function spritePixels(name, size) {
         var canvas = document.createElement('canvas');
         canvas.width = canvas.height = size;
@@ -1629,7 +1650,28 @@ public enum WallpaperEngineRuntime {
             context.ellipse(half, half, half * arm[0], half * arm[1], 0, 0, Math.PI * 2);
             context.fill();
           });
-        } else if (/leaf|petal|feather|confetti|flake/.test(name)) {
+        } else if (/leaf|leaves|foliage/.test(name)) {
+          // A leaf: pointed at both ends, a little lighter along its middle, on a short stalk.
+          context.translate(half, half);
+          context.rotate(Math.PI / 5);
+          context.beginPath();
+          context.moveTo(-half * 0.82, 0);
+          context.quadraticCurveTo(-half * 0.1, -half * 0.62, half * 0.82, 0);
+          context.quadraticCurveTo(-half * 0.1, half * 0.62, -half * 0.82, 0);
+          context.closePath();
+          var body = context.createLinearGradient(0, -half * 0.4, 0, half * 0.4);
+          body.addColorStop(0, 'rgba(205,205,205,0.95)');
+          body.addColorStop(0.5, 'rgba(255,255,255,0.95)');
+          body.addColorStop(1, 'rgba(175,175,175,0.95)');
+          context.fillStyle = body;
+          context.fill();
+          context.strokeStyle = 'rgba(255,255,255,0.9)';
+          context.lineWidth = size / 64;
+          context.beginPath();
+          context.moveTo(-half * 0.95, 0);
+          context.lineTo(half * 0.7, 0);
+          context.stroke();
+        } else if (/petal|feather|confetti|flake/.test(name)) {
           context.fillStyle = 'rgba(255,255,255,0.95)';
           context.beginPath();
           context.ellipse(half, half, half * 0.85, half * 0.4, Math.PI / 5, 0, Math.PI * 2);
@@ -4175,21 +4217,65 @@ public enum WallpaperEngineRuntime {
           }
         }
 
-        function buildParticles(object, system) {
+        function buildParticles(object, thing) {
           var fileName = String(plain(object.particle) || '');
-          var said = json(fileName);
-          var name = system.name;
-          if (!said) {
-            note('“' + name + '”: its particles, ' + fileName + ', are not in the scene');
+          if (!json(fileName)) {
+            note('“' + thing.name + '”: its particles, ' + fileName + ', are not in the scene');
             return null;
           }
+          var system = particleSystem(fileName, thing, thing, null, 0);
+          // A system begins as if it had been running for a while already: as long as the one of
+          // its family that asks for the longest.
+          var warm = Math.min(60, Math.max(0, system.warm));
+          for (var played = 0; played < warm; played += 1 / 20) system.step(1 / 20);
+          return system;
+        }
+
+        // A system of particles, made of its file, drawn for `thing`, the object of the scene that
+        // has it. That is the system itself, or — for a child of another system, as `entry` of
+        // that one's children says — the object of the system it is a child of, which it goes
+        // with: where that one is, with what the scene changes of it. A child either makes its
+        // particles alongside its parent, or goes with each of the parent's particles: follows
+        // it, or makes its particles where one is made or where one dies.
+        function particleSystem(fileName, system, thing, entry, depth) {
+          var said = json(fileName);
+          var name = system.name;
           var material = ((json(said.material) || {}).passes || [])[0] || {};
-          var over = object.instanceoverride || {};
+          var over = thing.said.instanceoverride || {};
+          var kind = entry ? key(String(plain(entry.type) || 'static')) : 'static';
+          if (['static', 'eventfollow', 'eventspawn', 'eventdeath'].indexOf(kind) < 0) kind = 'static';
+          system.kind = kind;
+          system.children = [];
+          // A child may be given a count of its own; one that goes with its parent's particles has
+          // that many for each of them.
+          var ownMost = entry && isSet(entry.maxcount) ? number(entry.maxcount, 100) : number(said.maxcount, 100);
+          // Where a child stands on its parent's place, and the way back from there.
+          var offset = entry ? matrixOf(numbers(entry.origin, 3, 0), numbers(entry.angles, 3, 0).map(function (angle) { return angle * Math.PI / 180; }),
+                                        numbers(entry.scale, 3, 1)) : null;
+          function placement(whole) {
+            var up = standing(thing, whole);
+            return offset ? { matrix: times(up.matrix, offset), alpha: up.alpha, above: up.above, visible: up.visible } : up;
+          }
+          function ownPoint(x, y, z) {
+            if (!offset) return [x, y, z];
+            var area = offset[0] * offset[5] - offset[4] * offset[1];
+            if (Math.abs(area) < 1e-9) return null; // a child made of no size is not seen
+            var dx = x - offset[12], dy = y - offset[13];
+            return [(dx * offset[5] - dy * offset[4]) / area, (dy * offset[0] - dx * offset[1]) / area, z - offset[14]];
+          }
+          // Whether particles stay where they were made when what made them moves on, as a trail
+          // does; a glow that goes with a particle moves along with it.
+          var stays = (number(said.flags, 0) & 1) !== 0;
           system.moving = true;
           system.age = 0;
           system.particles = [];
           system.made = 0;
-          system.picture = texture('materials/' + ((material.textures || [])[0] || 'particle/dot'));
+          // A particle that bends what is behind it, a drop on glass, has for its pictures how it
+          // bends it rather than what it looks like. The bending is not drawn here; such a drop
+          // shows as a clear bead.
+          var refracts = number(plain((material.combos || {}).REFRACT), 0) === 1;
+          system.picture = refracts ? (textureCache['(bead)'] || (textureCache['(bead)'] = fromPixels(beadPixels(128), 128, true)))
+                                    : texture('materials/' + ((material.textures || [])[0] || 'particle/dot'));
           system.additive = key(material.blending || 'translucent') === 'additive';
           system.bright = number((material.constantshadervalues || {}).ui_editor_properties_overbright, 1);
           // Further away is smaller: the particles have depth, and are drawn as seen by an eye.
@@ -4197,8 +4283,9 @@ public enum WallpaperEngineRuntime {
           // What the scene changes of the particles where it uses them; a setting of the
           // wallpaper may stand behind each, and the editor may change each.
           system.settle = function () {
-            over = system.said.instanceoverride || {};
-            system.most = Math.max(1, Math.min(20000, Math.round(number(said.maxcount, 100) * number(over.count, 1))));
+            over = thing.said.instanceoverride || {};
+            system.each = Math.max(1, Math.min(20000, Math.round(ownMost * number(over.count, 1))));
+            system.most = kind === 'static' ? system.each : Math.min(20000, system.each * Math.max(1, system.owner ? system.owner.most : 1));
             system.rate = number(over.rate, 1);
             system.sizeBy = number(over.size, 1);
             system.alphaBy = number(over.alpha, 1);
@@ -4234,7 +4321,7 @@ public enum WallpaperEngineRuntime {
             var point = points.filter(function (each) { return each.id === index; })[0];
             if (!point) return [0, 0, 0];
             if (point.onScene) {
-              var matrix = standing(system, true).matrix;
+              var matrix = placement(true).matrix;
               var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
               if (Math.abs(area) < 1e-9) return point.offset;
               var dx = point.onScene[0] - matrix[12], dy = point.onScene[1] - matrix[13];
@@ -4243,7 +4330,7 @@ public enum WallpaperEngineRuntime {
             return point.follows ? [pointerThere[0] + point.offset[0], pointerThere[1] + point.offset[1], point.offset[2]] : point.offset;
           };
           function findPointer() {
-            var matrix = standing(system, true).matrix;
+            var matrix = placement(true).matrix;
             var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
             if (Math.abs(area) < 1e-9) return;
             var dx = pointer[0] * sceneWidth - matrix[12], dy = (1 - pointer[1]) * sceneHeight - matrix[13];
@@ -4294,9 +4381,41 @@ public enum WallpaperEngineRuntime {
           });
           gl.bindVertexArray(null);
 
-          function make(emitter) {
+          // Where the system makes its particles: for most, the one place of the system itself; for
+          // a child that goes with its parent's particles, the place of each of them — those it
+          // follows, or where one was made or died. `alive`: how many of its particles live.
+          system.instances = kind === 'static' ? [{ at: [0, 0, 0], age: 0, owed: [], burst: [], alive: 0 }] : [];
+
+          // Something happened to a particle of the parent: it was made, or it died.
+          system.event = function (particle) {
+            var at = ownPoint(particle.x + (particle.shiftX || 0), particle.y + (particle.shiftY || 0), particle.z);
+            if (at) system.instances.push({ at: at, age: 0, owed: [], burst: [], alive: 0 });
+          };
+
+          // A child that follows the parent's particles makes its particles where each of them is.
+          function followParent() {
+            var known = {};
+            system.instances.forEach(function (instance) { known[instance.host.id] = instance; });
+            system.instances = system.owner.particles.map(function (particle) {
+              var instance = known[particle.id] || { host: particle, age: 0, owed: [], burst: [], alive: 0 };
+              instance.at = ownPoint(particle.x + (particle.shiftX || 0), particle.y + (particle.shiftY || 0), particle.z);
+              return instance;
+            }).filter(function (instance) { return instance.at; });
+          }
+
+          function room(instance) {
+            return system.particles.length < system.most && (kind === 'static' || instance.alive < system.each);
+          }
+
+          function tell(what, particle) {
+            system.children.forEach(function (child) {
+              if (child.kind === what) child.event(particle);
+            });
+          }
+
+          function make(emitter, instance) {
             var particle = { id: ++system.made, seed: Math.random(), age: 0, life: 1, size: 20, alpha: 1, red: 1, green: 1, blue: 1,
-                             angle: 0, spin: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+                             angle: 0, spin: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, from: instance, base: instance.at.slice() };
             var away = [0, 0, 0];
             var axis;
             if (emitter.box) {
@@ -4315,9 +4434,9 @@ public enum WallpaperEngineRuntime {
               }
             }
             var from = system.pointAt(emitter.point);
-            particle.x = emitter.origin[0] + away[0] + from[0];
-            particle.y = emitter.origin[1] + away[1] + from[1];
-            particle.z = emitter.origin[2] + away[2] + from[2];
+            particle.x = emitter.origin[0] + away[0] + from[0] + instance.at[0];
+            particle.y = emitter.origin[1] + away[1] + from[1] + instance.at[1];
+            particle.z = emitter.origin[2] + away[2] + from[2] + instance.at[2];
             var speed = mix(emitter.speedLeast, emitter.speedMost, Math.random());
             var length = Math.sqrt(away[0] * away[0] + away[1] * away[1] + away[2] * away[2]);
             if (speed !== 0 && length > 0) {
@@ -4331,30 +4450,59 @@ public enum WallpaperEngineRuntime {
             particle.vz *= system.speedBy;
             particle.life *= system.lifeBy;
             system.particles.push(particle);
+            instance.alive++;
+            tell('eventspawn', particle);
           }
 
           system.step = function (seconds) {
             system.age += seconds;
             if (points.some(function (point) { return point.follows; })) findPointer();
-            system.emitters.forEach(function (emitter) {
-              if (system.age < emitter.waits) return;
-              // Particles made where the pointer is are not made while it is away.
-              if (emitter.withPointer && !pointerSeen) return;
-              if (emitter.burst > 0) {
-                for (var first = 0; first < emitter.burst && system.particles.length < system.most; first++) make(emitter);
-                emitter.burst = 0;
-              }
-              if (emitter.lasts > 0 && system.age > emitter.waits + emitter.lasts) return;
-              emitter.owed += emitter.rate * system.rate * seconds;
-              while (emitter.owed >= 1) {
-                emitter.owed -= 1;
-                if (system.particles.length < system.most) make(emitter);
-              }
+            if (kind === 'eventfollow' && system.owner) followParent();
+            system.instances.forEach(function (instance) {
+              instance.age += seconds;
+              system.emitters.forEach(function (emitter, index) {
+                if (instance.age < emitter.waits) return;
+                // Particles made where the pointer is are not made while it is away.
+                if (emitter.withPointer && !pointerSeen) return;
+                if (emitter.burst > 0 && !instance.burst[index]) {
+                  instance.burst[index] = true;
+                  for (var first = 0; first < emitter.burst && room(instance); first++) make(emitter, instance);
+                }
+                if (emitter.lasts > 0 && instance.age > emitter.waits + emitter.lasts) return;
+                instance.owed[index] = (instance.owed[index] || 0) + emitter.rate * system.rate * seconds;
+                while (instance.owed[index] >= 1) {
+                  instance.owed[index] -= 1;
+                  if (room(instance)) make(emitter, instance);
+                }
+              });
             });
+            // What a particle made or dying started is over once its child has made what it makes:
+            // a burst, or particles for as long as the child says — for a second where it does not.
+            if (kind === 'eventspawn' || kind === 'eventdeath') {
+              system.instances = system.instances.filter(function (instance) {
+                return system.emitters.some(function (emitter) {
+                  return instance.age < emitter.waits || (emitter.rate > 0 && instance.age < emitter.waits + (emitter.lasts > 0 ? emitter.lasts : 1));
+                });
+              });
+            }
             var alive = [];
+            system.instances.forEach(function (instance) { instance.alive = 0; });
             system.particles.forEach(function (particle) {
               particle.age += seconds;
-              if (particle.age >= particle.life) return;
+              if (particle.age >= particle.life) {
+                tell('eventdeath', particle);
+                return;
+              }
+              // A particle of a child that follows another goes along with it, unless it stays
+              // where it was made.
+              if (!stays && kind === 'eventfollow' && particle.from.at) {
+                var at = particle.from.at;
+                particle.x += at[0] - particle.base[0];
+                particle.y += at[1] - particle.base[1];
+                particle.z += at[2] - particle.base[2];
+                particle.base = at.slice();
+              }
+              particle.from.alive++;
               particle.alphaNow = particle.sizeNow = particle.redNow = particle.greenNow = particle.blueNow = 1;
               particle.shiftX = particle.shiftY = 0;
               var share = particle.age / particle.life;
@@ -4377,7 +4525,7 @@ public enum WallpaperEngineRuntime {
 
           system.draw = function () {
             if (!particleProgram || !system.particles.length) return;
-            var stands = standing(system);
+            var stands = placement();
             if (!stands.visible) return;
             // The editor may have let the system have more particles than there was room for.
             if (system.data.length < system.most * FLOATS) {
@@ -4463,7 +4611,7 @@ public enum WallpaperEngineRuntime {
             gl.bindVertexArray(null);
             system.draw = function () {
               var count = Math.min(system.particles.length, system.most);
-              var stands = standing(system);
+              var stands = placement();
               if (count < 2 || !stands.visible) return;
               if (band.length < system.most * 16) {
                 band = new Float32Array(system.most * 16);
@@ -4535,7 +4683,7 @@ public enum WallpaperEngineRuntime {
             gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 32, 16);
             gl.bindVertexArray(null);
             system.draw = function () {
-              var stands = standing(system);
+              var stands = placement();
               if (!stands.visible || !system.particles.length) return;
               var state = system.state;
               var matrix = stands.matrix;
@@ -4587,9 +4735,31 @@ public enum WallpaperEngineRuntime {
             };
           }
 
-          // A system begins as if it had been running for a while already.
-          var warm = Math.min(60, Math.max(0, number(said.starttime, 0)));
-          for (var played = 0; played < warm; played += 1 / 20) system.step(1 / 20);
+          // Its children, made after it, are drawn after it and move on as it does.
+          (Array.isArray(said.children) ? said.children : []).forEach(function (child) {
+            if (!child || typeof child !== 'object' || depth >= 4) return;
+            var childFile = String(plain(child.name) || '');
+            if (!json(childFile)) {
+              note('“' + name + '”: its particles ' + childFile + ' are not in the scene');
+              return;
+            }
+            var made = particleSystem(childFile, { name: name, owner: system, state: thing.state }, thing, child, depth + 1);
+            if (made) system.children.push(made);
+          });
+          var ownStep = system.step, ownDraw = system.draw, ownSettle = system.settle;
+          system.step = function (seconds) {
+            ownStep(seconds);
+            system.children.forEach(function (child) { child.step(seconds); });
+          };
+          system.draw = function () {
+            ownDraw();
+            system.children.forEach(function (child) { child.draw(); });
+          };
+          system.settle = function () {
+            ownSettle();
+            system.children.forEach(function (child) { child.settle(); });
+          };
+          system.warm = system.children.reduce(function (most, child) { return Math.max(most, child.warm); }, number(said.starttime, 0));
           return system;
         }
 
