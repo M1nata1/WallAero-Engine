@@ -617,6 +617,7 @@ final class WallpaperSceneTests: XCTestCase {
         var changes = WallpaperScene.EngineChanges(bloom: true)
         changes[object: 117].x = 900
         changes[object: 117].color = "#00FF00"
+        changes[object: 117].showsOnLockScreen = false
         changes[object: 34].isVisible = false
         changes[object: 22][effect: 1].values["speed"] = [2.5]
         changes[object: 22][effect: 0].isVisible = false
@@ -628,6 +629,8 @@ final class WallpaperSceneTests: XCTestCase {
         // The page hands the changes to the player, which puts them over the scene's own.
         XCTAssertTrue(try String(contentsOf: root.appendingPathComponent("runtime.js"), encoding: .utf8).contains("setChanges"))
         XCTAssertTrue(WallpaperEngineRuntime.script.contains("setChanges: function"))
+        // What is kept out of the lock screen picture is hidden when the app draws that picture.
+        XCTAssertTrue(WallpaperEngineRuntime.script.contains("window.wallaeroStill && change.showsOnLockScreen === false"))
 
         // Set back to what the scene has, an object is no longer listed, and a scene with no
         // changes says nothing of them.

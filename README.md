@@ -114,7 +114,7 @@ A scene is a wallpaper made of a background and layers on top of it. Select a vi
 - **Every layer** has a position, a size, a rotation, an opacity, a blending mode, a shadow and an animation: pulse, float, spin or blink.
 - **A code layer** holds any HTML, CSS and JavaScript inside the layer's box. Its script gets the variables `layer` (the layer's element) and `scene` (the whole scene).
 - **Variables.** Add Variable puts a value up for changing without the editor: a color, a number with limits, a switch, a text or a list of options. It shows in the wallpaper's settings under the title you give it, and the scene reads it by its name in code: `var(--name)` in CSS, `wallaero.variables.name` in JavaScript, `{name}` in a text layer. A change shows on the desktop at once; a script can follow it with the `wallaero:variables` event.
-- **Lock screen.** With "Show the wallpaper on the lock screen" on, the lock screen shows a still picture of the scene, on which a clock would be stuck at one time. Every layer has a Show on Lock Screen switch: turn it off and the layer is left out of that picture.
+- **Lock screen.** With "Show the wallpaper on the lock screen" on, the lock screen shows a still picture of the scene, on which a clock would be stuck at one time. Every layer, and every object of a Wallpaper Engine scene, has a Show on Lock Screen switch: turn it off and it is left out of that picture.
 - **Saving.** Changes are saved by themselves and show on the desktop at once if the scene is the current wallpaper. ⌘Z undoes, ⇧⌘Z redoes.
 
 A scene is an ordinary web page. The folder button in the editor's toolbar opens its files:

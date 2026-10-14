@@ -4765,6 +4765,9 @@ public enum WallpaperEngineRuntime {
           var copy = merged(object, {});
           function put(name, value) { copy[name] = replaced(object[name], value); }
           if (isSet(change.isVisible)) put('visible', !!change.isVisible);
+          // The app sets `wallaeroStill` when it draws the picture for the lock screen; what the
+          // editor keeps out of that picture is hidden there.
+          if (window.wallaeroStill && change.showsOnLockScreen === false) put('visible', false);
           if (isSet(change.x) || isSet(change.y)) {
             var hangs = object.parent !== undefined && object.parent !== null;
             var origin = numbers(object.origin, 3, hangs ? 0 : [sceneWidth / 2, sceneHeight / 2, 0]);

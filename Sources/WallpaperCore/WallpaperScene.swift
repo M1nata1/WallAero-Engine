@@ -206,6 +206,9 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
         /// The number the scene knows the object by.
         public var id: Int
         public var isVisible: Bool?
+        /// Whether the object is part of the still picture macOS shows on the lock screen, as
+        /// for a layer (`Layer.showsOnLockScreen`); nil is yes.
+        public var showsOnLockScreen: Bool?
         /// Where its middle is, in pixels of the scene from its bottom left corner, or from the
         /// middle of the object it hangs on.
         public var x: Double?
@@ -249,6 +252,7 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
                 (try? values.decodeIfPresent(T.self, forKey: key)) ?? nil
             }
             isVisible = optional(.isVisible)
+            showsOnLockScreen = optional(.showsOnLockScreen)
             x = optional(.x)
             y = optional(.y)
             scaleX = optional(.scaleX)

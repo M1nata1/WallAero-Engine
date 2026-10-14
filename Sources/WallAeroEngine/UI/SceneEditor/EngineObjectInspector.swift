@@ -20,6 +20,8 @@ struct EngineObjectInspector: View {
             }
             Toggle("Visible", isOn: value(\.isVisible, object.isVisible))
                 .disabled(object.isSteered("visible"))
+            Toggle("Show on Lock Screen", isOn: value(\.showsOnLockScreen, true))
+                .disabled(!(change.isVisible ?? object.isVisible))
         }
         Section("Position") {
             NumberRow("X", value: value(\.x, object.x), in: span(scene.width))
