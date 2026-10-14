@@ -81,10 +81,12 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
         public var saturation: Double
         /// Degrees around the colour wheel.
         public var hue: Double
+        /// What the editor has changed in the scene of Wallpaper Engine's, for `engine`.
+        public var engine: EngineChanges
 
         public init(kind: Kind = .color, source: String? = nil, color: String = "#000000", fit: Fit = .cover,
                     position: Double = 50, blur: Double = 0, brightness: Double = 100, contrast: Double = 100,
-                    saturation: Double = 100, hue: Double = 0) {
+                    saturation: Double = 100, hue: Double = 0, engine: EngineChanges = EngineChanges()) {
             self.kind = kind
             self.source = source
             self.color = color
@@ -95,6 +97,7 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
             self.contrast = contrast
             self.saturation = saturation
             self.hue = hue
+            self.engine = engine
         }
 
         /// Whether the background is a video or a picture: a file that can be chosen.
@@ -118,7 +121,200 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
             contrast = values.value(.contrast, or: defaults.contrast)
             saturation = values.value(.saturation, or: defaults.saturation)
             hue = values.value(.hue, or: defaults.hue)
+            engine = values.value(.engine, or: defaults.engine)
         }
+
+        private enum CodingKeys: String, CodingKey {
+            case kind, source, color, fit, position, blur, brightness, contrast, saturation, hue, engine
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(kind, forKey: .kind)
+            try values.encodeIfPresent(source, forKey: .source)
+            try values.encode(color, forKey: .color)
+            try values.encode(fit, forKey: .fit)
+            try values.encode(position, forKey: .position)
+            try values.encode(blur, forKey: .blur)
+            try values.encode(brightness, forKey: .brightness)
+            try values.encode(contrast, forKey: .contrast)
+            try values.encode(saturation, forKey: .saturation)
+            try values.encode(hue, forKey: .hue)
+            // Only a scene with changes says so.
+            if !engine.isEmpty {
+                try values.encode(engine, forKey: .engine)
+            }
+        }
+    }
+
+    // MARK: - Changes to a scene of Wallpaper Engine's
+
+    /// What the editor has changed in one of Wallpaper Engine's scenes played as the background.
+    /// The scene's own files stay as they came; the player puts these changes over what they
+    /// say. A value left nil is the scene's own.
+    public struct EngineChanges: Codable, Equatable, Sendable {
+        /// Whether the scene moves with the pointer, as through a window, and how much.
+        public var parallax: Bool?
+        public var parallaxAmount: Double?
+        /// Whether what is bright glows, and how strongly.
+        public var bloom: Bool?
+        public var bloomStrength: Double?
+        public var objects: [ObjectChange]
+
+        public init(parallax: Bool? = nil, parallaxAmount: Double? = nil, bloom: Bool? = nil, bloomStrength: Double? = nil,
+                    objects: [ObjectChange] = []) {
+            self.parallax = parallax
+            self.parallaxAmount = parallaxAmount
+            self.bloom = bloom
+            self.bloomStrength = bloomStrength
+            self.objects = objects
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            parallax = try? values.decodeIfPresent(Bool.self, forKey: .parallax)
+            parallaxAmount = try? values.decodeIfPresent(Double.self, forKey: .parallaxAmount)
+            bloom = try? values.decodeIfPresent(Bool.self, forKey: .bloom)
+            bloomStrength = try? values.decodeIfPresent(Double.self, forKey: .bloomStrength)
+            objects = values.value(.objects, or: [])
+        }
+
+        public var isEmpty: Bool {
+            parallax == nil && parallaxAmount == nil && bloom == nil && bloomStrength == nil && objects.allSatisfy(\.isEmpty)
+        }
+
+        /// The change to one object; one with nothing changed when there is none. Set, it
+        /// takes the place of the one there was; one with nothing changed is dropped.
+        public subscript(object id: Int) -> ObjectChange {
+            get { objects.first { $0.id == id } ?? ObjectChange(id: id) }
+            set {
+                let index = objects.firstIndex { $0.id == id }
+                if newValue.isEmpty {
+                    if let index { objects.remove(at: index) }
+                } else if let index {
+                    objects[index] = newValue
+                } else {
+                    objects.append(newValue)
+                }
+            }
+        }
+    }
+
+    /// What the editor has changed of one object of the scene: a picture, a text, particles,
+    /// a sound or what holds others together.
+    public struct ObjectChange: Codable, Equatable, Identifiable, Sendable {
+        /// The number the scene knows the object by.
+        public var id: Int
+        public var isVisible: Bool?
+        /// Where its middle is, in pixels of the scene from its bottom left corner, or from the
+        /// middle of the object it hangs on.
+        public var x: Double?
+        public var y: Double?
+        /// 1 is the size the scene gives it.
+        public var scaleX: Double?
+        public var scaleY: Double?
+        /// Degrees, clockwise, as the scene's own layers turn.
+        public var rotation: Double?
+        /// Percent.
+        public var opacity: Double?
+        /// "#RRGGBB": what the object is tinted with, or a text's color.
+        public var color: String?
+        public var text: String?
+        /// In Wallpaper Engine's points.
+        public var fontSize: Double?
+        /// Percent, for a sound.
+        public var volume: Double?
+        /// For particles, percent of what the system itself makes: how many there may be, how
+        /// many are made each second, how fast they fly, how large they are, how long they live
+        /// and how see-through they are.
+        public var particleCount: Double?
+        public var particleRate: Double?
+        public var particleSpeed: Double?
+        public var particleSize: Double?
+        public var particleLifetime: Double?
+        public var particleOpacity: Double?
+        /// "#RRGGBB": the one color all the particles are.
+        public var particleColor: String?
+        public var effects: [EffectChange]
+
+        public init(id: Int) {
+            self.id = id
+            effects = []
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(Int.self, forKey: .id)
+            func optional<T: Decodable>(_ key: CodingKeys) -> T? {
+                (try? values.decodeIfPresent(T.self, forKey: key)) ?? nil
+            }
+            isVisible = optional(.isVisible)
+            x = optional(.x)
+            y = optional(.y)
+            scaleX = optional(.scaleX)
+            scaleY = optional(.scaleY)
+            rotation = optional(.rotation)
+            opacity = optional(.opacity)
+            color = optional(.color)
+            text = optional(.text)
+            fontSize = optional(.fontSize)
+            volume = optional(.volume)
+            particleCount = optional(.particleCount)
+            particleRate = optional(.particleRate)
+            particleSpeed = optional(.particleSpeed)
+            particleSize = optional(.particleSize)
+            particleLifetime = optional(.particleLifetime)
+            particleOpacity = optional(.particleOpacity)
+            particleColor = optional(.particleColor)
+            effects = values.value(.effects, or: [])
+        }
+
+        /// Whether nothing of the object is changed.
+        public var isEmpty: Bool {
+            var bare = self
+            bare.effects = effects.filter { !$0.isEmpty }
+            return bare == ObjectChange(id: id)
+        }
+
+        /// The change to one of its effects, by its place among them; as `EngineChanges[object:]`.
+        public subscript(effect index: Int) -> EffectChange {
+            get { effects.first { $0.id == index } ?? EffectChange(id: index) }
+            set {
+                let found = effects.firstIndex { $0.id == index }
+                if newValue.isEmpty {
+                    if let found { effects.remove(at: found) }
+                } else if let found {
+                    effects[found] = newValue
+                } else {
+                    effects.append(newValue)
+                    effects.sort { $0.id < $1.id }
+                }
+            }
+        }
+    }
+
+    /// What the editor has changed of one effect on an object.
+    public struct EffectChange: Codable, Equatable, Identifiable, Sendable {
+        /// Its place among the object's effects, from 0.
+        public var id: Int
+        public var isVisible: Bool?
+        /// The effect's values, by the names its material gives them: one number, or several
+        /// for a point or a color (red, green and blue from 0 to 1).
+        public var values: [String: [Double]]
+
+        public init(id: Int) {
+            self.id = id
+            values = [:]
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(Int.self, forKey: .id)
+            isVisible = (try? values.decodeIfPresent(Bool.self, forKey: .isVisible)) ?? nil
+            self.values = values.value(.values, or: [:])
+        }
+
+        public var isEmpty: Bool { isVisible == nil && values.isEmpty }
     }
 
     // MARK: - Layers

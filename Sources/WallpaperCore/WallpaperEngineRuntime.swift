@@ -259,9 +259,9 @@ public enum WallpaperEngineRuntime {
         // what the names say and by the settings scenes give it.
         'common_composite.h': [
           '#include "common_blending.h"',
-          'uniform vec3 g_CompositeColor; // {"material":"compositecolor","type":"color","default":"1 1 1"}',
-          'uniform float g_CompositeAlpha; // {"material":"compositealpha","default":1,"range":[0,2]}',
-          'uniform vec2 g_CompositeOffset; // {"material":"compositeoffset","default":"0 0"}',
+          'uniform vec3 g_CompositeColor; // {"material":"compositecolor","label":"ui_editor_properties_composite_color","type":"color","default":"1 1 1"}',
+          'uniform float g_CompositeAlpha; // {"material":"compositealpha","label":"ui_editor_properties_composite_alpha","default":1,"range":[0,2]}',
+          'uniform vec2 g_CompositeOffset; // {"material":"compositeoffset","label":"ui_editor_properties_composite_offset","default":"0 0"}',
           'vec2 ApplyCompositeOffset(vec2 coords, vec2 resolution) {',
           '#if COMPOSITE == 0',
           '  return coords;',
@@ -399,8 +399,9 @@ public enum WallpaperEngineRuntime {
         return texts.join('\n');
       }
 
+      // `types`: the type each uniform is declared with, "float" or "vec3".
       function annotations(source) {
-        var result = { combos: {}, uniforms: {} };
+        var result = { combos: {}, uniforms: {}, types: {} };
         source.replace(/\r\n?/g, '\n').split('\n').forEach(function (line) {
           var combo = /^\s*\/\/\s*\[\s*(?:COMBO|COMBO_OFF|OFF_COMBO)\s*\]\s*(\{.*\})\s*$/.exec(line);
           if (combo) {
@@ -410,10 +411,11 @@ public enum WallpaperEngineRuntime {
             } catch (error) {}
             return;
           }
-          var uniform = /^\s*uniform\s+\w+\s+(\w+)\s*(?:\[[^\]]*\])?\s*;\s*\/\/\s*(\{.*\})\s*$/.exec(line);
+          var uniform = /^\s*uniform\s+(\w+)\s+(\w+)\s*(?:\[[^\]]*\])?\s*;\s*\/\/\s*(\{.*\})\s*$/.exec(line);
           if (uniform) {
             try {
-              result.uniforms[uniform[1]] = loose(uniform[2]);
+              result.uniforms[uniform[2]] = loose(uniform[3]);
+              result.types[uniform[2]] = uniform[1];
             } catch (error) {}
           }
         });
@@ -1641,7 +1643,7 @@ public enum WallpaperEngineRuntime {
 
       // ------------------------------------------------------------------ the player
 
-      function play(canvas, scene, settings) {
+      function play(canvas, scene, settings, startingChanges) {
         properties = {};
         Object.keys(settings || {}).forEach(function (name) { properties[name] = settings[name]; });
         var files = (scene && scene.files) || {};
@@ -2155,6 +2157,7 @@ public enum WallpaperEngineRuntime {
               var count = uniform.type === gl.FLOAT ? Math.max(1, uniform.size)
                         : (uniform.type === gl.FLOAT_VEC2 ? 2 : (uniform.type === gl.FLOAT_VEC3 ? 3 : (uniform.type === gl.FLOAT_VEC4 ? 4 : 1)));
               value.live = live(given !== undefined ? given : about['default'], count, 0, owner);
+              value.fallback = about['default'];
               if (value.live.changes) pass.moving = true;
               if (given && typeof given === 'object' && !Array.isArray(given)) pass.lives.push(value.live);
             }
@@ -2242,13 +2245,14 @@ public enum WallpaperEngineRuntime {
           var curve = behind ? curveOf(behind.animation) : null;
           var script = behind && typeof behind.script === 'string' ? { said: behind, owner: owner, kind: kind || 'numbers', count: count, unit: unit } : null;
           if (script) scripts.push(script);
+          // What the scene says is `value.raw`: the editor may make it another while the scene plays.
           function base() {
             if (kind === 'text') {
-              var text = plain(raw);
+              var text = plain(value.raw);
               return text === undefined || text === null ? '' : String(text);
             }
-            if (kind === 'flag') return flag(raw, fallback);
-            return numbers(raw, count, fallback);
+            if (kind === 'flag') return flag(value.raw, fallback);
+            return numbers(value.raw, count, fallback);
           }
           // An animation plays from the scene's start, or waits for a script to play it; `at` is
           // how far it has played, in seconds. One that follows another plays as that one does.
@@ -2257,7 +2261,8 @@ public enum WallpaperEngineRuntime {
                                  speed: 1, leader: null } : null;
           if (motion) motions.push(motion);
           // `bound`: a setting of the wallpaper stands behind it.
-          var value = { changes: !!curve, motion: motion, script: script, bound: !!(behind && behind.user !== undefined && behind.user !== null), now: base() };
+          var value = { raw: raw, changes: !!curve, motion: motion, script: script, bound: !!(behind && behind.user !== undefined && behind.user !== null) };
+          value.now = base();
           value.read = function () {
             // A script carries on from what the value is; anything else starts from what the
             // scene says.
@@ -3294,10 +3299,15 @@ public enum WallpaperEngineRuntime {
         // The effects on an object, each a list of passes ready to draw.
         function buildEffects(thing, object) {
           thing.effects = [];
-          (object.effects || []).forEach(function (use) {
+          // Those not made ready because they were off, by their places.
+          thing.effectsOff = {};
+          (object.effects || []).forEach(function (use, place) {
             // One the scene has switched off for good is not made ready at all, unless the scene
             // has scripts, which may switch it on.
-            if (use.visible === false && !scripted) return;
+            if (use.visible === false && !scripted) {
+              thing.effectsOff[place] = true;
+              return;
+            }
             var fileName = String(plain(use.file) || '');
             var what = '“' + thing.name + '”, effect ' + fileName.replace(/^effects\//, '').replace(/\/effect\.json$/, '');
             var effect = json(fileName);
@@ -3305,7 +3315,7 @@ public enum WallpaperEngineRuntime {
               note(what + ': not in the scene, left out');
               return;
             }
-            var built = { name: String(plain(use.name) || effect.name || ''), passes: [],
+            var built = { name: String(plain(use.name) || effect.name || ''), place: place, passes: [],
                           shown: live(use.visible, 0, true, thing, 'flag'), targets: (effect.fbos || []).map(function (target) {
               return { name: key(target.name), scale: Math.max(1, number(target.scale, 1)) };
             }) };
@@ -3340,6 +3350,9 @@ public enum WallpaperEngineRuntime {
                 return;
               }
               pass.target = step.target ? key(step.target) : null;
+              // Which of the effect's passes it is, and its material's own: for values changed later.
+              pass.step = index;
+              pass.own = own;
               pass.binds = (step.bind || []).map(function (bind) { return { name: key(bind.name), slot: number(bind.index, 0) }; });
               // What is in each slot: a name the effect binds there, a texture, or what the slot
               // is said to hold when nothing is put there.
@@ -4176,15 +4189,16 @@ public enum WallpaperEngineRuntime {
           system.age = 0;
           system.particles = [];
           system.made = 0;
-          system.most = Math.max(1, Math.min(20000, Math.round(number(said.maxcount, 100) * number(over.count, 1))));
           system.picture = texture('materials/' + ((material.textures || [])[0] || 'particle/dot'));
           system.additive = key(material.blending || 'translucent') === 'additive';
           system.bright = number((material.constantshadervalues || {}).ui_editor_properties_overbright, 1);
           // Further away is smaller: the particles have depth, and are drawn as seen by an eye.
           system.perspective = (number(said.flags, 0) & 4) !== 0;
           // What the scene changes of the particles where it uses them; a setting of the
-          // wallpaper may stand behind each.
+          // wallpaper may stand behind each, and the editor may change each.
           system.settle = function () {
+            over = system.said.instanceoverride || {};
+            system.most = Math.max(1, Math.min(20000, Math.round(number(said.maxcount, 100) * number(over.count, 1))));
             system.rate = number(over.rate, 1);
             system.sizeBy = number(over.size, 1);
             system.alphaBy = number(over.alpha, 1);
@@ -4365,6 +4379,12 @@ public enum WallpaperEngineRuntime {
             if (!particleProgram || !system.particles.length) return;
             var stands = standing(system);
             if (!stands.visible) return;
+            // The editor may have let the system have more particles than there was room for.
+            if (system.data.length < system.most * FLOATS) {
+              system.data = new Float32Array(system.most * FLOATS);
+              gl.bindBuffer(gl.ARRAY_BUFFER, system.buffer);
+              gl.bufferData(gl.ARRAY_BUFFER, system.data.byteLength, gl.DYNAMIC_DRAW);
+            }
             var state = system.state;
             // Counted from the lower left corner of what the particles are drawn on.
             var matrix = stands.matrix;
@@ -4445,6 +4465,11 @@ public enum WallpaperEngineRuntime {
               var count = Math.min(system.particles.length, system.most);
               var stands = standing(system);
               if (count < 2 || !stands.visible) return;
+              if (band.length < system.most * 16) {
+                band = new Float32Array(system.most * 16);
+                gl.bindBuffer(gl.ARRAY_BUFFER, bandBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, band.byteLength, gl.DYNAMIC_DRAW);
+              }
               var state = system.state;
               var matrix = stands.matrix;
               var wide = Math.sqrt(Math.abs(matrix[0] * matrix[5] - matrix[4] * matrix[1])) * system.sizeBy;
@@ -4685,6 +4710,213 @@ public enum WallpaperEngineRuntime {
         // A scene with scripts may show what it has hidden; in any other, what is hidden for good
         // is left out.
         var scripted = /"script"\s*:/.test(files['scene.json'] || '');
+
+        // --- Changes made in the editor ------------------------------------------------------
+        //
+        // The app's editor changes a scene without touching its files: its changes come with the
+        // scene and are put over what the scene says, before the scene is played and while it
+        // plays. The scene as it came is kept, for a change that is taken back.
+
+        var changes = {};
+        var pristine = { general: merged(general, {}), objects: {}, order: all };
+        all.forEach(function (object) {
+          if (object.id !== undefined && object.id !== null) pristine.objects[String(object.id)] = object;
+        });
+        var generalChanged = {}; // the names of what the editor has changed of the scene as a whole
+
+        function isSet(value) {
+          return value !== undefined && value !== null;
+        }
+
+        // A value of the scene made another. What stood behind it — an animation, a script — goes
+        // on from the new value; a setting of the wallpaper that stood behind it does no longer.
+        function replaced(raw, value) {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return value;
+          var copy = merged(raw, { value: value });
+          delete copy.user;
+          return copy;
+        }
+
+        // A color as the editor gives it, "#FF8000", as the scene writes one: "1 0.50196 0".
+        function colorText(hex) {
+          var parts = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(String(hex || ''));
+          if (!parts) return null;
+          return [1, 2, 3].map(function (index) { return +(parseInt(parts[index], 16) / 255).toFixed(5); }).join(' ');
+        }
+
+        function hexOf(parts) {
+          return '#' + parts.slice(0, 3).map(function (part) {
+            return ('0' + Math.round(Math.max(0, Math.min(1, part)) * 255).toString(16)).slice(-2);
+          }).join('').toUpperCase();
+        }
+
+        function changeOf(id) {
+          var list = Array.isArray(changes.objects) ? changes.objects : [];
+          for (var i = 0; i < list.length; i++) {
+            if (list[i] && String(list[i].id) === String(id)) return list[i];
+          }
+          return null;
+        }
+
+        // An object of the scene with the editor's change put over it: a copy, or the object itself
+        // when nothing of it is changed.
+        function amended(object, change) {
+          if (!change) return object;
+          var copy = merged(object, {});
+          function put(name, value) { copy[name] = replaced(object[name], value); }
+          if (isSet(change.isVisible)) put('visible', !!change.isVisible);
+          if (isSet(change.x) || isSet(change.y)) {
+            var hangs = object.parent !== undefined && object.parent !== null;
+            var origin = numbers(object.origin, 3, hangs ? 0 : [sceneWidth / 2, sceneHeight / 2, 0]);
+            if (isSet(change.x)) origin[0] = Number(change.x);
+            if (isSet(change.y)) origin[1] = Number(change.y);
+            put('origin', origin.join(' '));
+          }
+          if (isSet(change.scaleX) || isSet(change.scaleY)) {
+            var scale = numbers(object.scale, 3, 1);
+            if (isSet(change.scaleX)) scale[0] = Number(change.scaleX);
+            if (isSet(change.scaleY)) scale[1] = Number(change.scaleY);
+            put('scale', scale.join(' '));
+          }
+          if (isSet(change.rotation)) {
+            // The editor turns clockwise, as on the page; the scene counts the other way.
+            var angles = numbers(object.angles, 3, 0);
+            angles[2] = -Number(change.rotation) * Math.PI / 180;
+            put('angles', angles.join(' '));
+          }
+          if (isSet(change.opacity)) put('alpha', Number(change.opacity) / 100);
+          if (colorText(change.color)) put('color', colorText(change.color));
+          if (isSet(change.text)) put('text', String(change.text));
+          if (isSet(change.fontSize)) put('pointsize', Number(change.fontSize));
+          if (isSet(change.volume)) put('volume', Number(change.volume) / 100);
+          var over = null;
+          [['particleCount', 'count'], ['particleRate', 'rate'], ['particleSpeed', 'speed'], ['particleSize', 'size'],
+           ['particleLifetime', 'lifetime'], ['particleOpacity', 'alpha']].forEach(function (pair) {
+            if (!isSet(change[pair[0]])) return;
+            over = over || merged(object.instanceoverride, {});
+            over[pair[1]] = replaced(over[pair[1]], Number(change[pair[0]]) / 100);
+          });
+          if (colorText(change.particleColor)) {
+            over = over || merged(object.instanceoverride, {});
+            over.colorn = replaced(over.colorn, colorText(change.particleColor));
+          }
+          if (over) copy.instanceoverride = over;
+          if (Array.isArray(change.effects) && Array.isArray(object.effects)) {
+            copy.effects = object.effects.map(function (use, place) {
+              var own = change.effects.filter(function (each) { return each && each.id === place; })[0];
+              return own && use ? amendedEffect(use, own) : use;
+            });
+          }
+          return copy;
+        }
+
+        // An effect with the editor's change put over it. A value of the effect is changed in
+        // each of its passes, as Wallpaper Engine's own editor does.
+        function amendedEffect(use, change) {
+          var copy = merged(use, {});
+          if (isSet(change.isVisible)) copy.visible = replaced(use.visible, !!change.isVisible);
+          var names = Object.keys(change.values || {});
+          if (!names.length) return copy;
+          var effect = json(String(plain(use.file) || '')) || {};
+          var count = Math.max((effect.passes || []).length, (use.passes || []).length);
+          copy.passes = [];
+          for (var step = 0; step < count; step++) {
+            var chosen = merged((use.passes || [])[step], {});
+            var constants = merged(chosen.constantshadervalues, {});
+            names.forEach(function (name) {
+              var value = change.values[name];
+              if (!Array.isArray(value) || !value.length) return;
+              constants[name] = replaced(constants[name], value.length === 1 ? Number(value[0]) : value.map(Number).join(' '));
+            });
+            chosen.constantshadervalues = constants;
+            copy.passes.push(chosen);
+          }
+          return copy;
+        }
+
+        // The scene as a whole: whether it moves with the pointer, whether what is bright glows.
+        function amendGeneral() {
+          [['parallax', 'cameraparallax'], ['parallaxAmount', 'cameraparallaxamount'], ['bloom', 'bloom'],
+           ['bloomStrength', 'bloomstrength']].forEach(function (pair) {
+            var value = changes[pair[0]];
+            if (isSet(value)) {
+              general[pair[1]] = replaced(pristine.general[pair[1]], typeof value === 'boolean' ? value : Number(value));
+              generalChanged[pair[1]] = true;
+            } else if (generalChanged[pair[1]]) {
+              // Taken back: as the scene has it, whatever a script made of it meanwhile.
+              if (pair[1] in pristine.general) general[pair[1]] = pristine.general[pair[1]];
+              else delete general[pair[1]];
+              delete generalChanged[pair[1]];
+            }
+          });
+        }
+
+        // The values of an object that are played as they change.
+        var FOLLOWED = ['origin', 'scale', 'angles', 'alpha', 'color', 'visible', 'text', 'pointsize', 'volume'];
+
+        // Brings what is played of an object up to the object as the editor has changed it. False
+        // when that cannot be done without playing the scene anew: something that was not made
+        // ready because it was hidden is to show.
+        function follow(thing, object) {
+          if (thing.unmade && flag(object.visible, true)) return false;
+          thing.said = object;
+          FOLLOWED.forEach(function (name) {
+            var value = thing.lives[name];
+            if (!value || JSON.stringify(value.raw) === JSON.stringify(object[name])) return;
+            value.raw = object[name];
+            var behind = value.raw && typeof value.raw === 'object' && !Array.isArray(value.raw) ? value.raw : null;
+            value.bound = !!(behind && isSet(behind.user));
+            // What a script makes of the value, it goes on making.
+            if (value.script && value.script.made !== undefined) return;
+            var next = value.read();
+            if (!same(next, thing.state[name])) {
+              thing.state[name] = next;
+              dirty = true;
+            }
+          });
+          var uses = object.effects || [];
+          var made = {};
+          (thing.effects || []).forEach(function (effect) { made[effect.place] = effect; });
+          for (var place = 0; place < uses.length; place++) {
+            var use = uses[place] || {};
+            var effect = made[place];
+            if (!effect) {
+              if (thing.effectsOff && thing.effectsOff[place] && flag(use.visible, true)) return false;
+              continue;
+            }
+            var touched = false;
+            if (JSON.stringify(effect.shown.raw) !== JSON.stringify(use.visible)) {
+              effect.shown.raw = use.visible;
+              if (!(effect.shown.script && effect.shown.script.made !== undefined)) {
+                var before = effect.shown.now;
+                if (effect.shown.read() !== before) touched = true;
+              }
+            }
+            effect.passes.forEach(function (pass) {
+              if (!pass.own) return;
+              var constants = merged(pass.own.constantshadervalues, ((use.passes || [])[pass.step] || {}).constantshadervalues);
+              pass.values.forEach(function (value) {
+                if (!value.live || value.material === undefined) return;
+                var raw = constants[value.material] !== undefined ? constants[value.material] : value.fallback;
+                if (JSON.stringify(raw) === JSON.stringify(value.live.raw)) return;
+                value.live.raw = raw;
+                if (value.live.script && value.live.script.made !== undefined) return;
+                var before = value.live.now;
+                if (!same(value.live.read(), before)) touched = true;
+              });
+            });
+            if (touched) stale(thing);
+          }
+          if (thing.settle) thing.settle();
+          return true;
+        }
+
+        changes = merged(startingChanges, {});
+        amendGeneral();
+        all = all.map(function (object) {
+          return isSet(object.id) ? amended(object, changeOf(object.id)) : object;
+        });
+
         function idle() {}
         var hasChildren = {};
         all.forEach(function (object) {
@@ -4708,7 +4940,10 @@ public enum WallpaperEngineRuntime {
             thing.held = [];
           }
           // What is hidden for good is only there for what hangs on it to be hidden with it.
-          if (hidden && !scripted) return thing;
+          if (hidden && !scripted) {
+            thing.unmade = !!make;
+            return thing;
+          }
           if (!make) {
             // Something with only a place holds the objects that hang on it together.
             if (!hidden && (object.model || object.light || object.camera)) {
@@ -4719,7 +4954,8 @@ public enum WallpaperEngineRuntime {
           function finish() {
             var built = null;
             try {
-              built = make(object, thing);
+              // As the editor may have changed it meanwhile.
+              built = make(thing.said, thing);
             } catch (error) {
               note('“' + thing.name + '”: ' + error.message);
             }
@@ -5013,16 +5249,29 @@ public enum WallpaperEngineRuntime {
         // Where the pointer is over the scene, from 0 to 1 from its top left corner: the scene is
         // fitted to the screen by the page, cut or with bars.
         function point(event) {
+          var shown = shownAt();
+          pointer = [(event.clientX - shown.left) / shown.width, (event.clientY - shown.top) / shown.height];
+          pointerSeen = true;
+        }
+        // Where the whole scene is on the page, in its pixels; parts of it may be cut off.
+        function shownAt() {
           var box = canvas.getBoundingClientRect();
           var fit = canvas.style.objectFit || 'cover';
           var by = fit === 'contain' ? Math.min(box.width / sceneWidth, box.height / sceneHeight)
                  : Math.max(box.width / sceneWidth, box.height / sceneHeight);
           var width = fit === 'fill' ? box.width : sceneWidth * by, height = fit === 'fill' ? box.height : sceneHeight * by;
           var kept = (canvas.style.objectPosition || '50% 50%').split(/\s+/).map(parseFloat);
-          var left = box.left + (box.width - width) * (isFinite(kept[0]) ? kept[0] : 50) / 100;
-          var top = box.top + (box.height - height) * (isFinite(kept[1]) ? kept[1] : 50) / 100;
-          pointer = [(event.clientX - left) / width, (event.clientY - top) / height];
-          pointerSeen = true;
+          return { left: box.left + (box.width - width) * (isFinite(kept[0]) ? kept[0] : 50) / 100,
+                   top: box.top + (box.height - height) * (isFinite(kept[1]) ? kept[1] : 50) / 100, width: width, height: height };
+        }
+        // A point of the page as a point of the scene, and back. The scene counts from its bottom.
+        function sceneAt(pageX, pageY) {
+          var shown = shownAt();
+          return [(pageX - shown.left) / shown.width * sceneWidth, (1 - (pageY - shown.top) / shown.height) * sceneHeight];
+        }
+        function pageAt(x, y) {
+          var shown = shownAt();
+          return [shown.left + x / sceneWidth * shown.width, shown.top + (1 - y / sceneHeight) * shown.height];
         }
         // What the mouse does is told to the scripts; whatever they change by it is then drawn.
         function mouse(kind) {
@@ -5046,7 +5295,7 @@ public enum WallpaperEngineRuntime {
           event.preventDefault();
         }
         function restored() {
-          if (!stopped) window.WallaeroEngine.play(canvas, scene, properties);
+          if (!stopped) window.WallaeroEngine.play(canvas, scene, properties, changes);
         }
         canvas.addEventListener('webglcontextlost', lost);
         canvas.addEventListener('webglcontextrestored', restored);
@@ -5109,23 +5358,189 @@ public enum WallpaperEngineRuntime {
               }),
               notes: notes
             }, null, 1);
+          },
+          // What the editor has changed of the scene: what is now changed otherwise shows at once.
+          // False when it cannot be shown without the scene being played anew.
+          setChanges: function (next) {
+            var text = JSON.stringify(next || {});
+            if (stopped || text === JSON.stringify(changes)) return true;
+            changes = JSON.parse(text);
+            amendGeneral();
+            var followed = things.slice().every(function (thing) {
+              var original = isSet(thing.id) ? pristine.objects[String(thing.id)] : null;
+              return !original || follow(thing, amended(original, changeOf(thing.id)));
+            });
+            changed();
+            return followed;
+          },
+          // The scene for the editor: its objects as the scene has them, without the editor's
+          // changes, which the editor knows, and what of them can be changed.
+          describe: function () {
+            return {
+              width: sceneWidth, height: sceneHeight,
+              parallax: flag(pristine.general.cameraparallax, false), parallaxAmount: number(pristine.general.cameraparallaxamount, 0.5),
+              bloom: flag(pristine.general.bloom, false), bloomStrength: number(pristine.general.bloomstrength, 2),
+              objects: pristine.order.filter(function (object) { return numbered(object.id); }).map(describeObject)
+            };
+          },
+          // The object of the scene at a point of the page: the topmost there that shows. Layers
+          // that put an effect over all under them are passed over: they would be everywhere.
+          hit: function (pageX, pageY) {
+            var at = sceneAt(pageX, pageY);
+            for (var i = objects.length - 1; i >= 0; i--) {
+              var thing = objects[i];
+              if (!thing.size || !isSet(thing.id) || !pristine.objects[String(thing.id)] || thing.takesScene || thing.holds) continue;
+              var stands = standing(thing);
+              if (stands.visible && stands.alpha > 0.01 && spot(thing, at[0], at[1])) return numbered(thing.id) ? Number(thing.id) : null;
+            }
+            return null;
+          },
+          // Where an object is on the page: its middle and, if it has a size, the corners of its
+          // rectangle from the top left one round.
+          outline: function (id) {
+            var thing = byId[String(id)];
+            if (!thing) return null;
+            var stands = standing(thing, true);
+            var matrix = thing.shift ? nudged(stands.matrix, thing.shift[0], thing.shift[1]) : stands.matrix;
+            function page(x, y) { return pageAt(matrix[0] * x + matrix[4] * y + matrix[12], matrix[1] * x + matrix[5] * y + matrix[13]); }
+            var result = { middle: page(0, 0), visible: stands.visible };
+            if (thing.size) {
+              var w = thing.size[0] / 2, h = thing.size[1] / 2;
+              result.corners = [page(-w, h), page(w, h), page(w, -h), page(-w, -h)];
+            }
+            return result;
+          },
+          // A point of the page in the coordinates an object's place is counted in: the scene's,
+          // or those of the object it hangs on. An object moved by the pointer has its place move
+          // by as much as this point does.
+          placeAt: function (id, pageX, pageY) {
+            var at = sceneAt(pageX, pageY);
+            var thing = byId[String(id)];
+            var parent = thing && isSet(thing.parent) ? byId[String(thing.parent)] : null;
+            if (!parent || parent === thing) return at;
+            var matrix = standing(parent, true).matrix;
+            var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
+            if (Math.abs(area) < 1e-9) return at;
+            var dx = at[0] - matrix[12], dy = at[1] - matrix[13];
+            return [(dx * matrix[5] - dy * matrix[4]) / area, (dy * matrix[0] - dx * matrix[1]) / area];
           }
         };
+
+        // Whether an object has a number the editor can know it by: scenes number their objects.
+        function numbered(id) {
+          return isSet(id) && String(id).trim() !== '' && isFinite(Number(id));
+        }
+
+        // A number for the editor: one that is none would not come through.
+        function real(value, fallback) {
+          return typeof value === 'number' && isFinite(value) ? value : (fallback || 0);
+        }
+
+        // Whether an animation or a script changes a value as the scene plays.
+        function changesByItself(raw) {
+          return !!(raw && typeof raw === 'object' && !Array.isArray(raw) && (typeof raw.script === 'string' || raw.animation));
+        }
+
+        function describeObject(object) {
+          var kind = object.image ? 'image' : (object.particle ? 'particles' : (object.sound ? 'sound' :
+                     (isSet(object.text) ? 'text' : (object.model ? 'model' : (object.light ? 'light' : 'group')))));
+          var file = String(plain(object.image) || plain(object.particle) || '');
+          var hangs = isSet(object.parent);
+          var origin = numbers(object.origin, 3, hangs ? 0 : [sceneWidth / 2, sceneHeight / 2, 0]);
+          var scale = numbers(object.scale, 3, 1);
+          var angles = numbers(object.angles, 3, 0);
+          var result = {
+            id: Number(object.id), kind: kind, parent: hangs && numbered(object.parent) ? Number(object.parent) : null,
+            // Unnamed, an object goes by its file: "models/girl.json" is “girl”.
+            name: String(plain(object.name) || file.replace(/^.*\//, '').replace(/\.[^.]*$/, '') || ''),
+            isVisible: flag(object.visible, true), x: real(origin[0]), y: real(origin[1]), scaleX: real(scale[0], 1), scaleY: real(scale[1], 1),
+            rotation: real(-angles[2] * 180 / Math.PI), opacity: real(number(object.alpha, 1) * 100, 100), color: hexOf(numbers(object.color, 3, 1)),
+            steered: FOLLOWED.filter(function (name) { return changesByItself(object[name]); }),
+            effects: (Array.isArray(object.effects) ? object.effects : []).map(describeEffect)
+          };
+          if (kind === 'text') {
+            var text = plain(object.text);
+            result.text = isSet(text) ? String(text) : '';
+            result.fontSize = real(number(object.pointsize, 32), 32);
+          }
+          if (kind === 'sound') result.volume = real(number(object.volume, 1) * 100, 100);
+          if (kind === 'particles') {
+            var over = object.instanceoverride || {};
+            result.particleCount = real(number(over.count, 1) * 100, 100);
+            result.particleRate = real(number(over.rate, 1) * 100, 100);
+            result.particleSpeed = real(number(over.speed, 1) * 100, 100);
+            result.particleSize = real(number(over.size, 1) * 100, 100);
+            result.particleLifetime = real(number(over.lifetime, 1) * 100, 100);
+            result.particleOpacity = real(number(over.alpha, 1) * 100, 100);
+            if (isSet(over.colorn)) result.particleColor = hexOf(color(over.colorn, 1));
+            else if (isSet(over.color)) result.particleColor = hexOf(color(over.color, 255));
+          }
+          return result;
+        }
+
+        // An effect for the editor: its values, by the names its material gives them, each once
+        // however many of its passes have it — as Wallpaper Engine's own editor shows them.
+        function describeEffect(use, place) {
+          use = use || {};
+          var fileName = String(plain(use.file) || '');
+          var effect = json(fileName) || {};
+          var values = [];
+          var seen = {};
+          (effect.passes || []).forEach(function (step, index) {
+            if (step.command) return;
+            var own = ((json(step.material) || {}).passes || [])[0];
+            var vertex = own ? files['shaders/' + key(own.shader) + '.vert'] : null;
+            var fragment = own ? files['shaders/' + key(own.shader) + '.frag'] : null;
+            if (typeof vertex !== 'string' || typeof fragment !== 'string') return;
+            var said = annotations(vertex + '\n' + fragment + '\n' + headersOf(vertex + '\n' + fragment, files));
+            var constants = merged(own.constantshadervalues, ((use.passes || [])[index] || {}).constantshadervalues);
+            Object.keys(said.uniforms).forEach(function (name) {
+              var about = said.uniforms[name];
+              var count = { 'float': 1, vec2: 2, vec3: 3, vec4: 4 }[said.types[name]];
+              if (!about || !count || !isSet(about.material) || seen[about.material] || about.hidden === true) return;
+              seen[about.material] = true;
+              var raw = isSet(constants[about.material]) ? constants[about.material] : about['default'];
+              var range = Array.isArray(about.range) && about.range.length === 2 ? about.range.map(Number) : null;
+              values.push({
+                name: String(about.material), label: String(about.label || about.material), count: count,
+                value: numbers(raw, count, 0).map(function (part) { return real(part); }), isColor: about.type === 'color' && count >= 3,
+                range: range && isFinite(range[0]) && isFinite(range[1]) && range[1] > range[0] ? range : null,
+                isWhole: about['int'] === true, inDegrees: about.conversion === 'rad2deg', isSteered: changesByItself(raw)
+              });
+            });
+          });
+          return { id: place, name: String(plain(use.name) || effect.name || fileName.replace(/^effects\//, '').replace(/\/effect\.json$/, '')),
+                   isVisible: flag(use.visible, true), isSteered: changesByItself(use.visible), values: values };
+        }
+
         return player;
       }
 
       var current = null;
+      // What the editor asks of the scene playing now.
+      function ofCurrent(name) {
+        return function () {
+          return current && current[name] ? current[name].apply(current, arguments) : null;
+        };
+      }
       window.WallaeroEngine = {
         // Draws a scene on a canvas until told to stop. One scene plays at a time. `settings` are
-        // the wallpaper's own, by the names the scene has for them.
-        play: function (canvas, scene, settings) {
+        // the wallpaper's own, by the names the scene has for them, and `changes` what the app's
+        // editor has changed of the scene.
+        play: function (canvas, scene, settings, changes) {
           if (current) current.stop(current.canvas === canvas);
           notes = [];
-          current = play(canvas, scene, settings);
+          current = play(canvas, scene, settings, changes);
           current.canvas = canvas;
+          // For the editor, which then shows the scene's objects.
+          document.dispatchEvent(new CustomEvent('wallaero:engine'));
           return current;
         },
         report: function () { return current && current.report ? current.report() : JSON.stringify({ notes: notes }); },
+        describe: ofCurrent('describe'),
+        hit: ofCurrent('hit'),
+        outline: ofCurrent('outline'),
+        placeAt: ofCurrent('placeAt'),
         // The translation of a shader alone, for whoever wants to see or check it.
         translate: translate,
         annotations: annotations,

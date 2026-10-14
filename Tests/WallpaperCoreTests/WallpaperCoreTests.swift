@@ -613,6 +613,43 @@ final class WallpaperSceneTests: XCTestCase {
         XCTAssertTrue(try String(contentsOf: root.appendingPathComponent("runtime.js"), encoding: .utf8).contains("showsOnLockScreen"))
     }
 
+    func testChangesToAWallpaperEngineSceneAreKeptApartFromItsFiles() throws {
+        var changes = WallpaperScene.EngineChanges(bloom: true)
+        changes[object: 117].x = 900
+        changes[object: 117].color = "#00FF00"
+        changes[object: 34].isVisible = false
+        changes[object: 22][effect: 1].values["speed"] = [2.5]
+        changes[object: 22][effect: 0].isVisible = false
+        let scene = WallpaperScene(background: .init(kind: .engine, source: "engine/files.js", engine: changes))
+        try SceneProject.create(at: root, scene: scene)
+        XCTAssertEqual(try SceneProject.read(from: root), scene)
+        XCTAssertEqual(changes.objects.map(\.id), [117, 34, 22])
+        XCTAssertEqual(changes[object: 22].effects.map(\.id), [0, 1], "effects keep their order")
+        // The page hands the changes to the player, which puts them over the scene's own.
+        XCTAssertTrue(try String(contentsOf: root.appendingPathComponent("runtime.js"), encoding: .utf8).contains("setChanges"))
+        XCTAssertTrue(WallpaperEngineRuntime.script.contains("setChanges: function"))
+
+        // Set back to what the scene has, an object is no longer listed, and a scene with no
+        // changes says nothing of them.
+        changes[object: 117] = WallpaperScene.ObjectChange(id: 117)
+        changes[object: 34].isVisible = nil
+        XCTAssertEqual(changes.objects.map(\.id), [22])
+        changes[object: 22][effect: 1].values = [:]
+        changes[object: 22][effect: 0].isVisible = nil
+        changes.bloom = nil
+        XCTAssertTrue(changes.isEmpty)
+        XCTAssertEqual(changes.objects, [])
+        try SceneProject.write(WallpaperScene(background: .init(kind: .engine, source: "engine/files.js", engine: changes)), to: root)
+        XCTAssertFalse(try String(contentsOf: root.appendingPathComponent("scene.json"), encoding: .utf8).contains("\"engine\" : {"))
+
+        // Written by hand, or by another version: what cannot be read is left out, not the rest.
+        let json = #"{"background": {"kind": "engine", "source": "engine/files.js", "engine": {"bloom": "yes", "objects": [{"id": 5, "x": "far", "y": 10}]}}}"#
+        let read = try JSONDecoder().decode(WallpaperScene.self, from: Data(json.utf8)).background.engine
+        XCTAssertNil(read.bloom)
+        XCTAssertNil(read[object: 5].x)
+        XCTAssertEqual(read[object: 5].y, 10)
+    }
+
     func testVariablesSurviveBeingWrittenAndFillInWhatIsMissing() throws {
         var color = WallpaperScene.Variable(kind: .color, title: "Цвет полос", key: "bars")
         color.color = "#FFAA00"

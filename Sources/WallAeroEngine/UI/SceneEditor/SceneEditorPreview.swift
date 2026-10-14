@@ -57,23 +57,45 @@ final class SceneEditorPreviewController {
         view.evaluate("window.wallaero && window.wallaero.setScene(\(String(decoding: data, as: UTF8.self)))")
     }
 
-    func select(_ id: UUID?) {
-        view.evaluate("window.wallaeroEditor && window.wallaeroEditor.select(\(id.map { "'\($0.uuidString)'" } ?? "null"))")
+    func select(_ item: SceneEditorItem?) {
+        switch item {
+        case .layer(let id):
+            view.evaluate("window.wallaeroEditor && window.wallaeroEditor.select('\(id.uuidString)')")
+        case .object(let number):
+            view.evaluate("window.wallaeroEditor && window.wallaeroEditor.selectObject(\(number))")
+        case .variable, nil:
+            view.evaluate("window.wallaeroEditor && window.wallaeroEditor.select(null)")
+        }
     }
 
     private func handle(_ message: [String: Any]) {
         guard let model, let type = message["type"] as? String else { return }
         let id = (message["id"] as? String).flatMap(UUID.init(uuidString:))
+        // An object of a Wallpaper Engine scene goes by a number.
+        let number = (message["id"] as? NSNumber)?.intValue
+        let patch = (message["patch"] as? [String: Any])?.compactMapValues { ($0 as? NSNumber)?.doubleValue }
         switch type {
         case "ready":
             // The page loaded, or loaded again after its files changed: bring it up to date.
             show(model.scene)
             select(model.selection)
+        case "engine":
+            // The scene of Wallpaper Engine's in the background has started: its objects.
+            if let text = message["scene"] as? String,
+               let description = try? JSONDecoder().decode(EngineSceneDescription.self, from: Data(text.utf8)) {
+                model.engineDidStart(description)
+            }
         case "select":
-            model.selection = id
+            model.selection = id.map(SceneEditorItem.layer)
+        case "select-object":
+            model.selection = number.map(SceneEditorItem.object)
         case "change":
-            if let id, let patch = message["patch"] as? [String: Any] {
-                model.applyFromPreview(layer: id, patch: patch.compactMapValues { ($0 as? NSNumber)?.doubleValue })
+            if let id, let patch {
+                model.applyFromPreview(layer: id, patch: patch)
+            }
+        case "object-change":
+            if let number, let patch {
+                model.applyFromPreview(object: number, patch: patch)
             }
         case "commit":
             model.endGesture()

@@ -1,6 +1,7 @@
 /// The script the editor adds to the scene's page in its preview. It lets layers be picked,
-/// dragged, resized and turned with the mouse, and reports each change to the app, which owns
-/// the scene. It is never written into the wallpaper itself.
+/// dragged, resized and turned with the mouse — and so the objects of one of Wallpaper Engine's
+/// scenes in the background, which the scene's player places — and reports each change to the
+/// app, which owns the scene. It is never written into the wallpaper itself.
 enum SceneEditorScript {
     static let source = #"""
     (function () {
@@ -28,6 +29,11 @@ enum SceneEditorScript {
         '.wallaero-handle[data-handle=se] { left: 100%; top: 100%; cursor: nwse-resize; }' +
         '.wallaero-handle[data-handle=e] { left: 100%; top: 50%; cursor: ew-resize; }' +
         '.wallaero-handle[data-handle=rotate] { left: 50%; top: -24px; border-radius: 50%; cursor: grab; }' +
+        // An object of the scene with no size of its own — particles, a sound — is marked where
+        // it is, and only moved; one that is hidden has its frame dashed.
+        '.wallaero-frame.point { border-radius: 50%; }' +
+        '.wallaero-frame.point .wallaero-handle { display: none !important; }' +
+        '.wallaero-frame.hidden { border-style: dashed; }' +
         '.wallaero-guide { position: absolute; background: #ff453a; display: none; }' +
         '.wallaero-guide.vertical { left: 50%; top: 0; width: 1px; height: 100%; }' +
         '.wallaero-guide.horizontal { left: 0; top: 50%; width: 100%; height: 1px; }';
@@ -49,6 +55,9 @@ enum SceneEditorScript {
       document.body.appendChild(overlay);
 
       var selected = null;
+      var object = null;   // the selected object of Wallpaper Engine's scene, by its number
+      var described = {};  // that scene's objects as its player describes them, by number
+      var following = false;
       var drag = null;
       var pending = null;
 
@@ -61,6 +70,11 @@ enum SceneEditorScript {
       function sized(kind) { return kind === 'shape' || kind === 'code'; }
 
       function placeFrame() {
+        if (object !== null) {
+          placeObjectFrame();
+          return;
+        }
+        frame.classList.remove('point', 'hidden');
         var element = box(selected);
         if (!element || element.style.display === 'none') {
           frame.style.display = 'none';
@@ -79,8 +93,23 @@ enum SceneEditorScript {
 
       function select(id, tellApp) {
         selected = id || null;
+        object = null;
         placeFrame();
         if (tellApp) post({ type: 'select', id: selected });
+      }
+
+      // Tells the app of a change once per frame, however often it comes.
+      function report(type, id, patch) {
+        if (!pending) {
+          pending = {};
+          requestAnimationFrame(function () {
+            var waiting = pending;
+            pending = null;
+            for (var name in waiting) post(waiting[name]);
+          });
+        }
+        var message = pending[type + ' ' + id] || (pending[type + ' ' + id] = { type: type, id: id, patch: {} });
+        for (var key in patch) message.patch[key] = patch[key];
       }
 
       // Moves the layer on the page right away, and tells the app once per frame.
@@ -95,24 +124,171 @@ enum SceneEditorScript {
         element.style.transform = 'translate(-50%, -50%) rotate(' + (layer.rotation || 0) + 'deg)';
         if (layer.kind === 'text' && patch.fontSize !== undefined) element.firstElementChild.style.fontSize = layer.fontSize + 'vh';
         placeFrame();
-        if (!pending) {
-          pending = {};
-          requestAnimationFrame(function () {
-            var changes = pending;
-            pending = null;
-            for (var changed in changes) post({ type: 'change', id: changed, patch: changes[changed] });
-          });
+        report('change', id, patch);
+      }
+
+      // --- The objects of Wallpaper Engine's scene in the background ---------------------
+
+      function engine() {
+        return window.WallaeroEngine && window.WallaeroEngine.describe ? window.WallaeroEngine : null;
+      }
+
+      // Tells the app what the scene has, once its player has it.
+      function describeEngine() {
+        var player = engine();
+        var scene = player && player.describe();
+        if (!scene) return;
+        described = {};
+        scene.objects.forEach(function (each) { described[String(each.id)] = each; });
+        post({ type: 'engine', scene: JSON.stringify(scene) });
+        placeFrame();
+      }
+
+      function changesOf() {
+        var scene = window.wallaero.scene || {};
+        var background = scene.background || (scene.background = {});
+        return background.engine || (background.engine = {});
+      }
+
+      // An object's value as it is now: as the editor has changed it, else as the scene has it.
+      function valueOf(id, name) {
+        var list = changesOf().objects || [];
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].id === id && list[i][name] !== undefined && list[i][name] !== null) return list[i][name];
         }
-        var merged = pending[id] || (pending[id] = {});
-        for (var name in patch) merged[name] = patch[name];
+        var about = described[String(id)];
+        return about ? about[name] : 0;
+      }
+
+      // Changes an object in the scene the page shows and has it shown at once; the app is
+      // told once per frame.
+      function change(id, patch) {
+        var changes = changesOf();
+        var list = changes.objects || (changes.objects = []);
+        var own = list.filter(function (each) { return each.id === id; })[0];
+        if (!own) list.push(own = { id: id });
+        for (var name in patch) own[name] = patch[name];
+        window.wallaero.updateEngine();
+        placeFrame();
+        report('object-change', id, patch);
+      }
+
+      // The frame around the selected object, where the player says it is.
+      function placeObjectFrame() {
+        var player = engine();
+        var outline = player && player.outline(object);
+        if (!outline) {
+          frame.style.display = 'none';
+          return;
+        }
+        var corners = outline.corners;
+        var width = 14, height = 14, turn = 0;
+        if (corners) {
+          width = Math.max(4, Math.hypot(corners[1][0] - corners[0][0], corners[1][1] - corners[0][1]));
+          height = Math.max(4, Math.hypot(corners[2][0] - corners[1][0], corners[2][1] - corners[1][1]));
+          turn = Math.atan2(corners[1][1] - corners[0][1], corners[1][0] - corners[0][0]) * 180 / Math.PI;
+        }
+        frame.style.display = 'block';
+        frame.style.left = outline.middle[0] + 'px';
+        frame.style.top = outline.middle[1] + 'px';
+        frame.style.width = width + 'px';
+        frame.style.height = height + 'px';
+        frame.style.transform = 'translate(-50%, -50%) rotate(' + turn + 'deg)';
+        frame.classList.toggle('point', !corners);
+        frame.classList.toggle('hidden', !outline.visible);
+        frame.querySelector('[data-handle=e]').style.display = 'none';
+      }
+
+      // The scene moves as it plays — with the pointer, by its scripts — and the frame with it.
+      function followObject() {
+        if (object === null) {
+          following = false;
+          return;
+        }
+        placeObjectFrame();
+        requestAnimationFrame(followObject);
+      }
+
+      function selectObject(id, tellApp) {
+        selected = null;
+        object = id === undefined ? null : id;
+        placeFrame();
+        if (object !== null && !following) {
+          following = true;
+          requestAnimationFrame(followObject);
+        }
+        if (tellApp) post({ type: 'select-object', id: object });
+      }
+
+      // Whether the pointer is on the mark of a selected object that has no size of its own.
+      function onMark(event) {
+        if (object === null || !frame.classList.contains('point') || frame.style.display === 'none') return false;
+        var mark = frame.getBoundingClientRect();
+        return Math.abs(event.clientX - (mark.left + mark.width / 2)) <= 12 && Math.abs(event.clientY - (mark.top + mark.height / 2)) <= 12;
+      }
+
+      function startObjectDrag(event, mode) {
+        var player = engine();
+        var outline = player && player.outline(object);
+        if (!outline) return;
+        event.preventDefault();
+        drag = {
+          object: object, mode: mode, pointerX: event.clientX, pointerY: event.clientY,
+          place: player.placeAt(object, event.clientX, event.clientY), middle: outline.middle,
+          x: valueOf(object, 'x'), y: valueOf(object, 'y'), scaleX: valueOf(object, 'scaleX'), scaleY: valueOf(object, 'scaleY'),
+          rotation: valueOf(object, 'rotation')
+        };
+      }
+
+      function dragObject(event) {
+        var player = engine();
+        if (!player) return;
+        var patch = {};
+        var middleX = drag.middle[0], middleY = drag.middle[1];
+        if (drag.mode === 'move') {
+          var place = player.placeAt(drag.object, event.clientX, event.clientY);
+          patch.x = round(drag.x + place[0] - drag.place[0]);
+          patch.y = round(drag.y + place[1] - drag.place[1]);
+        } else if (drag.mode === 'rotate') {
+          var from = Math.atan2(drag.pointerY - middleY, drag.pointerX - middleX);
+          var to = Math.atan2(event.clientY - middleY, event.clientX - middleX);
+          var angle = drag.rotation + (to - from) * 180 / Math.PI;
+          if (event.shiftKey) {
+            angle = Math.round(angle / 15) * 15;
+          } else {
+            var nearest = Math.round(angle / 90) * 90;
+            if (Math.abs(angle - nearest) < 3) angle = nearest;
+          }
+          patch.rotation = round(((angle + 180) % 360 + 360) % 360 - 180);
+        } else {
+          // From the middle, as far as the pointer is now against where it took hold.
+          var before = Math.hypot(drag.pointerX - middleX, drag.pointerY - middleY);
+          var by = before > 1 ? Math.max(0.01, Math.hypot(event.clientX - middleX, event.clientY - middleY) / before) : 1;
+          patch.scaleX = Math.round(drag.scaleX * by * 1000) / 1000;
+          patch.scaleY = Math.round(drag.scaleY * by * 1000) / 1000;
+        }
+        change(drag.object, patch);
       }
 
       document.addEventListener('pointerdown', function (event) {
         if (event.button !== 0) return;
         var handle = event.target.closest ? event.target.closest('.wallaero-handle') : null;
+        if (object !== null && (handle || onMark(event))) {
+          startObjectDrag(event, handle ? handle.dataset.handle : 'move');
+          return;
+        }
         var element = handle ? box(selected) : (event.target.closest ? event.target.closest('.wallaero-layer') : null);
         if (!element) {
-          select(null, true); // a click on the background
+          // On the background: an object of the scene there, if it is one of Wallpaper
+          // Engine's, or the background itself.
+          var player = engine();
+          var hit = player ? player.hit(event.clientX, event.clientY) : null;
+          if (hit === null || hit === undefined) {
+            select(null, true);
+            return;
+          }
+          if (hit !== object) selectObject(hit, true);
+          startObjectDrag(event, 'move');
           return;
         }
         var id = element.dataset.layer;
@@ -135,6 +311,10 @@ enum SceneEditorScript {
 
       window.addEventListener('pointermove', function (event) {
         if (!drag) return;
+        if (drag.object !== undefined) {
+          dragObject(event);
+          return;
+        }
         var width = window.innerWidth, height = window.innerHeight;
         var centerX = drag.x / 100 * width, centerY = drag.y / 100 * height;
         var patch = {};
@@ -189,6 +369,18 @@ enum SceneEditorScript {
       window.addEventListener('pointercancel', endDrag);
 
       document.addEventListener('keydown', function (event) {
+        if (object !== null) {
+          // A pixel of the scene at a time, or ten; the scene counts upwards.
+          var by = event.shiftKey ? 10 : 1, moved = null;
+          if (event.key === 'ArrowLeft') moved = { x: round(valueOf(object, 'x') - by) };
+          else if (event.key === 'ArrowRight') moved = { x: round(valueOf(object, 'x') + by) };
+          else if (event.key === 'ArrowUp') moved = { y: round(valueOf(object, 'y') + by) };
+          else if (event.key === 'ArrowDown') moved = { y: round(valueOf(object, 'y') - by) };
+          else return;
+          event.preventDefault();
+          change(object, moved);
+          return;
+        }
         if (!selected) return;
         var layer = data(selected);
         if (!layer) return;
@@ -210,11 +402,15 @@ enum SceneEditorScript {
       // Text can change size on its own: a clock ticking over, a font arriving late.
       setInterval(placeFrame, 500);
 
+      document.addEventListener('wallaero:engine', function () { setTimeout(describeEngine, 0); });
+
       window.wallaeroEditor = {
         select: function (id) { select(id, false); },
+        selectObject: function (id) { selectObject(id, false); },
         setAccent: function (color) { document.documentElement.style.setProperty('--wallaero-accent', color); }
       };
       post({ type: 'ready' });
+      describeEngine();
     })();
     """#
 }

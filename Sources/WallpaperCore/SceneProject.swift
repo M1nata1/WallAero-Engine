@@ -381,9 +381,14 @@ public enum SceneProject {
           loadScript('engine.js', function () {
             // The canvas may have been replaced by another background meanwhile.
             if (!canvas.isConnected || !window.WallaeroEngine) return;
-            enginePlayer = window.WallaeroEngine.play(canvas, window.wallaeroEngineScene, engineSettings());
+            enginePlayer = window.WallaeroEngine.play(canvas, window.wallaeroEngineScene, engineSettings(), engineChanges());
           });
         });
+      }
+
+      // What the editor has changed of Wallpaper Engine's scene; its files stay as they came.
+      function engineChanges() {
+        return (scene && scene.background && scene.background.engine) || {};
       }
 
       // The scene's variables that stand for settings of Wallpaper Engine's scene, by the
@@ -396,9 +401,15 @@ public enum SceneProject {
         return settings;
       }
 
-      // Tells the player the settings; those it had otherwise show at once.
+      // Tells the player the settings and the editor's changes; what it had otherwise shows at
+      // once. What it cannot show so — a picture that was hidden when the scene started — it
+      // shows by playing the scene anew.
       function tellEngine() {
-        if (enginePlayer && enginePlayer.setProperties) enginePlayer.setProperties(engineSettings());
+        if (!enginePlayer) return;
+        if (enginePlayer.setProperties) enginePlayer.setProperties(engineSettings());
+        if (enginePlayer.setChanges && enginePlayer.setChanges(engineChanges()) === false && enginePlayer.canvas) {
+          enginePlayer = window.WallaeroEngine.play(enginePlayer.canvas, window.wallaeroEngineScene, engineSettings(), engineChanges());
+        }
       }
 
       // --- A page as the background -----------------------------------------
@@ -623,10 +634,13 @@ public enum SceneProject {
       }
 
       window.wallaero = {
-        version: 4,
+        version: 5,
         setScene: setScene,
         tokens: tokens,
         get scene() { return scene; },
+        // For the editor, which changes the scene's `background.engine` in place while an
+        // object of Wallpaper Engine's scene is dragged, and has it shown.
+        updateEngine: tellEngine,
         // A copy: the values are changed from the wallpaper's settings, not from here.
         get variables() { return Object.assign({}, variables); }
       };

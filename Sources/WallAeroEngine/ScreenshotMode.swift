@@ -639,7 +639,9 @@ enum ScreenshotMode {
     /// layer, `--eval <JavaScript>` runs in the preview first — to act as the mouse would —
     /// and `--add <kind>`, `--background-blur <number>` and `--undo <times>` change the scene the
     /// way the editor's own controls do. `--add-variable <kind>` adds a variable and
-    /// `--select-variable <number>` selects one.
+    /// `--select-variable <number>` selects one; `--select-object <number>` selects the object
+    /// of a Wallpaper Engine scene the scene numbers so, and the scene's objects are listed;
+    /// `--engine-changes <JSON>` changes that scene as the inspector does, one after another.
     static var editRequest: (folder: URL, output: URL)? {
         let arguments = CommandLine.arguments
         guard let index = arguments.firstIndex(of: "--edit-scene"), index + 2 < arguments.count else { return nil }
@@ -687,15 +689,38 @@ enum ScreenshotMode {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
             if let number = values(of: "--select").last.flatMap(Int.init), model.layersFrontFirst.indices.contains(number - 1) {
-                model.selection = model.layersFrontFirst[number - 1].id
+                model.selection = .layer(model.layersFrontFirst[number - 1].id)
             }
             if let number = values(of: "--select-variable").last.flatMap(Int.init), model.scene.variables.indices.contains(number - 1) {
-                model.selection = model.scene.variables[number - 1].id
+                model.selection = .variable(model.scene.variables[number - 1].id)
+            }
+            if let number = values(of: "--select-object").last.flatMap(Int.init) {
+                model.selection = .object(number)
+            }
+            for text in values(of: "--engine-changes") {
+                if let changes = try? JSONDecoder().decode(WallpaperScene.EngineChanges.self, from: Data(text.utf8)) {
+                    model.scene.background.engine = changes
+                } else {
+                    print("cannot read the changes \(text)")
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
 
             // What the editor holds now, for a script to check.
-            print("selection: \(model.selectedLayer?.name ?? "background"); undo: \(model.canUndo)")
+            print("selection: \(model.selectedLayer?.name ?? model.selection.map { "\($0)" } ?? "background"); undo: \(model.canUndo)")
+            if let engineScene = model.engineScene {
+                print("scene objects:")
+                for row in engineScene.rows {
+                    let object = row.object
+                    print(String(repeating: "  ", count: row.depth + 1) + "#\(object.id) \(object.title) [\(object.kind.rawValue)]"
+                          + (object.effects.isEmpty ? "" : " effects: " + object.effects.map { "\($0.title) (\($0.values.count))" }.joined(separator: ", ")))
+                }
+            }
+            if !model.scene.background.engine.isEmpty,
+               let data = try? JSONEncoder().encode(model.scene.background.engine) {
+                print("changes: \(String(decoding: data, as: UTF8.self))")
+            }
             for layer in model.layersFrontFirst {
                 print(String(format: "  %@ [%@] x %.2f y %.2f width %.2f height %.2f rotation %.2f size %.2f",
                              layer.name, layer.kind.rawValue, layer.x, layer.y, layer.width, layer.height, layer.rotation, layer.fontSize))

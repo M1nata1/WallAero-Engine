@@ -141,7 +141,8 @@ struct SceneEditorView: View {
     }
 }
 
-/// The layers, the one in front first, the scene's variables, and the background below them all.
+/// The layers, the one in front first, the objects of the Wallpaper Engine scene the background
+/// plays, the scene's variables, and the background below them all.
 private struct LayerList: View {
     @ObservedObject var model: SceneEditorModel
 
@@ -151,7 +152,7 @@ private struct LayerList: View {
                 Section("Layers") {
                     ForEach(model.layersFrontFirst) { layer in
                         row(for: layer)
-                            .tag(layer.id)
+                            .tag(SceneEditorItem.layer(layer.id))
                             .contextMenu {
                                 Button("Duplicate") { model.duplicateLayer(layer.id) }
                                 Button("Delete", role: .destructive) { model.deleteLayer(layer.id) }
@@ -166,6 +167,21 @@ private struct LayerList: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if let engineScene = model.engineScene, model.scene.background.kind == .engine {
+                    Section("Scene Objects") {
+                        ForEach(engineScene.rows, id: \.object.id) { row in
+                            self.row(for: row.object, depth: row.depth)
+                                .tag(SceneEditorItem.object(row.object.id))
+                                .contextMenu {
+                                    Button(model.isVisible(row.object) ? LocalizedStringKey("Hide") : LocalizedStringKey("Show")) {
+                                        model.toggleVisibility(of: row.object)
+                                    }
+                                    Button("Revert to Original") { model.revert(row.object.id) }
+                                        .disabled(model.scene.background.engine[object: row.object.id].isEmpty)
+                                }
+                        }
+                    }
+                }
                 if !model.scene.variables.isEmpty {
                     Section("Variables") {
                         ForEach(model.scene.variables) { variable in
@@ -177,7 +193,7 @@ private struct LayerList: View {
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
-                            .tag(variable.id)
+                            .tag(SceneEditorItem.variable(variable.id))
                             .contextMenu {
                                 Button("Delete", role: .destructive) { model.delete(variable.id) }
                             }
@@ -190,8 +206,12 @@ private struct LayerList: View {
             }
             .listStyle(.sidebar)
             .onDeleteCommand {
-                if let id = model.selection {
+                switch model.selection {
+                case .layer(let id), .variable(let id):
                     model.delete(id)
+                case .object, nil:
+                    // The scene's objects are hidden, not deleted: its files stay as they came.
+                    break
                 }
             }
             Divider()
@@ -233,5 +253,29 @@ private struct LayerList: View {
             .buttonStyle(.plain)
             .help("Visible")
         }
+    }
+
+    private func row(for object: EngineSceneDescription.Object, depth: Int) -> some View {
+        let isVisible = model.isVisible(object)
+        return HStack(spacing: 8) {
+            Image(systemName: object.kind.symbol)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            Text(verbatim: object.title)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .opacity(isVisible ? 1 : 0.45)
+            Spacer(minLength: 4)
+            Button {
+                model.toggleVisibility(of: object)
+            } label: {
+                Image(systemName: isVisible ? "eye" : "eye.slash")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Visible")
+        }
+        // What hangs on an object is listed under it, a step further in.
+        .padding(.leading, CGFloat(min(depth, 6)) * 14)
     }
 }

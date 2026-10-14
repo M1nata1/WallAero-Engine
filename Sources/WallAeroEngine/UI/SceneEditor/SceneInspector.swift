@@ -2,19 +2,21 @@ import AppKit
 import SwiftUI
 import WallpaperCore
 
-/// The right-hand side of the editor: the properties of the selected layer or variable, or of
-/// the background when neither is selected.
+/// The right-hand side of the editor: the properties of the selected layer, variable or object
+/// of a Wallpaper Engine scene, or of the background when none is selected.
 struct SceneInspector: View {
     @ObservedObject var model: SceneEditorModel
 
     var body: some View {
         Form {
-            if let id = model.selection, let layer = model.binding(for: id) {
+            if case .layer(let id) = model.selection, let layer = model.binding(for: id) {
                 LayerInspector(layer: layer, model: model)
-            } else if let id = model.selection, let variable = model.variableBinding(for: id) {
+            } else if case .variable(let id) = model.selection, let variable = model.variableBinding(for: id) {
                 VariableInspector(variable: variable, model: model)
+            } else if case .object(let id) = model.selection, let scene = model.engineScene, let object = scene.object(id) {
+                EngineObjectInspector(object: object, scene: scene, change: model.objectBinding(for: id), model: model)
             } else {
-                BackgroundInspector(background: $model.scene.background, model: model)
+                BackgroundInspector(background: $model.scene.background, engineScene: model.engineScene, model: model)
             }
         }
         .formStyle(.grouped)
@@ -25,6 +27,8 @@ struct SceneInspector: View {
 
 private struct BackgroundInspector: View {
     @Binding var background: WallpaperScene.Background
+    /// What the player says of the Wallpaper Engine scene the background plays, once it has.
+    let engineScene: EngineSceneDescription?
     let model: SceneEditorModel
 
     var body: some View {
@@ -65,6 +69,18 @@ private struct BackgroundInspector: View {
             }
             ColorRow("Color", hex: $background.color)
         }
+        if background.kind == .engine, let scene = engineScene {
+            Section("Scene") {
+                Toggle("Parallax", isOn: engine(\.parallax, scene.parallax))
+                if background.engine.parallax ?? scene.parallax {
+                    NumberRow("Parallax Amount", value: engine(\.parallaxAmount, scene.parallaxAmount), in: 0...2, step: 0.01)
+                }
+                Toggle("Bloom", isOn: engine(\.bloom, scene.bloom))
+                if background.engine.bloom ?? scene.bloom {
+                    NumberRow("Bloom Strength", value: engine(\.bloomStrength, scene.bloomStrength), in: 0...4, step: 0.01)
+                }
+            }
+        }
         if background.kind != .color {
             Section("Adjustments") {
                 NumberRow("Blur", value: $background.blur, in: 0...60)
@@ -74,6 +90,15 @@ private struct BackgroundInspector: View {
                 NumberRow("Hue", value: $background.hue, in: -180...180, suffix: "°")
             }
         }
+    }
+
+    /// A value of the Wallpaper Engine scene as a whole: as the editor has changed it, else as
+    /// the scene has it.
+    private func engine<T: Equatable>(_ path: WritableKeyPath<WallpaperScene.EngineChanges, T?>, _ original: T) -> Binding<T> {
+        Binding(
+            get: { background.engine[keyPath: path] ?? original },
+            set: { background.engine[keyPath: path] = $0 == original ? nil : $0 }
+        )
     }
 
     /// Switching to video or picture needs a file; without one the choice does not stick.

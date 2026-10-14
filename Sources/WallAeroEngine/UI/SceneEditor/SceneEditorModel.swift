@@ -4,6 +4,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WallpaperCore
 
+/// What is selected in the editor; nil is the background.
+enum SceneEditorItem: Hashable {
+    case layer(UUID)
+    case variable(UUID)
+    /// An object of the Wallpaper Engine scene the background plays, by the number the scene
+    /// gives it.
+    case object(Int)
+}
+
 /// The scene being edited: what the inspector and the layer list bind to, what the preview shows.
 /// Every change is saved to `scene.json` a moment later, so a wallpaper that is on the desktop
 /// follows the editor live.
@@ -15,15 +24,17 @@ final class SceneEditorModel: ObservableObject {
     @Published var scene: WallpaperScene {
         didSet { sceneDidChange(from: oldValue) }
     }
-    /// The selected layer or variable; nil means the background.
-    @Published var selection: UUID? {
+    @Published var selection: SceneEditorItem? {
         didSet {
             if selection != oldValue {
-                // Only layers are there to be marked in the preview.
-                preview?.select(selectedLayer?.id)
+                // Layers and the scene's objects are marked in the preview; variables are not there.
+                preview?.select(selection)
             }
         }
     }
+    /// The Wallpaper Engine scene the background plays, as its player describes it, once it
+    /// has started; nil for any other background.
+    @Published private(set) var engineScene: EngineSceneDescription?
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
 
@@ -66,9 +77,12 @@ final class SceneEditorModel: ObservableObject {
         }
         canUndo = !undoStack.isEmpty
         canRedo = !redoStack.isEmpty
-        if let selection, !scene.layers.contains(where: { $0.id == selection }),
-           !scene.variables.contains(where: { $0.id == selection }) {
-            self.selection = nil
+        switch selection {
+        case .layer(let id) where !scene.layers.contains(where: { $0.id == id }),
+             .variable(let id) where !scene.variables.contains(where: { $0.id == id }):
+            selection = nil
+        default:
+            break
         }
         if !changeComesFromPreview {
             preview?.show(scene)
@@ -144,7 +158,8 @@ final class SceneEditorModel: ObservableObject {
     var layersFrontFirst: [WallpaperScene.Layer] { scene.layers.reversed() }
 
     var selectedLayer: WallpaperScene.Layer? {
-        selection.flatMap { id in scene.layers.first { $0.id == id } }
+        guard case .layer(let id) = selection else { return nil }
+        return scene.layers.first { $0.id == id }
     }
 
     /// A binding to one layer, for the inspector. Writes are dropped once the layer is gone.
@@ -179,7 +194,7 @@ final class SceneEditorModel: ObservableObject {
         }
         endGesture()
         scene.layers.append(layer)
-        selection = layer.id
+        selection = .layer(layer.id)
         endGesture()
     }
 
@@ -198,7 +213,7 @@ final class SceneEditorModel: ObservableObject {
         copy.y = min(copy.y + 3, 100)
         endGesture()
         scene.layers.insert(copy, at: index + 1)
-        selection = copy.id
+        selection = .layer(copy.id)
         endGesture()
     }
 
@@ -276,7 +291,7 @@ final class SceneEditorModel: ObservableObject {
         }
         endGesture()
         scene.variables.append(variable)
-        selection = variable.id
+        selection = .variable(variable.id)
         endGesture()
     }
 
@@ -339,6 +354,57 @@ final class SceneEditorModel: ObservableObject {
         scene.background.kind = kind
         scene.background.source = source
         endGesture()
+    }
+
+    // MARK: - The objects of a Wallpaper Engine scene
+
+    /// The player has started the scene, or started it anew.
+    func engineDidStart(_ description: EngineSceneDescription) {
+        if description != engineScene {
+            engineScene = description
+        }
+    }
+
+    /// A binding to the editor's change to one object of the scene, for the inspector: the
+    /// change is made when something is first set, and dropped when nothing is left changed.
+    func objectBinding(for id: Int) -> Binding<WallpaperScene.ObjectChange> {
+        Binding(
+            get: { [weak self] in self?.scene.background.engine[object: id] ?? WallpaperScene.ObjectChange(id: id) },
+            set: { [weak self] value in self?.scene.background.engine[object: id] = value }
+        )
+    }
+
+    /// Whether an object shows, as the editor has it.
+    func isVisible(_ object: EngineSceneDescription.Object) -> Bool {
+        scene.background.engine[object: object.id].isVisible ?? object.isVisible
+    }
+
+    func toggleVisibility(of object: EngineSceneDescription.Object) {
+        let shown = !isVisible(object)
+        endGesture()
+        // Back to what the scene has, nothing is changed any more.
+        scene.background.engine[object: object.id].isVisible = shown == object.isVisible ? nil : shown
+        endGesture()
+    }
+
+    /// Takes back all the editor has changed of an object.
+    func revert(_ id: Int) {
+        endGesture()
+        scene.background.engine[object: id] = WallpaperScene.ObjectChange(id: id)
+        endGesture()
+    }
+
+    /// An object of the scene moved, scaled or turned with the mouse. The page shows it already.
+    func applyFromPreview(object id: Int, patch: [String: Double]) {
+        var change = scene.background.engine[object: id]
+        if let value = patch["x"] { change.x = value }
+        if let value = patch["y"] { change.y = value }
+        if let value = patch["scaleX"] { change.scaleX = value }
+        if let value = patch["scaleY"] { change.scaleY = value }
+        if let value = patch["rotation"] { change.rotation = value }
+        changeComesFromPreview = true
+        scene.background.engine[object: id] = change
+        changeComesFromPreview = false
     }
 
     // MARK: - From the preview
