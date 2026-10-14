@@ -2107,6 +2107,8 @@ public enum WallpaperEngineRuntime {
             case 'g_Daytime': var now = new Date(); return [(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400];
             case 'g_PointerPosition': return pointer;
             case 'g_PointerPositionLast': return pointerBefore;
+            // Whether the mouse button is down.
+            case 'g_PointerState': return [pressed ? 1 : 0, 0, pressed ? 1 : 0, 0];
             case 'g_TexelSize': return [1 / context.width, 1 / context.height];
             case 'g_TexelSizeHalf': return [0.5 / context.width, 0.5 / context.height];
             case 'g_Screen': return [sceneWidth, sceneHeight, sceneWidth / sceneHeight];
@@ -2255,11 +2257,20 @@ public enum WallpaperEngineRuntime {
               var asked = IDENTITY;
               if (value.name === 'g_LayerModelMatrix' && layer) {
                 asked = new Float32Array(standing(layer, true).matrix);
-              } else if (value.name === 'g_EffectModelViewProjectionMatrix' && onScreen) {
+              } else if ((value.name === 'g_EffectModelViewProjectionMatrix' || value.name === 'g_EffectTextureProjectionMatrix') && onScreen) {
                 // From the corners of the layer's rectangle to where they are on the scene, as a
                 // shader that looks at the scene under the layer has to know.
                 asked = new Float32Array([onScreen[0] / 2, onScreen[1] / 2, 0, 0, onScreen[3] / 2, onScreen[4] / 2, 0, 0,
                                           0, 0, 1, 0, onScreen[6], onScreen[7], 0, 1]);
+              } else if (value.name === 'g_EffectTextureProjectionMatrixInverse' && onScreen) {
+                // And back: from a place on the scene, the pointer's, to where it is on the layer.
+                var a = onScreen[0] / 2, b = onScreen[1] / 2, c = onScreen[3] / 2, d = onScreen[4] / 2;
+                var area = a * d - b * c;
+                if (Math.abs(area) > 1e-12) {
+                  var ia = d / area, ib = -b / area, ic = -c / area, id = a / area;
+                  asked = new Float32Array([ia, ib, 0, 0, ic, id, 0, 0, 0, 0, 1, 0,
+                                            -(ia * onScreen[6] + ic * onScreen[7]), -(ib * onScreen[6] + id * onScreen[7]), 0, 1]);
+                }
               }
               gl.uniformMatrix4fv(uniform.location, false, asked);
             } else if (uniform.type === gl.FLOAT_MAT3) {
@@ -3426,7 +3437,7 @@ public enum WallpaperEngineRuntime {
             }
             var built = { name: String(plain(use.name) || effect.name || ''), place: place, passes: [],
                           shown: live(use.visible, 0, true, thing, 'flag'), targets: (effect.fbos || []).map(function (target) {
-              return { name: key(target.name), scale: Math.max(1, number(target.scale, 1)) };
+              return { name: key(target.name), scale: Math.max(1, number(target.scale, 1)), fit: Math.max(0, number(target.fit, 0)) };
             }) };
             // A script behind something of the effect has the effect for its object.
             if (built.shown.script) built.shown.script.subject = built;
@@ -3488,6 +3499,19 @@ public enum WallpaperEngineRuntime {
               });
               built.passes.push(pass);
             });
+            // What an effect keeps from one frame to the next: a target it reads before it has
+            // written it in the frame — the state of a simulation, ripples spreading from where the
+            // pointer went. The rest it makes anew every frame.
+            built.lasting = {};
+            var written = {};
+            built.passes.forEach(function (pass) {
+              var reads = pass.copy ? [pass.source] : (pass.inputs || []).map(function (input) { return input && input.target; });
+              reads.forEach(function (name) {
+                if (name && !written[name] && built.targets.some(function (target) { return target.name === name; })) built.lasting[name] = true;
+              });
+              if (pass.target) written[pass.target] = true;
+            });
+            if (Object.keys(built.lasting).length) thing.moving = true;
             if (whole && built.passes.length) thing.effects.push(built);
           });
         }
@@ -3879,9 +3903,32 @@ public enum WallpaperEngineRuntime {
           effects.forEach(function (effect) {
             var named = {};
             effect.targets.forEach(function (wanted) {
-              var target = acquire(width / wanted.scale, height / wanted.scale);
-              target.nominalWidth = nominal[0] / wanted.scale;
-              target.nominalHeight = nominal[1] / wanted.scale;
+              var wide = width / wanted.scale, high = height / wanted.scale;
+              var nominalWide = nominal[0] / wanted.scale, nominalHigh = nominal[1] / wanted.scale;
+              if (wanted.fit > 0) {
+                // As large as fits in a square of that side, whatever the layer's size.
+                var by = wanted.fit / Math.max(nominal[0], nominal[1], 1);
+                wide = nominalWide = Math.max(1, Math.round(nominal[0] * by));
+                high = nominalHigh = Math.max(1, Math.round(nominal[1] * by));
+              }
+              var target;
+              if (effect.lasting[wanted.name]) {
+                effect.kept = effect.kept || {};
+                target = effect.kept[wanted.name];
+                if (!target || target.width !== Math.max(1, Math.round(wide)) || target.height !== Math.max(1, Math.round(high))) {
+                  if (target) release(target);
+                  // It starts with nothing in it.
+                  target = effect.kept[wanted.name] = acquire(wide, high);
+                  gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+                  gl.viewport(0, 0, target.width, target.height);
+                  gl.clearColor(0, 0, 0, 0);
+                  gl.clear(gl.COLOR_BUFFER_BIT);
+                }
+              } else {
+                target = acquire(wide, high);
+              }
+              target.nominalWidth = nominalWide;
+              target.nominalHeight = nominalHigh;
               named[wanted.name] = target;
             });
             function input(from) {
@@ -3917,7 +3964,9 @@ public enum WallpaperEngineRuntime {
                 previous = { texture: target.texture, resolution: resolution };
               }
             });
-            Object.keys(named).forEach(function (name) { release(named[name]); });
+            Object.keys(named).forEach(function (name) {
+              if (!effect.lasting[name]) release(named[name]);
+            });
           });
 
           gl.bindFramebuffer(gl.FRAMEBUFFER, onto.target.framebuffer);
@@ -5491,6 +5540,9 @@ public enum WallpaperEngineRuntime {
         function point(event) {
           var shown = shownAt();
           pointer = [(event.clientX - shown.left) / shown.width, (event.clientY - shown.top) / shown.height];
+          // Come over the wallpaper — from a window, or for the first time — the pointer has not
+          // moved from where it was last seen, across the screen: it is only now seen here.
+          if (!pointerSeen) pointerBefore = pointer.slice();
           pointerSeen = true;
         }
         // Where the whole scene is on the page, in its pixels; parts of it may be cut off.
