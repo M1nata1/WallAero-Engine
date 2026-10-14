@@ -1458,28 +1458,37 @@ public enum WallpaperEngineRuntime {
         return top + (bottom - top) * fy;
       }
 
-      // Clouds: noise of several sizes laid over one another.
+      // Noise of gradients that repeats every `period` cells: soft, without the blots noise of
+      // values has.
+      function gradientNoise(x, y, period, seed) {
+        var x0 = Math.floor(x), y0 = Math.floor(y);
+        var fx = x - x0, fy = y - y0;
+        function corner(cx, cy, dx, dy) {
+          var angle = hash(((cx % period) + period) % period, ((cy % period) + period) % period, seed) * Math.PI * 2;
+          return Math.cos(angle) * dx + Math.sin(angle) * dy;
+        }
+        var ux = fx * fx * fx * (fx * (fx * 6 - 15) + 10), uy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+        var top = corner(x0, y0, fx, fy) + (corner(x0 + 1, y0, fx - 1, fy) - corner(x0, y0, fx, fy)) * ux;
+        var bottom = corner(x0, y0 + 1, fx, fy - 1) + (corner(x0 + 1, y0 + 1, fx - 1, fy - 1) - corner(x0, y0 + 1, fx, fy - 1)) * ux;
+        return top + (bottom - top) * uy;
+      }
+
+      // Clouds: noise of several sizes laid over one another, grey around the middle.
       function cloudsPixels(size) {
         var pixels = new Uint8Array(size * size * 4);
-        var least = 1, most = 0;
-        var values = new Float32Array(size * size);
         for (var y = 0; y < size; y++) {
           for (var x = 0; x < size; x++) {
-            var value = 0, weight = 0.5, cells = 4;
+            var value = 0, weight = 0.6, cells = 4;
             for (var octave = 0; octave < 6; octave++) {
-              value += weight * smoothNoise(x / size * cells, y / size * cells, cells, octave + 1);
+              value += weight * gradientNoise(x / size * cells, y / size * cells, cells, octave + 1);
               weight *= 0.5;
               cells *= 2;
             }
-            values[y * size + x] = value;
-            least = Math.min(least, value);
-            most = Math.max(most, value);
+            var shade = Math.round(Math.max(0, Math.min(1, 0.5 + value)) * 255);
+            var at = (y * size + x) * 4;
+            pixels[at] = pixels[at + 1] = pixels[at + 2] = shade;
+            pixels[at + 3] = 255;
           }
-        }
-        for (var i = 0; i < size * size; i++) {
-          var shade = Math.round((values[i] - least) / (most - least) * 255);
-          pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = shade;
-          pixels[i * 4 + 3] = 255;
         }
         return pixels;
       }
@@ -1593,6 +1602,23 @@ public enum WallpaperEngineRuntime {
           streak.addColorStop(1, 'rgba(255,255,255,0)');
           context.fillStyle = streak;
           context.fillRect(half - size * 0.04, 0, size * 0.08, size);
+        } else if (/fire|flame|blaze|burn/.test(name)) {
+          // A flame: a tongue rising from a bright foot, frayed at its edges.
+          for (var tongue = 0; tongue < 24; tongue++) {
+            var rise = hash(tongue, 5, 9);
+            var sway = (hash(tongue, 6, 9) - 0.5) * half * 0.5 * rise;
+            glow(half + sway, size * (0.72 - rise * 0.5), half * (0.32 - rise * 0.2), 0.16 * (1 - rise * 0.6));
+          }
+        } else if (/halo|glow|light|dot|spark|ember|orb|bokeh|firefl/.test(name)) {
+          // A halo: a small bright core in a faint glow, as light seen through a lens is.
+          var halo = context.createRadialGradient(half, half, 0, half, half, half);
+          halo.addColorStop(0, 'rgba(255,255,255,1)');
+          halo.addColorStop(0.08, 'rgba(255,255,255,0.85)');
+          halo.addColorStop(0.2, 'rgba(255,255,255,0.3)');
+          halo.addColorStop(0.5, 'rgba(255,255,255,0.08)');
+          halo.addColorStop(1, 'rgba(255,255,255,0)');
+          context.fillStyle = halo;
+          context.fillRect(0, 0, size, size);
         } else if (/star|sparkle|flare|twinkle/.test(name)) {
           glow(half, half, half * 0.5, 1);
           context.fillStyle = 'rgba(255,255,255,0.8)';
@@ -1743,12 +1769,14 @@ public enum WallpaperEngineRuntime {
           return texture;
         }
 
-        function fromPixels(pixels, size, clamp) {
+        // `grainy`: looked at as it is wherever it is shown small — noise that is averaged out
+        // is no noise.
+        function fromPixels(pixels, size, clamp, grainy) {
           var texture = newTexture(clamp, true);
           gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
           gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(pixels.buffer || pixels));
-          if (size > 1) {
+          if (size > 1 && !grainy) {
             gl.generateMipmap(gl.TEXTURE_2D);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
           }
@@ -1912,7 +1940,7 @@ public enum WallpaperEngineRuntime {
           } else if (/(^|\/)util\/.*(cloud|perlin)/.test(id)) {
             result = fromPixels(cloudsPixels(256), 256, false);
           } else if (/(^|\/)util\/.*(noise|uniform)/.test(id)) {
-            result = fromPixels(noisePixels(256), 256, false);
+            result = fromPixels(noisePixels(256), 256, false, true);
           } else if (/(^|\/)gradient\/blend_gradient/.test(id)) {
             // The masks an effect is faded in by from one side: taken to run down the picture,
             // from nothing at the top — by a scene whose screen darkens toward its bottom with it.
@@ -3386,6 +3414,12 @@ public enum WallpaperEngineRuntime {
                        /top/.test(hangs) ? -size[1] / 2 : (/bottom/.test(hangs) ? size[1] / 2 : 0)];
           if (aside[0] !== 0 || aside[1] !== 0) layer.shift = aside;
           layer.brightness = number(object.brightness, 1);
+          // Scenes of early versions say how see-through and how bright a picture is in its
+          // material rather than on the object.
+          var own = {};
+          Object.keys(base.constantshadervalues || {}).forEach(function (name) { own[key(name)] = base.constantshadervalues[name]; });
+          layer.materialAlpha = number(plain(own.alpha), 1);
+          layer.brightness *= number(plain(own.brightness), 1);
           layer.blendMode = number(object.colorBlendMode, 0);
           if (layer.picture && layer.picture.frames) layer.moving = true;
           // A picture that bends, if its bones came with the scene and could be read.
@@ -3619,6 +3653,7 @@ public enum WallpaperEngineRuntime {
           var width = nominal[0] * scale, height = nominal[1] * scale;
           var matrix = layer.shift ? nudged(stands.matrix, layer.shift[0], layer.shift[1]) : stands.matrix;
           var bright = layer.brightness;
+          if (layer.materialAlpha !== undefined) stands = { matrix: stands.matrix, alpha: stands.alpha * layer.materialAlpha, above: stands.above, visible: stands.visible };
           var tint = layer.ownColor ? [1, 1, 1, stands.alpha]
                    : [state.color[0] * bright, state.color[1] * bright, state.color[2] * bright, stands.alpha];
           var how = layer.blendMode > 0 && layer.blendMode !== 9 ? layer.blendMode :
@@ -4660,7 +4695,7 @@ public enum WallpaperEngineRuntime {
         function add(object) {
           var hidden = object.visible === false;
           var make = object.image ? buildImage : (object.particle ? buildParticles : (object.sound ? buildSound :
-                     (object.text !== undefined ? buildText : null)));
+                     (object.text !== undefined && object.text !== null ? buildText : null)));
           var thing = placed(object, String(plain(object.image) || plain(object.particle) || (object.sound ? 'sound' : (make ? 'text' : 'group'))));
           thing.draw = idle;
           objects.push(thing);

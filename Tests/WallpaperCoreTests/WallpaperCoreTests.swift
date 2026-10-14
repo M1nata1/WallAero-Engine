@@ -1349,6 +1349,24 @@ final class WallpaperEngineSceneTests: XCTestCase {
                                                                  version: 3, flags: 32)))
     }
 
+    func testNamesAnEarlySceneLeavesEmptyAreNotTakenForWhatTheyName() throws {
+        // Early versions of Wallpaper Engine wrote every name an object may have, with nothing
+        // under most: a particle system with an empty model is no model, and not left out.
+        let json = #"{"objects": [{"name": "Sky", "image": "models/Sky.json", "model": null, "light": null},"#
+            + #" {"name": "Fireflies", "particle": "particles/snow.json", "image": null, "model": null},"#
+            + #" {"name": "Lamp", "image": null, "light": "point", "model": null}]}"#
+        let files = [("scene.json", Data(json.utf8)), ("particles/snow.json", Data(#"{"maxcount": 10}"#.utf8))]
+            + picture("Sky", texture: texture(width: 2, height: 2, canvas: 2, color: [0, 0, 255, 255]))
+        let leftOut = try WallpaperEngineScene.export(try XCTUnwrap(WallpaperEnginePackage(data: package(files))), into: root.appendingPathComponent("Scene"))
+        XCTAssertEqual(leftOut, .init(animations: 0, objects: 1), "only the light is left out")
+
+        // A scene of nothing but empty names has nothing to draw.
+        let empty = [("scene.json", Data(#"{"objects": [{"name": "Nothing", "image": null, "particle": null, "text": null}]}"#.utf8))]
+        XCTAssertThrowsError(try WallpaperEngineScene.export(try XCTUnwrap(WallpaperEnginePackage(data: package(empty))), into: root.appendingPathComponent("Empty"))) {
+            XCTAssertEqual($0 as? ImportError, .noPicturesInScene)
+        }
+    }
+
     func testAVideoOfASceneIsLaidOutAsAVideo() throws {
         let json = #"{"objects": [{"name": "Film", "image": "models/Film.json"}]}"#
         let files = [("scene.json", Data(json.utf8))]

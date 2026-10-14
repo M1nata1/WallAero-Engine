@@ -43,7 +43,7 @@ public enum WallpaperEngineScene {
     static func export(_ package: WallpaperEnginePackage, into folder: URL, chosen: [String: URL] = [:]) throws -> LeftOut {
         guard let description = package.json(named: "scene.json") else { throw ImportError.unreadable }
         let objects = (description["objects"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
-        guard objects.contains(where: { $0["image"] != nil || $0["particle"] != nil || $0["text"] != nil }) else {
+        guard objects.contains(where: { has($0["image"]) || has($0["particle"]) || has($0["text"]) }) else {
             throw ImportError.noPicturesInScene
         }
 
@@ -185,6 +185,13 @@ public enum WallpaperEngineScene {
                 "channels": WallpaperEngineTexture.Channels.color.rawValue, "clamp": true, "smooth": true]
     }
 
+    /// Whether an object of a scene has something under a name. Scenes saved by early versions
+    /// of Wallpaper Engine write every name an object may have, with nothing under most of
+    /// them: a particle system with `"model": null` is no model.
+    static func has(_ value: Any?) -> Bool {
+        value != nil && !(value is NSNull)
+    }
+
     /// The name a file of the scene is known by: Wallpaper Engine is a Windows program, where
     /// names differ neither by case nor by the slash.
     static func key(_ name: String) -> String {
@@ -232,7 +239,7 @@ public enum WallpaperEngineScene {
             if (object["visible"] as? Bool) == false || ((object["visible"] as? [String: Any])?["value"] as? Bool) == false {
                 continue
             }
-            if object["model"] != nil || object["light"] != nil {
+            if has(object["model"]) || has(object["light"]) {
                 leftOut.objects += 1
                 continue
             }
