@@ -2257,19 +2257,21 @@ public enum WallpaperEngineRuntime {
               var asked = IDENTITY;
               if (value.name === 'g_LayerModelMatrix' && layer) {
                 asked = new Float32Array(standing(layer, true).matrix);
-              } else if ((value.name === 'g_EffectModelViewProjectionMatrix' || value.name === 'g_EffectTextureProjectionMatrix') && onScreen) {
+              } else if (value.name === 'g_EffectModelViewProjectionMatrix' && onScreen) {
                 // From the corners of the layer's rectangle to where they are on the scene, as a
                 // shader that looks at the scene under the layer has to know.
                 asked = new Float32Array([onScreen[0] / 2, onScreen[1] / 2, 0, 0, onScreen[3] / 2, onScreen[4] / 2, 0, 0,
                                           0, 0, 1, 0, onScreen[6], onScreen[7], 0, 1]);
               } else if (value.name === 'g_EffectTextureProjectionMatrixInverse' && onScreen) {
-                // And back: from a place on the scene, the pointer's, to where it is on the layer.
-                var a = onScreen[0] / 2, b = onScreen[1] / 2, c = onScreen[3] / 2, d = onScreen[4] / 2;
+                // From a place on the screen, the pointer's, to where it is on the layer. The
+                // screen is counted upward here, as Wallpaper Engine counts it; what the scene is
+                // drawn on is kept the other way up.
+                var a = onScreen[0] / 2, b = -onScreen[1] / 2, c = onScreen[3] / 2, d = -onScreen[4] / 2;
+                var e = onScreen[6], f = -onScreen[7];
                 var area = a * d - b * c;
                 if (Math.abs(area) > 1e-12) {
                   var ia = d / area, ib = -b / area, ic = -c / area, id = a / area;
-                  asked = new Float32Array([ia, ib, 0, 0, ic, id, 0, 0, 0, 0, 1, 0,
-                                            -(ia * onScreen[6] + ic * onScreen[7]), -(ib * onScreen[6] + id * onScreen[7]), 0, 1]);
+                  asked = new Float32Array([ia, ib, 0, 0, ic, id, 0, 0, 0, 0, 1, 0, -(ia * e + ic * f), -(ib * e + id * f), 0, 1]);
                 }
               }
               gl.uniformMatrix4fv(uniform.location, false, asked);
@@ -2929,6 +2931,29 @@ public enum WallpaperEngineRuntime {
           '}'
         ].join('\n'), 'the player\'s own shader');
         var meshProgram = link(meshVertex, sampleLines.concat(['void main() { color = picture(); }']).join('\n'), 'the player\'s own shader');
+        // A part of a puppet that shows only within others — an iris within the white of its eye —
+        // is drawn through a mask of those others: where a picture says they count, or where they
+        // are not see-through.
+        var clipMaskProgram = link(meshVertex, [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'uniform sampler2D u_Texture;',
+          'uniform int u_Alpha;',
+          'out vec4 color;',
+          'void main() {',
+          '  vec4 c = texture(u_Texture, v_Uv);',
+          '  color = vec4(u_Alpha == 1 ? c.a : c.r);',
+          '}'
+        ].join('\n'), 'the player\'s own shader');
+        var clippedProgram = link(meshVertex, sampleLines.concat([
+          'uniform sampler2D u_Mask;',
+          'uniform vec2 u_MaskSize;',
+          'void main() {',
+          '  vec4 c = picture();',
+          '  color = vec4(c.rgb, c.a * texture(u_Mask, gl_FragCoord.xy / u_MaskSize).r);',
+          '}'
+        ]).join('\n'), 'the player\'s own shader');
         // Blended with what lies under it in one of the ways image editors have; the scene so far
         // is read from a copy.
         var blendFragment = sampleLines.concat([
@@ -3013,6 +3038,10 @@ public enum WallpaperEngineRuntime {
         // `how`: 'translucent', 'additive', 'normal' (as it is, over what is there) or a number,
         // one of the blend modes. `mesh`, if given, is drawn in place of the plain rectangle.
         function put(source, place, tint, how, mesh) {
+          if (mesh && mesh.clips && mesh.clips.length && typeof how !== 'number' && clipMaskProgram && clippedProgram) {
+            putClipped(source, place, tint, how, mesh);
+            return;
+          }
           var program = mesh ? meshProgram : placeProgram;
           var onto = surface.target;
           if (typeof how === 'number') {
@@ -3057,6 +3086,77 @@ public enum WallpaperEngineRuntime {
           }
         }
 
+        // A puppet drawn part by part, in its order: a part that shows only within others through
+        // a mask of those others, drawn first as they are bent at the moment.
+        function putClipped(source, place, tint, how, mesh) {
+          var framebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+          var view = gl.getParameter(gl.VIEWPORT);
+          var width = view[2], height = view[3];
+          var clippedBy = {};
+          mesh.clips.forEach(function (clip) { clippedBy[clip.part] = clip; });
+          function useMesh(program) {
+            gl.useProgram(program.program);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, source.texture);
+            gl.uniform1i(program.uniforms.u_Texture.location, 0);
+            gl.uniformMatrix3fv(program.uniforms.u_Place.location, false, place);
+            gl.uniform4fv(program.uniforms.u_Tint.location, tint);
+            gl.uniform4fv(program.uniforms.u_Frame.location, source.frame || [0, 0, 1, 1]);
+            gl.uniform1i(program.uniforms.u_Channels.location, CHANNELS[source.channels] || 0);
+          }
+          function blended(always) {
+            if (how === 'normal' && !always) {
+              gl.disable(gl.BLEND);
+              return;
+            }
+            gl.enable(gl.BLEND);
+            if (how === 'additive') gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
+            else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+          }
+          function drawPart(index) {
+            var part = mesh.parts[index];
+            if (part && part[1] > 0) gl.drawElements(gl.TRIANGLES, part[1], gl.UNSIGNED_SHORT, part[0] * 2);
+          }
+          gl.bindVertexArray(mesh.shape);
+          for (var index = 0; index < mesh.parts.length; index++) {
+            var clip = clippedBy[index];
+            if (!clip) {
+              useMesh(meshProgram);
+              blended(false);
+              drawPart(index);
+              continue;
+            }
+            var mask = acquire(width, height);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, mask.framebuffer);
+            gl.viewport(0, 0, width, height);
+            gl.clearColor(0, 0, 0, 0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.useProgram(clipMaskProgram.program);
+            var byPicture = !!(clip.picture && clip.picture.ready && clip.picture.layers[0]);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, byPicture ? clip.picture.layers[0].texture : source.texture);
+            gl.uniform1i(clipMaskProgram.uniforms.u_Texture.location, 0);
+            gl.uniform1i(clipMaskProgram.uniforms.u_Alpha.location, byPicture ? 0 : 1);
+            gl.uniformMatrix3fv(clipMaskProgram.uniforms.u_Place.location, false, place);
+            gl.enable(gl.BLEND);
+            gl.blendEquation(gl.MAX);
+            clip.masks.forEach(drawPart);
+            gl.blendEquation(gl.FUNC_ADD);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+            gl.viewport(view[0], view[1], view[2], view[3]);
+            useMesh(clippedProgram);
+            gl.activeTexture(gl.TEXTURE2);
+            gl.bindTexture(gl.TEXTURE_2D, mask.texture);
+            gl.uniform1i(clippedProgram.uniforms.u_Mask.location, 2);
+            gl.uniform2f(clippedProgram.uniforms.u_MaskSize.location, width, height);
+            blended(true);
+            drawPart(index);
+            gl.activeTexture(gl.TEXTURE0);
+            release(mask);
+          }
+          gl.bindVertexArray(null);
+        }
+
         // The whole of a target, as the matrix that fills it.
         var FILL = new Float32Array([2, 0, 0, 0, -2, 0, 0, 0, 1]);
 
@@ -3087,7 +3187,8 @@ public enum WallpaperEngineRuntime {
           return [a, b, c, d, -(a * move[4] + c * move[5]), -(b * move[4] + d * move[5])];
         }
 
-        function buildPuppet(said, layers, name) {
+        // `culls`: whether the picture's material leaves out the backs of its triangles.
+        function buildPuppet(said, layers, name, culls) {
           var corners = numbersOf(said.corners, Float32Array);
           var triangles = numbersOf(said.triangles, Uint16Array);
           var count = Math.floor(corners.length / 12);
@@ -3158,12 +3259,12 @@ public enum WallpaperEngineRuntime {
           }
 
           var places = new Float32Array(count * 2);
-          var texture = new Float32Array(count * 2);
+          var spots = new Float32Array(count * 2);
           for (var corner = 0; corner < count; corner++) {
             places[corner * 2] = corners[corner * 12];
             places[corner * 2 + 1] = corners[corner * 12 + 1];
-            texture[corner * 2] = corners[corner * 12 + 2];
-            texture[corner * 2 + 1] = corners[corner * 12 + 3];
+            spots[corner * 2] = corners[corner * 12 + 2];
+            spots[corner * 2 + 1] = corners[corner * 12 + 3];
           }
           var shape = gl.createVertexArray();
           gl.bindVertexArray(shape);
@@ -3173,14 +3274,40 @@ public enum WallpaperEngineRuntime {
           gl.enableVertexAttribArray(5);
           gl.vertexAttribPointer(5, 2, gl.FLOAT, false, 0, 0);
           gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-          gl.bufferData(gl.ARRAY_BUFFER, texture, gl.STATIC_DRAW);
+          gl.bufferData(gl.ARRAY_BUFFER, spots, gl.STATIC_DRAW);
           gl.enableVertexAttribArray(6);
           gl.vertexAttribPointer(6, 2, gl.FLOAT, false, 0, 0);
-          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
-          gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
+          var triangleBuffer = gl.createBuffer();
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, triangleBuffer);
+          gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.DYNAMIC_DRAW);
           gl.bindVertexArray(null);
 
           var puppet = { shape: shape, count: triangles.length, moving: playing.length > 0 };
+          // Which way round a triangle's corners go when its face is seen: as most go at rest. A
+          // puppet may turn part of itself over to hide it — an eye closing folds the eyeball
+          // under the lid — and with a material that leaves out backs, what is turned over is
+          // not drawn.
+          function turn(corners, at) {
+            var a = triangles[at], b = triangles[at + 1], c = triangles[at + 2];
+            return (corners[b * 2] - corners[a * 2]) * (corners[c * 2 + 1] - corners[a * 2 + 1]) -
+                   (corners[c * 2] - corners[a * 2]) * (corners[b * 2 + 1] - corners[a * 2 + 1]);
+          }
+          var facing = 0;
+          for (var each = 0; each < triangles.length; each += 3) facing += turn(places, each) >= 0 ? 1 : -1;
+          facing = facing >= 0 ? 1 : -1;
+          var shown = culls ? new Uint16Array(triangles.length) : null;
+          // Its parts, in the order they are drawn — all of it as one where the file does not say
+          // or says what does not add up — and where each one's triangles are in what is drawn.
+          var parts = (Array.isArray(said.parts) ? said.parts : []).map(function (part) { return [number(part[0], 0), number(part[1], 0)]; });
+          var covered = parts.reduce(function (sum, part) { return sum + part[1]; }, 0);
+          if (!parts.length || covered !== triangles.length) parts = [[0, triangles.length]];
+          puppet.parts = parts.map(function (part) { return part.slice(); });
+          // Parts shown only within others.
+          puppet.clips = (said.clips || []).map(function (clip) {
+            var picture = String(clip.texture || '');
+            return { part: number(clip.part, -1), masks: (clip.masks || []).map(function (each) { return number(each, -1); }),
+                     picture: picture ? texture('materials/' + picture) : null };
+          }).filter(function (clip) { return parts[clip.part] && parts.length > 1; });
           // Where a point to hang things on is as the picture was last posed, in the picture's own
           // pixels from its middle; null for a point the puppet does not have.
           puppet.attachment = function (name) {
@@ -3242,6 +3369,24 @@ public enum WallpaperEngineRuntime {
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, placeBuffer);
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, places);
+            if (shown) {
+              var kept = 0;
+              parts.forEach(function (part, index) {
+                var from = kept;
+                for (var at = part[0]; at < part[0] + part[1]; at += 3) {
+                  if (turn(places, at) * facing < 0) continue;
+                  shown[kept++] = triangles[at];
+                  shown[kept++] = triangles[at + 1];
+                  shown[kept++] = triangles[at + 2];
+                }
+                puppet.parts[index] = [from, kept - from];
+              });
+              gl.bindVertexArray(shape);
+              gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, triangleBuffer);
+              gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, shown.subarray(0, kept));
+              gl.bindVertexArray(null);
+              puppet.count = kept;
+            }
           };
           return puppet;
         }
@@ -3571,7 +3716,7 @@ public enum WallpaperEngineRuntime {
           // A picture that bends, if its bones came with the scene and could be read.
           var bends = model && model.puppet ? puppets[key(model.puppet)] : null;
           if (bends) {
-            layer.puppet = buildPuppet(bends, object.animationlayers, layer.name);
+            layer.puppet = buildPuppet(bends, object.animationlayers, layer.name, key(String(base.cullmode || 'normal')) !== 'nocull');
             if (layer.puppet && layer.puppet.moving) layer.moving = true;
           } else if (model && model.puppet) {
             note('“' + layer.name + '” is a picture that bends, but its bones could not be read; it is shown still');

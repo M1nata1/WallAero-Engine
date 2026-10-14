@@ -13,6 +13,10 @@ import Foundation
 ///               the corners: place (3), in later versions the way the corner faces (3) and
 ///               lies (4), bones (4), their weights (4), place in the picture (2),
 ///               the triangles: three corners each
+///               then, in later versions, the parts: which triangles belong together, in
+///               the order they are drawn, and which parts show only where others are —
+///               an iris only within the white of its eye — with a picture saying where
+///               those others count
 ///     MDLSnnnn  the bones: parent and where the bone is from it, as a matrix
 ///     MDATnnnn  in some files, points other objects of the scene may hang on — a head, a
 ///               hand: the bone, a name, and where the point is from the bone, as a matrix
@@ -40,6 +44,22 @@ struct WallpaperEnginePuppet {
         var matrix: [Float]
     }
 
+    /// Triangles drawn together: where their corners stand in `triangles`, three to a triangle.
+    struct Part: Equatable {
+        var start: Int
+        var count: Int
+    }
+
+    /// A part that shows only where other parts are, as they are bent at the moment: an iris
+    /// only within the white of its eye, which a closing lid flattens. Where the others count
+    /// is said by a picture of the same layout as the puppet's own.
+    struct Clip: Equatable {
+        /// The part clipped and those it is clipped by, by their places in `parts`.
+        var part: Int
+        var masks: [Int]
+        var texture: String
+    }
+
     struct Animation {
         var id: Int
         var name: String
@@ -57,6 +77,10 @@ struct WallpaperEnginePuppet {
     var corners: [Float]
     var triangles: [UInt16]
     var bones: [Bone]
+    /// In the order they are drawn; empty when the file does not say, and the triangles are
+    /// drawn as they come.
+    var parts: [Part]
+    var clips: [Clip]
     var attachments: [Attachment]
     var animations: [Animation]
 
@@ -82,6 +106,7 @@ struct WallpaperEnginePuppet {
             corners = mesh.corners
             triangles = mesh.triangles
             bones = [Bone(parent: -1, matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])]
+            (parts, clips) = Self.layout(in: data, from: mesh.end, before: data.count, indexCount: mesh.triangles.count)
             attachments = []
             animations = []
             return
@@ -122,8 +147,62 @@ struct WallpaperEnginePuppet {
         corners = mesh.corners
         triangles = mesh.triangles
         self.bones = bones
+        (parts, clips) = Self.layout(in: data, from: mesh.end, before: bonesAt, indexCount: mesh.triangles.count)
         attachments = Self.attachments(in: data, from: reader.offset, boneCount: Int(boneCount))
         animations = Self.animations(in: data, from: reader.offset, boneCount: Int(boneCount))
+    }
+
+    /// The parts after the triangles, in later versions: a flag and, if it is set, blocks this
+    /// does not use (the corners' places once more, so many blocks of so many bytes each); a
+    /// flag and, if it is set, the parts —
+    /// sixteen bytes each: a number, nought, where its corners start and how many there are —
+    /// and then the clipped parts: two numbers, the picture, two numbers, the part, how many
+    /// parts clip it and which. What does not read whole is left out: the puppet is drawn
+    /// as its triangles come, unclipped.
+    private static func layout(in data: Data, from start: Int, before end: Int, indexCount: Int) -> (parts: [Part], clips: [Clip]) {
+        var reader = BinaryReader(data)
+        guard start < end, reader.seek(to: start), let skipped = reader.bytes(1) else { return ([], []) }
+        if skipped.first == 1 {
+            guard let blocks = reader.uint32(), blocks <= 1024 else { return ([], []) }
+            for _ in 0..<blocks {
+                guard let length = reader.uint32(), reader.offset + Int(length) <= end, reader.skip(Int(length)) else { return ([], []) }
+            }
+        } else if skipped.first != 0 {
+            return ([], [])
+        }
+        guard reader.offset < end, let flag = reader.bytes(1), flag.first == 1, let length = reader.uint32(),
+              length % 16 == 0, reader.offset + Int(length) <= end
+        else {
+            return ([], [])
+        }
+        var parts: [Part] = []
+        for _ in 0..<(Int(length) / 16) {
+            guard reader.uint32() != nil, reader.uint32() != nil, let from = reader.uint32(), let count = reader.uint32(),
+                  from % 3 == 0, count % 3 == 0, Int(from) + Int(count) <= indexCount
+            else {
+                return ([], [])
+            }
+            parts.append(Part(start: Int(from), count: Int(count)))
+        }
+        var clips: [Clip] = []
+        if reader.offset + 4 <= end, let count = reader.uint32(), count <= 1024 {
+            for _ in 0..<count {
+                guard reader.offset < end, reader.uint32() != nil, reader.uint32() != nil,
+                      let texture = reader.textToZero(atMost: 1024), reader.uint32() != nil, reader.uint32() != nil,
+                      let part = reader.uint32(), Int(part) < parts.count, let maskCount = reader.uint32(), maskCount <= 1024
+                else {
+                    return (parts, [])
+                }
+                var masks: [Int] = []
+                for _ in 0..<maskCount {
+                    guard let mask = reader.uint32(), Int(mask) < parts.count else { return (parts, []) }
+                    masks.append(Int(mask))
+                }
+                guard reader.offset <= end else { return (parts, []) }
+                clips.append(Clip(part: Int(part), masks: masks, texture: texture))
+            }
+        }
+        return (parts, clips)
     }
 
     /// The points to hang other objects on, if the file has them, before its animations. A
@@ -172,7 +251,7 @@ struct WallpaperEnginePuppet {
     /// triangles of those very corners, all of it before the bones — and where every corner
     /// then reads as one: on a few bones, by weights that are shares. Of the lengths a corner
     /// may have, the one by which the triangles use every corner is tried first.
-    private static func mesh(in data: Data, from start: Int, before end: Int, onBones: Bool) -> (corners: [Float], triangles: [UInt16])? {
+    private static func mesh(in data: Data, from start: Int, before end: Int, onBones: Bool) -> (corners: [Float], triangles: [UInt16], end: Int)? {
         guard start >= 0, end <= data.count, start < end else { return nil }
         for place in start..<min(start + 512, end - 8) {
             guard let cornerBytes = number(in: data, at: place), cornerBytes > 0, cornerBytes <= 16 * 1024 * 1024,
@@ -191,7 +270,7 @@ struct WallpaperEnginePuppet {
             let sizes = cornerSizes.map { onBones ? $0 : $0 - bonesAndWeights }.filter { cornerBytes % $0 == 0 }
             for size in sizes.filter({ cornerBytes / $0 == last + 1 }) + sizes.filter({ cornerBytes / $0 != last + 1 }) {
                 guard last < cornerBytes / size, let corners = corners(in: packed, each: size, onBones: onBones) else { continue }
-                return (corners, triangles)
+                return (corners, triangles, place + 4 + cornerBytes + 4 + triangleBytes)
             }
         }
         return nil
@@ -317,6 +396,8 @@ struct WallpaperEnginePuppet {
             "triangles": triangleData.base64EncodedString(),
             "bones": bones.map { ["parent": $0.parent, "matrix": $0.matrix.map(Double.init)] as [String: Any] },
             "attachments": attachments.map { ["name": $0.name, "bone": $0.bone, "matrix": $0.matrix.map(Double.init)] as [String: Any] },
+            "parts": parts.map { [$0.start, $0.count] },
+            "clips": clips.map { ["part": $0.part, "masks": $0.masks, "texture": $0.texture] as [String: Any] },
             "animations": animations.map {
                 ["id": $0.id, "name": $0.name, "mode": $0.mode, "fps": $0.framesPerSecond, "length": $0.length,
                  "frameCount": $0.frameCount, "frames": packed($0.frames)] as [String: Any]

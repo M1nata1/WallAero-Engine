@@ -1513,7 +1513,7 @@ final class WallpaperEngineSceneTests: XCTestCase {
     /// faces and lies, more after the triangles, the bones and each animation, and a second
     /// animation.
     private func puppet(triangle: [UInt16] = [0, 1, 2], bones: [UInt32] = [0, 1, 1], newer: Bool = false,
-                        attachedTo attachmentBone: UInt16? = nil) -> Data {
+                        attachedTo attachmentBone: UInt16? = nil, clipped: Bool = false) -> Data {
         func float(_ value: Float) -> Data { withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) } }
         var file = Data("MDLV00\(newer ? 23 : 13)\0".utf8)
         let head: [Data] = [number(0x0180_0009), number(1), number(1), Data("materials/Sky.json\0".utf8), number(0)]
@@ -1541,8 +1541,14 @@ final class WallpaperEngineSceneTests: XCTestCase {
             file += withUnsafeBytes(of: corner.littleEndian) { Data($0) }
         }
         if newer {
-            // Which of the triangles belong together.
-            let parts: [Data] = [Data([0, 1]), number(16), number(0), number(0), number(0), number(triangle.count)]
+            // Which of the triangles belong together: before that, if clipped, a block of the
+            // corners' places once more; after it, the part shown only within itself.
+            var parts: [Data] = clipped ? [Data([1]), number(1), number(12), Data(count: 12)] : [Data([0])]
+            parts += [Data([1]), number(16), number(0), number(0), number(0), number(triangle.count)]
+            if clipped {
+                parts += [number(1), number(5661), number(0), Data("masks/clipping_mask_1\0".utf8), number(0), number(1),
+                          number(0), number(1), number(0)]
+            }
             parts.forEach { file += $0 }
         }
         var skeleton = Data()
@@ -1640,6 +1646,21 @@ final class WallpaperEngineSceneTests: XCTestCase {
         // that is not there.
         XCTAssertNil(WallpaperEnginePuppet(data: puppet(triangle: [0, 1, 7], newer: true)))
         XCTAssertNil(WallpaperEnginePuppet(data: puppet(bones: [0, 1, 5], newer: true)))
+    }
+
+    func testAPuppetSaysWhichTrianglesAreDrawnTogetherAndWhichOnlyWithinOthers() throws {
+        let newer = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true)))
+        XCTAssertEqual(newer.parts, [WallpaperEnginePuppet.Part(start: 0, count: 3)])
+        XCTAssertEqual(newer.clips, [])
+        XCTAssertEqual(try XCTUnwrap(WallpaperEnginePuppet(data: puppet())).parts, [], "older files do not say")
+
+        let clipped = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true, clipped: true)))
+        XCTAssertEqual(clipped.parts, newer.parts, "the block before the parts is passed over")
+        XCTAssertEqual(clipped.clips, [WallpaperEnginePuppet.Clip(part: 0, masks: [0], texture: "masks/clipping_mask_1")])
+        XCTAssertEqual(clipped.animations.map(\.id), [51, 52])
+        let table = clipped.table
+        XCTAssertEqual(table["parts"] as? [[Int]], [[0, 3]])
+        XCTAssertEqual((table["clips"] as? [[String: Any]])?.first?["texture"] as? String, "masks/clipping_mask_1")
     }
 
     func testAPuppetHasPointsOtherObjectsHangOn() throws {
