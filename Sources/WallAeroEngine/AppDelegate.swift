@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static func main() {
         DevelopmentRun.prepare()
+        // The helpers a developer runs (all started with options) leave the music players
+        // alone: macOS would ask the user's leave for a program they did not start themselves.
+        NowPlaying.asksPlayers = !CommandLine.arguments.contains { $0.hasPrefix("--") } || CommandLine.arguments.contains("--ask-players")
         let app = NSApplication.shared
         if let request = ScreenshotMode.renderRequest {
             // A developer's helper that needs neither the library nor the rest of the app.

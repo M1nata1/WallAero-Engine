@@ -95,6 +95,8 @@ final class WallpaperManager: NSObject, ObservableObject {
             assignments = WallpaperAssignments()
         }
         super.init()
+        // Wallpapers that show what music plays are told of the app's own too.
+        NowPlaying.shared.watch(music)
     }
 
     /// Scaling and speed used to be set once for all wallpapers. The first time this version

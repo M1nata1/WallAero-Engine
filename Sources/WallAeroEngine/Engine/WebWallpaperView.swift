@@ -89,6 +89,9 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     /// Whether the page has a listener for the sound, and whether it is being given any.
     private var pageWantsSound = false
     private var isHearingSound = false
+    /// Whether the page wants to know what music plays, and whether it is being told.
+    private var pageWantsMedia = false
+    private var isToldMedia = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -172,7 +175,8 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         backdropView.isHidden = true
         backdropView.layer?.contents = nil
         pageWantsSound = false
-        updateSound()
+        pageWantsMedia = false
+        updateListening()
         resumeLoadWaiters()
     }
 
@@ -217,7 +221,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
             applyHostSettings()
         }
         applyPlaying()
-        updateSound()
+        updateListening()
     }
 
     func setAudio(muted: Bool, volume: Float) {
@@ -280,13 +284,37 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     private func hostMessage(_ message: [String: Any]) {
         if let wanted = message["sound"] as? Bool {
             pageWantsSound = wanted
-            updateSound()
+            updateListening()
+        }
+        if let wanted = message["media"] as? Bool {
+            pageWantsMedia = wanted
+            updateListening()
         }
         if message["ready"] != nil {
             pageIsReady()
         }
         if message["drawn"] != nil {
             pageHasDrawn()
+        }
+    }
+
+    private func updateListening() {
+        updateSound()
+        updateMedia()
+    }
+
+    /// The page is told what music plays while it asks and is playing; a paused one is told
+    /// again when it plays.
+    private func updateMedia() {
+        let wanted = pageWantsMedia && hasLoaded && isPlaying
+        guard wanted != isToldMedia else { return }
+        isToldMedia = wanted
+        if wanted {
+            NowPlaying.shared.addListener(self) { [weak self] script in
+                self?.webView?.evaluateJavaScript(script)
+            }
+        } else {
+            NowPlaying.shared.removeListener(self)
         }
     }
 
@@ -619,13 +647,87 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
           }
         });
       };
-      // The rest of what Wallpaper Engine pages call on start-up: there is nothing to tell them
-      // here, but the page loads instead of failing.
-      ['wallpaperRegisterMediaStatusListener', 'wallpaperRegisterMediaPropertiesListener',
-       'wallpaperRegisterMediaThumbnailListener', 'wallpaperRegisterMediaPlaybackListener',
-       'wallpaperRegisterMediaTimelineListener'].forEach(function (name) {
-        if (!window[name]) window[name] = function () {};
-      });
+      // What music plays, as Wallpaper Engine tells its pages: whether there is any, what it
+      // is, its cover and the colors of it, whether it plays, and where it has got to. The app
+      // is asked for it once a page listens.
+      window.wallpaperMediaIntegration = { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 };
+      var mediaListeners = [];
+      var media = null;
+      function tellAboutMedia() {
+        try {
+          window.webkit.messageHandlers.wallaeroHost.postMessage({ media: mediaListeners.length > 0 });
+        } catch (error) {}
+      }
+      function css(color) {
+        var parts = Array.isArray(color) ? color : [0, 0, 0];
+        return 'rgb(' + parts.slice(0, 3).map(function (part) { return Math.round(Math.max(0, Math.min(1, part)) * 255); }).join(', ') + ')';
+      }
+      // What a listener of each kind is told of the music as it is now.
+      function mediaEvent(kind, from) {
+        if (kind === 'status') return { enabled: !!from.enabled };
+        if (kind === 'properties') {
+          return { title: from.title || '', artist: from.artist || '', subTitle: from.subTitle || '', albumTitle: from.albumTitle || '',
+                   albumArtist: from.albumArtist || '', genres: from.genres || '', contentType: from.contentType || '' };
+        }
+        if (kind === 'thumbnail') {
+          var colors = from.colors || {};
+          return { thumbnail: from.thumbnail || '', primaryColor: css(colors.primary), secondaryColor: css(colors.secondary),
+                   tertiaryColor: css(colors.tertiary), textColor: css(colors.text || [1, 1, 1]),
+                   highContrastColor: css(colors.highContrast || [1, 1, 1]) };
+        }
+        if (kind === 'playback') return { state: from.state || 0 };
+        return { position: from.position || 0, duration: from.duration || 0 };
+      }
+      function tellMedia(kind, event) {
+        var kept = mediaListeners.filter(function (entry) { return !entry.owner || entry.owner.isConnected; });
+        if (kept.length !== mediaListeners.length) {
+          mediaListeners = kept;
+          if (!kept.length) tellAboutMedia();
+        }
+        kept.forEach(function (entry) {
+          if (entry.kind !== kind) return;
+          try {
+            entry.call(event);
+          } catch (error) {
+            console.error(error);
+          }
+        });
+      }
+      function registerMedia(kind) {
+        return function (listener) {
+          if (typeof listener !== 'function') return;
+          var entry = { kind: kind, call: listener, owner: window.__wallaeroHost.owner || null };
+          mediaListeners.push(entry);
+          if (mediaListeners.length === 1) tellAboutMedia();
+          // One that comes late hears at once how things stand.
+          if (media) setTimeout(function () {
+            try { listener(mediaEvent(kind, media)); } catch (error) { console.error(error); }
+          }, 0);
+        };
+      }
+      window.wallpaperRegisterMediaStatusListener = registerMedia('status');
+      window.wallpaperRegisterMediaPropertiesListener = registerMedia('properties');
+      window.wallpaperRegisterMediaThumbnailListener = registerMedia('thumbnail');
+      window.wallpaperRegisterMediaPlaybackListener = registerMedia('playback');
+      window.wallpaperRegisterMediaTimelineListener = registerMedia('timeline');
+      window.__wallaeroHost.media = function (message) {
+        if (message.timeline) {
+          if (media) {
+            media.position = message.timeline.position;
+            media.duration = message.timeline.duration;
+          }
+          tellMedia('timeline', mediaEvent('timeline', message.timeline));
+          return;
+        }
+        var before = media;
+        media = message;
+        // Each kind of listener hears of what has changed for it; at first, of everything.
+        ['status', 'properties', 'thumbnail', 'playback'].forEach(function (kind) {
+          var event = mediaEvent(kind, message);
+          if (!before || JSON.stringify(event) !== JSON.stringify(mediaEvent(kind, before))) tellMedia(kind, event);
+        });
+        tellMedia('timeline', mediaEvent('timeline', message));
+      };
     })();
     """#
 
@@ -730,10 +832,20 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
           host.owner = owner;
         } catch (error) {}
       };
+      window.wallpaperMediaIntegration = { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 };
       ['wallpaperRegisterMediaStatusListener', 'wallpaperRegisterMediaPropertiesListener',
        'wallpaperRegisterMediaThumbnailListener', 'wallpaperRegisterMediaPlaybackListener',
        'wallpaperRegisterMediaTimelineListener'].forEach(function (name) {
-        if (!window[name]) window[name] = function () {};
+        window[name] = function (listener) {
+          if (typeof listener !== 'function') return;
+          try {
+            var host = window.top.__wallaeroHost;
+            var owner = host.owner;
+            host.owner = window.frameElement;
+            window.top[name](listener);
+            host.owner = owner;
+          } catch (error) {}
+        };
       });
     })();
     """#
@@ -772,7 +884,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     private func pageDidSettle() {
         hasLoaded = true
         applyHostSettings()
-        updateSound()
+        updateListening()
         resumeLoadWaiters()
         if isPlaying {
             applyPlaying()
@@ -823,7 +935,8 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         installUserScripts(in: webView.configuration.userContentController, for: reread)
         hasLoaded = false
         pageWantsSound = false
-        updateSound()
+        pageWantsMedia = false
+        updateListening()
         beginLoading()
         coverWhileLoading(webView)
         webView.isHidden = false

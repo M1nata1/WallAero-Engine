@@ -9,6 +9,19 @@ import Combine
 public final class PlaylistPlayer: ObservableObject {
     /// The track that is playing, or will play once playback starts.
     @Published public private(set) var currentTrack: URL?
+    /// Whether the music plays now: it is wanted, and there is a track to play.
+    @Published public private(set) var isPlaying = false
+
+    /// Seconds into the track, and how long it is; nought while it is not known.
+    public var position: Double {
+        let seconds = player.currentTime().seconds
+        return seconds.isFinite ? max(0, seconds) : 0
+    }
+
+    public var duration: Double {
+        let seconds = player.currentItem?.duration.seconds ?? 0
+        return seconds.isFinite ? max(0, seconds) : 0
+    }
 
     public var volume: Float = 1 {
         didSet { player.volume = volume }
@@ -47,6 +60,14 @@ public final class PlaylistPlayer: ObservableObject {
         } else {
             player.pause()
         }
+        updateIsPlaying()
+    }
+
+    private func updateIsPlaying() {
+        let playing = wantsPlayback && player.currentItem != nil
+        if playing != isPlaying {
+            isPlaying = playing
+        }
     }
 
     public func skipToNext() {
@@ -64,6 +85,7 @@ public final class PlaylistPlayer: ObservableObject {
             loadIfNeeded()
             player.play()
         }
+        updateIsPlaying()
     }
 
     private func loadIfNeeded() {
@@ -100,6 +122,7 @@ public final class PlaylistPlayer: ObservableObject {
         if failuresInARow >= queue.tracks.count {
             // Nothing on the list can be played.
             unload()
+            updateIsPlaying()
             return
         }
         start(queue.advance())

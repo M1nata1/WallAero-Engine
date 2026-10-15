@@ -1411,7 +1411,8 @@ public enum WallpaperEngineRuntime {
       // else, so the page's own names are kept from it; and what it declares is its own, whatever
       // it is called.
       var EVENTS = ['init', 'update', 'destroy', 'resizeScreen', 'applyUserProperties', 'applyGeneralSettings',
-                    'cursorEnter', 'cursorLeave', 'cursorMove', 'cursorDown', 'cursorUp', 'cursorClick'];
+                    'cursorEnter', 'cursorLeave', 'cursorMove', 'cursorDown', 'cursorUp', 'cursorClick',
+                    'mediaStatusChanged', 'mediaPropertiesChanged', 'mediaThumbnailChanged', 'mediaPlaybackChanged', 'mediaTimelineChanged'];
       var KEPT_AWAY = ['window', 'document', 'globalThis', 'self', 'top', 'parent', 'frames', 'opener', 'fetch', 'XMLHttpRequest',
                        'WebSocket', 'EventSource', 'Worker', 'navigator', 'location', 'history', 'indexedDB', 'sessionStorage',
                        'caches', 'eval', 'Function', 'open', 'postMessage', 'webkit'];
@@ -1851,6 +1852,15 @@ public enum WallpaperEngineRuntime {
           return fromPixels(new Uint8Array([red, green, blue, alpha]), 1, false);
         }
 
+        // The cover of the music that plays, and of what played before it: see-through until
+        // there is one. What shows them is drawn anew when they change, as for a video.
+        function blankCover() {
+          var picture = flat(0, 0, 0, 0);
+          picture.film = { users: [] };
+          return picture;
+        }
+        var covers = { now: blankCover(), before: blankCover(), shown: '' };
+
         var films = [];   // the textures that are videos, each with the video it shows
 
         // A texture that is a video. It plays by itself, over and over and without sound, at the
@@ -1939,10 +1949,12 @@ public enum WallpaperEngineRuntime {
         // A slot of a material may be left to a setting of the wallpaper: a picture the user is
         // to choose. The name of the texture that came for it, if one did.
         function chosenTexture(bound) {
-          // A slot Wallpaper Engine fills itself — with the cover of the music that plays — has
-          // nothing in it here: the picture the scene keeps there is for its author to look at
-          // while making it.
-          if (bound && typeof bound === 'object' && bound.type === 'system' && /^\$media/i.test(String(bound.name))) return 'util/nothing';
+          // A slot Wallpaper Engine fills itself has the cover of the music that plays, or of what
+          // played before it; the picture the scene keeps there is for its author to look at while
+          // making it.
+          if (bound && typeof bound === 'object' && bound.type === 'system' && /^\$media/i.test(String(bound.name))) {
+            return /previous/i.test(String(bound.name)) ? '$mediapreviousthumbnail' : '$mediathumbnail';
+          }
           var name = typeof bound === 'string' ? bound : (bound && typeof bound === 'object' && bound.type !== 'system' ? bound.name : null);
           return typeof name === 'string' && pictures['user/' + key(name)] ? 'user/' + key(name) : null;
         }
@@ -1951,6 +1963,8 @@ public enum WallpaperEngineRuntime {
         // The scene's own arrive later; until then the texture is see-through.
         function texture(name) {
           var id = key(name);
+          if (id === '$mediathumbnail') return covers.now;
+          if (id === '$mediapreviousthumbnail') return covers.before;
           if (textureCache[id]) return textureCache[id];
           var entry = pictures[id] || pictures['materials/' + id];
           var result;
@@ -2797,13 +2811,19 @@ public enum WallpaperEngineRuntime {
 
         // Tells the scripts of something that happened to the scene as a whole.
         function tellScripts(name, argument) {
-          scripts.slice().forEach(function (script) { call(script, name, argument); });
+          var plainObject = argument && typeof argument === 'object' && Object.getPrototypeOf(argument) === Object.prototype;
+          scripts.slice().forEach(function (script) {
+            // Each its own copy of what happened: a script that writes into it changes it for no other.
+            call(script, name, plainObject ? Object.assign({}, argument) : argument);
+          });
         }
 
-        // What plays on the Mac is not told to scenes. Their scripts are told so once, the way
-        // Wallpaper Engine tells them that nothing plays: a scene made to put its music widget
-        // away then does, rather than showing it with nothing in it.
+        // What music plays, as the page hears of it: each kind of news as it last came. The
+        // scripts are told at first that nothing plays, the way Wallpaper Engine tells them — a
+        // scene made to put its music widget away then does — and then of what does, once they
+        // are ready, and of every change after.
         var mediaTold = false;
+        var mediaNews = {};
         function tellNoMedia() {
           mediaTold = true;
           var none = new Vec3(0, 0, 0);
@@ -2813,6 +2833,68 @@ public enum WallpaperEngineRuntime {
           tellScripts('mediaThumbnailChanged', { hasThumbnail: false, primaryColor: none, secondaryColor: none, tertiaryColor: none,
                                                  textColor: new Vec3(1, 1, 1), highContrastColor: new Vec3(1, 1, 1) });
           tellScripts('mediaTimelineChanged', { position: 0, duration: 0 });
+          ['status', 'properties', 'thumbnail', 'playback', 'timeline'].forEach(function (kind) {
+            if (mediaNews[kind]) hearOfMedia(kind, mediaNews[kind]);
+          });
+        }
+
+        // A color as a page is told it, "rgb(255, 128, 0)", as scripts take it.
+        function colorOfText(text) {
+          var parts = /(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)\D+(\d+(?:\.\d+)?)/.exec(String(text || '')) || [0, 0, 0, 0];
+          return new Vec3(Number(parts[1]) / 255, Number(parts[2]) / 255, Number(parts[3]) / 255);
+        }
+
+        function hearOfMedia(kind, event) {
+          mediaNews[kind] = event;
+          if (kind === 'thumbnail') showCover(event.thumbnail || '');
+          if (!mediaTold) return;
+          if (kind === 'status') tellScripts('mediaStatusChanged', { enabled: !!event.enabled });
+          if (kind === 'properties') tellScripts('mediaPropertiesChanged', event);
+          if (kind === 'playback') tellScripts('mediaPlaybackChanged', { state: Number(event.state) || 0 });
+          if (kind === 'timeline') tellScripts('mediaTimelineChanged', { position: Number(event.position) || 0, duration: Number(event.duration) || 0 });
+          if (kind === 'thumbnail') {
+            tellScripts('mediaThumbnailChanged', { hasThumbnail: !!event.thumbnail, primaryColor: colorOfText(event.primaryColor),
+                                                   secondaryColor: colorOfText(event.secondaryColor), tertiaryColor: colorOfText(event.tertiaryColor),
+                                                   textColor: colorOfText(event.textColor), highContrastColor: colorOfText(event.highContrastColor) });
+          }
+          changed();
+        }
+
+        // The cover that came becomes the one shown, and the one shown till now the one before it.
+        function showCover(address) {
+          if (address === covers.shown) return;
+          covers.shown = address;
+          var before = covers.before.layers[0];
+          covers.before.layers[0] = covers.now.layers[0];
+          covers.before.width = covers.now.width;
+          covers.before.height = covers.now.height;
+          covers.now.layers[0] = before;
+          function drawn() {
+            covers.now.film.users.forEach(stale);
+            covers.before.film.users.forEach(stale);
+            changed();
+          }
+          var layer = covers.now.layers[0];
+          if (!address) {
+            gl.bindTexture(gl.TEXTURE_2D, layer.texture);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+            layer.width = layer.height = covers.now.width = covers.now.height = 1;
+            drawn();
+            return;
+          }
+          var image = new Image();
+          image.onload = function () {
+            if (stopped || covers.shown !== address) return;
+            gl.bindTexture(gl.TEXTURE_2D, layer.texture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+            layer.width = covers.now.width = image.naturalWidth;
+            layer.height = covers.now.height = image.naturalHeight;
+            drawn();
+          };
+          image.src = address;
         }
 
         // Tells the scripts what the mouse did. A script hears of it when the pointer is over the
@@ -3686,9 +3768,17 @@ public enum WallpaperEngineRuntime {
           }
           var base = (model && (json(model.material) || {}).passes || [])[0] || {};
           layer.blending = key(base.blending || 'translucent');
-          var chosenPicture = chosenTexture((base.usertextures || [])[0]);
-          if (chosenPicture) layer.picture = shows(layer, texture(chosenPicture));
-          else if (base.textures && base.textures[0]) layer.picture = shows(layer, texture('materials/' + base.textures[0]));
+          // An object may put pictures of its own in its material's slots, as an instance of it: a
+          // square of one color given the cover of the music that plays.
+          var instance = object.instance && typeof object.instance === 'object' ? object.instance : {};
+          var given = (instance.textures || [])[0] || (base.textures || [])[0];
+          var chosenPicture = chosenTexture((instance.usertextures || [])[0]) || chosenTexture((base.usertextures || [])[0]);
+          if (chosenPicture) {
+            layer.picture = shows(layer, texture(chosenPicture));
+            layer.plain = false;
+          } else if (given) {
+            layer.picture = shows(layer, texture('materials/' + given));
+          }
           if (!layer.picture && !layer.takesScene && !layer.holds) {
             note('“' + layer.name + '” has no picture');
             return null;
@@ -5796,6 +5886,10 @@ public enum WallpaperEngineRuntime {
               notes: notes
             }, null, 1);
           },
+          // News of the music that plays, as the page is told it.
+          media: function (kind, event) {
+            if (!stopped) hearOfMedia(kind, event);
+          },
           // What the editor has changed of the scene: what is now changed otherwise shows at once.
           // False when it cannot be shown without the scene being played anew.
           setChanges: function (next) {
@@ -5954,6 +6048,30 @@ public enum WallpaperEngineRuntime {
       }
 
       var current = null;
+
+      // The page is asked what music plays once a scene that shows it plays: the app then starts
+      // asking the players, which asks the user's leave for some. Each piece of news goes to the
+      // scene playing then, and is kept for one that starts later.
+      var mediaHeard = null;
+      function hearMedia() {
+        if (mediaHeard || typeof window.wallpaperRegisterMediaPropertiesListener !== 'function') return;
+        mediaHeard = {};
+        [['status', 'wallpaperRegisterMediaStatusListener'], ['properties', 'wallpaperRegisterMediaPropertiesListener'],
+         ['thumbnail', 'wallpaperRegisterMediaThumbnailListener'], ['playback', 'wallpaperRegisterMediaPlaybackListener'],
+         ['timeline', 'wallpaperRegisterMediaTimelineListener']].forEach(function (pair) {
+          window[pair[1]](function (event) {
+            mediaHeard[pair[0]] = event;
+            if (current && current.media) current.media(pair[0], event);
+          });
+        });
+      }
+      function showsMedia(scene) {
+        var files = (scene && scene.files) || {};
+        return Object.keys(files).some(function (name) {
+          return typeof files[name] === 'string' && /\$media|media(Status|Properties|Thumbnail|Playback|Timeline)Changed/.test(files[name]);
+        });
+      }
+
       // What the editor asks of the scene playing now.
       function ofCurrent(name) {
         return function () {
@@ -5969,6 +6087,10 @@ public enum WallpaperEngineRuntime {
           notes = [];
           current = play(canvas, scene, settings, changes);
           current.canvas = canvas;
+          if (showsMedia(scene)) {
+            hearMedia();
+            Object.keys(mediaHeard || {}).forEach(function (kind) { current.media(kind, mediaHeard[kind]); });
+          }
           // For the editor, which then shows the scene's objects.
           document.dispatchEvent(new CustomEvent('wallaero:engine'));
           return current;
