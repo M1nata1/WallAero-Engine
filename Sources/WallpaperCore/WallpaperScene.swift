@@ -15,6 +15,12 @@ public struct WallpaperScene: Codable, Equatable, Sendable {
     /// What the scene lets be changed without the editor, see `Variable`.
     public var variables: [Variable]
 
+    /// Whether something of the scene is kept off the lock screen: then the lock screen gets the
+    /// picture rendered without it, not the frame the desktop showed.
+    public var hidesSomethingFromLockScreen: Bool {
+        layers.contains { !$0.showsOnLockScreen } || background.engine.objects.contains { $0.showsOnLockScreen == false }
+    }
+
     public init(background: Background = Background(), layers: [Layer] = [], variables: [Variable] = []) {
         version = Self.currentVersion
         self.background = background

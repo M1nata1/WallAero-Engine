@@ -82,6 +82,9 @@ final class WallpaperManager: NSObject, ObservableObject {
     private var webStillTasks: [UUID: Task<URL, Error>] = [:]
     /// Still images already handed to macOS, per display, to avoid redundant updates.
     private var syncedSystemWallpapers: [String: UUID] = [:]
+    /// The pictures the displays showed as the screen was locked, by display; macOS shows them
+    /// on the lock screen until it is unlocked.
+    private var lockFrames: [String: URL] = [:]
 
     init(library: WallpaperLibrary, preferences: Preferences) {
         self.library = library
@@ -510,9 +513,14 @@ final class WallpaperManager: NSObject, ObservableObject {
             syncedSystemWallpapers[displayID] = item.id
             Task {
                 do {
-                    let url = item.kind == .web
-                        ? try await webStill(for: item, size: screen.frame.size)
-                        : try await library.stillImageURL(for: item)
+                    let url: URL
+                    if screenLocked || displaysAsleep || !sessionActive, let frame = lockFrames[displayID] {
+                        url = frame
+                    } else if item.kind == .web {
+                        url = try await webStill(for: item, size: screen.frame.size)
+                    } else {
+                        url = try await library.stillImageURL(for: item)
+                    }
                     // What macOS reports is for the Space in front; skip it if it is right already.
                     let current = NSWorkspace.shared.desktopImageURL(for: screen)
                     guard current?.standardizedFileURL != url.standardizedFileURL else {
@@ -557,10 +565,12 @@ final class WallpaperManager: NSObject, ObservableObject {
     @objc private func displaysDidSleep() {
         displaysAsleep = true
         updatePlayback()
+        takeLockFrames()
     }
 
     @objc private func displaysDidWake() {
         displaysAsleep = false
+        forgetLockFramesIfUnlocked()
         updatePlayback()
         resyncSystemWallpapers()
     }
@@ -568,10 +578,12 @@ final class WallpaperManager: NSObject, ObservableObject {
     @objc private func sessionDidResignActive() {
         sessionActive = false
         updatePlayback()
+        takeLockFrames()
     }
 
     @objc private func sessionDidBecomeActive() {
         sessionActive = true
+        forgetLockFramesIfUnlocked()
         updatePlayback()
         resyncSystemWallpapers()
     }
@@ -579,12 +591,55 @@ final class WallpaperManager: NSObject, ObservableObject {
     @objc private func screenDidLock() {
         screenLocked = true
         updatePlayback()
+        takeLockFrames()
     }
 
     @objc private func screenDidUnlock() {
         screenLocked = false
+        lockFrames = [:]
         updatePlayback()
         resyncSystemWallpapers()
+    }
+
+    /// Displays that wake without the screen having been locked, or a session back without it,
+    /// leave nothing for a lock screen: the next one gets the frame of its own moment.
+    private func forgetLockFramesIfUnlocked() {
+        if !screenLocked, !displaysAsleep, sessionActive {
+            lockFrames = [:]
+        }
+    }
+
+    /// Gives the lock screen what each display showed last: the frame the wallpaper stood at as
+    /// the screen locked, its displays went to sleep or another user came in — whichever comes
+    /// first. A paused wallpaper still has the picture it stopped on. A scene that keeps some of
+    /// itself off the lock screen gets its picture rendered without that, as before.
+    private func takeLockFrames() {
+        guard preferences.setsSystemWallpaper, lockFrames.isEmpty else { return }
+        for screen in NSScreen.screens {
+            guard let (displayID, wallpaper) = screens.first(where: { $0.value.isShown(on: screen) }),
+                  let item = wallpaper.item, item.kind != .image
+            else { continue }
+            if item.kind == .web, (try? SceneProject.read(from: library.projectURL(for: item)))?.hidesSomethingFromLockScreen == true {
+                continue
+            }
+            // Taken now, before anything moves on; the file is written meanwhile.
+            Task {
+                guard let frame = await wallpaper.view.currentFrame(),
+                      let url = try? library.setLockFrame(frame, forDisplay: displayID)
+                else { return }
+                lockFrames[displayID] = url
+                do {
+                    try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [
+                        .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+                        .allowClipping: true,
+                    ])
+                    syncedSystemWallpapers[displayID] = item.id
+                    Log.playback.notice("Lock screen on \(screen.localizedName, privacy: .public): the frame “\(item.name, privacy: .public)” stood at")
+                } catch {
+                    NSLog("WallAero Engine: cannot set the lock screen picture: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 }
 

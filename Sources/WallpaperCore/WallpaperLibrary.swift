@@ -414,6 +414,22 @@ public final class WallpaperLibrary: ObservableObject {
         save()
     }
 
+    /// Keeps the picture a display showed when the screen was locked, for the lock screen. Each
+    /// is written under a new name, so macOS takes it for a new picture; the display's one before
+    /// is deleted.
+    public func setLockFrame(_ image: CGImage, forDisplay display: String) throws -> URL {
+        let allowed = CharacterSet.alphanumerics
+        let name = String(display.unicodeScalars.map { allowed.contains($0) && $0.isASCII ? Character($0) : "-" })
+        let prefix = "lock-\(name)-"
+        let files = FileManager.default
+        for old in (try? files.contentsOfDirectory(atPath: stillsURL.path)) ?? [] where old.hasPrefix(prefix) {
+            try? files.removeItem(at: stillsURL.appendingPathComponent(old))
+        }
+        let url = stillsURL.appendingPathComponent("\(prefix)\(UUID().uuidString).jpg")
+        try Thumbnailer.writeJPEG(image, to: url, quality: 0.92)
+        return url
+    }
+
     /// The still the app last rendered for a web wallpaper, if any.
     public func renderedStillURL(for item: Wallpaper) -> URL? {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: stillsURL.path)) ?? []
