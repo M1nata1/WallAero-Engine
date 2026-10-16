@@ -29,6 +29,8 @@ import Foundation
 /// corners then say nothing of bones.
 struct WallpaperEnginePuppet {
     struct Bone: Equatable {
+        /// Its name, by which scripts ask for it; may be empty.
+        var name: String = ""
         /// The bone this one hangs on; −1 for one that hangs on nothing.
         var parent: Int
         /// Where it is from its parent, at rest: a matrix of four by four, column by column.
@@ -122,7 +124,7 @@ struct WallpaperEnginePuppet {
         }
         var bones: [Bone] = []
         for _ in 0..<boneCount {
-            guard reader.textToZero(atMost: 1024) != nil, reader.int32() != nil,
+            guard let name = reader.textToZero(atMost: 1024), reader.int32() != nil,
                   let parent = reader.int32(), parent >= -1, parent < Int(boneCount),
                   let matrixSize = reader.uint32(), matrixSize == 64
             else {
@@ -135,7 +137,7 @@ struct WallpaperEnginePuppet {
             }
             // What makes the bone sway by itself, as a text; not played.
             guard reader.textToZero(atMost: 65536) != nil else { return nil }
-            bones.append(Bone(parent: parent, matrix: matrix))
+            bones.append(Bone(name: name, parent: parent, matrix: matrix))
         }
         // A corner hangs on bones the puppet has.
         for corner in 0..<cornerCount {
@@ -394,7 +396,7 @@ struct WallpaperEnginePuppet {
         return [
             "corners": packed(corners),
             "triangles": triangleData.base64EncodedString(),
-            "bones": bones.map { ["parent": $0.parent, "matrix": $0.matrix.map(Double.init)] as [String: Any] },
+            "bones": bones.map { ["name": $0.name, "parent": $0.parent, "matrix": $0.matrix.map(Double.init)] as [String: Any] },
             "attachments": attachments.map { ["name": $0.name, "bone": $0.bone, "matrix": $0.matrix.map(Double.init)] as [String: Any] },
             "parts": parts.map { [$0.start, $0.count] },
             "clips": clips.map { ["part": $0.part, "masks": $0.masks, "texture": $0.texture] as [String: Any] },

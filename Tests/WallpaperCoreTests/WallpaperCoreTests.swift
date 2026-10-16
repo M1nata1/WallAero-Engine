@@ -1552,8 +1552,8 @@ final class WallpaperEngineSceneTests: XCTestCase {
             parts.forEach { file += $0 }
         }
         var skeleton = Data()
-        for (parent, x) in [(-1, Float(0)), (0, Float(3))] {
-            let bone: [Data] = [Data([0]), number(1), number(parent), number(64)]
+        for (name, parent, x) in [("root", -1, Float(0)), ("hair", 0, Float(3))] {
+            let bone: [Data] = [Data("\(name)\0".utf8), number(1), number(parent), number(64)]
             bone.forEach { skeleton += $0 }
             for value in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, 0, 0, 1] as [Float] {
                 skeleton += float(value)
@@ -1605,6 +1605,8 @@ final class WallpaperEngineSceneTests: XCTestCase {
         // A corner: where it is, where in the picture, its bones and their weights.
         XCTAssertEqual(Array(read.corners[12..<24]), [10, 5, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0])
         XCTAssertEqual(read.bones.map(\.parent), [-1, 0])
+        // Scripts ask for a bone by its name.
+        XCTAssertEqual(read.bones.map(\.name), ["root", "hair"])
         XCTAssertEqual(read.bones[1].matrix[12], 3)
         XCTAssertEqual(read.animations.count, 1)
         let animation = read.animations[0]

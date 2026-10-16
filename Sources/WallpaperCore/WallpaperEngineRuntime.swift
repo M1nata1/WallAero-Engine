@@ -1363,10 +1363,264 @@ public enum WallpaperEngineRuntime {
       // scenes, so a script that asks finds it stopped.
       var MEDIA_PLAYBACK = { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 };
 
-      // Matrices are not made here; a script that makes one goes on, and gets nothing from it.
-      function Matrix() {
-        return lenient(this);
+      // Matrices as scripts have them: numbers by columns, the place in the last one, angles in
+      // degrees, turned as the objects of a scene are (about x, then y, then z).
+      var DEGREE = Math.PI / 180;
+      function times4(a, b) {
+        var r = new Array(16);
+        for (var column = 0; column < 4; column++) {
+          for (var row = 0; row < 4; row++) {
+            var sum = 0;
+            for (var k = 0; k < 4; k++) sum += a[k * 4 + row] * b[column * 4 + k];
+            r[column * 4 + row] = sum;
+          }
+        }
+        return r;
       }
+      function euler4(x, y, z) {
+        var cx = Math.cos(x * DEGREE), sx = Math.sin(x * DEGREE), cy = Math.cos(y * DEGREE), sy = Math.sin(y * DEGREE);
+        var cz = Math.cos(z * DEGREE), sz = Math.sin(z * DEGREE);
+        return [cz * cy, sz * cy, -sy, 0,
+                cz * sy * sx - sz * cx, sz * sy * sx + cz * cx, cy * sx, 0,
+                cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx, 0,
+                0, 0, 0, 1];
+      }
+      function Mat4(values) {
+        this.m = Array.isArray(values) && values.length === 16 ? values.slice() : [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+      }
+      Mat4.identity = function () { return new Mat4(); };
+      Mat4.fromTranslation = function (v) { return new Mat4([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, v.x || 0, v.y || 0, v.z || 0, 1]); };
+      Mat4.fromScale = function (v) {
+        var x = typeof v === 'number' ? v : v.x, y = typeof v === 'number' ? v : v.y, z = typeof v === 'number' ? v : (v.z === undefined ? 1 : v.z);
+        return new Mat4([x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1]);
+      };
+      Mat4.fromRotation = function (angle, axis) {
+        var length = Math.sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z) || 1;
+        var x = axis.x / length, y = axis.y / length, z = axis.z / length;
+        var c = Math.cos(angle * DEGREE), s = Math.sin(angle * DEGREE), t = 1 - c;
+        return new Mat4([t * x * x + c, t * x * y + s * z, t * x * z - s * y, 0,
+                         t * x * y - s * z, t * y * y + c, t * y * z + s * x, 0,
+                         t * x * z + s * y, t * y * z - s * x, t * z * z + c, 0,
+                         0, 0, 0, 1]);
+      };
+      Mat4.fromEuler = function (x, y, z) {
+        if (x && typeof x === 'object') return new Mat4(euler4(x.x, x.y, x.z));
+        return new Mat4(euler4(x || 0, y || 0, z || 0));
+      };
+      Mat4.fromBasis = function (right, up, forward) {
+        return new Mat4([right.x, right.y, right.z, 0, up.x, up.y, up.z, 0, forward.x, forward.y, forward.z, 0, 0, 0, 0, 1]);
+      };
+      Mat4.lookAt = function (eye, center, up) {
+        var f = new Vec3(center.x - eye.x, center.y - eye.y, center.z - eye.z).normalize();
+        var r = f.cross(up).normalize();
+        var u = r.cross(f);
+        return new Mat4([r.x, u.x, -f.x, 0, r.y, u.y, -f.y, 0, r.z, u.z, -f.z, 0,
+                         -r.dot(eye), -u.dot(eye), f.dot(eye), 1]);
+      };
+      Mat4.compose = function (translation, rotation, scale) {
+        return Mat4.fromTranslation(translation).multiply(Mat4.fromEuler(rotation)).multiply(Mat4.fromScale(scale));
+      };
+      Mat4.prototype.translation = function (position) {
+        if (position) {
+          this.m[12] = position.x || 0;
+          this.m[13] = position.y || 0;
+          this.m[14] = position.z || 0;
+        }
+        return new Vec3(this.m[12], this.m[13], this.m[14]);
+      };
+      Mat4.prototype.right = function () { return new Vec3(this.m[0], this.m[1], this.m[2]); };
+      Mat4.prototype.up = function () { return new Vec3(this.m[4], this.m[5], this.m[6]); };
+      Mat4.prototype.forward = function () { return new Vec3(this.m[8], this.m[9], this.m[10]); };
+      Mat4.prototype.add = function (other) { var o = other.m; return new Mat4(this.m.map(function (v, i) { return v + o[i]; })); };
+      Mat4.prototype.subtract = function (other) { var o = other.m; return new Mat4(this.m.map(function (v, i) { return v - o[i]; })); };
+      Mat4.prototype.multiply = function (value) {
+        if (typeof value === 'number') return new Mat4(this.m.map(function (v) { return v * value; }));
+        if (value instanceof Mat4) return new Mat4(times4(this.m, value.m));
+        var m = this.m, x = value.x || 0, y = value.y || 0, z = value.z || 0, w = value.w === undefined ? 1 : value.w;
+        return new Vec4(m[0] * x + m[4] * y + m[8] * z + m[12] * w, m[1] * x + m[5] * y + m[9] * z + m[13] * w,
+                        m[2] * x + m[6] * y + m[10] * z + m[14] * w, m[3] * x + m[7] * y + m[11] * z + m[15] * w);
+      };
+      Mat4.prototype.translate = function (v) { return this.multiply(Mat4.fromTranslation(v)); };
+      Mat4.prototype.rotate = function (angle, axis) { return this.multiply(Mat4.fromRotation(angle, axis)); };
+      Mat4.prototype.scale = function (v) { return this.multiply(Mat4.fromScale(v)); };
+      Mat4.prototype.transformPoint = function (v) {
+        var m = this.m, x = v.x || 0, y = v.y || 0, z = v.z || 0;
+        var w = m[3] * x + m[7] * y + m[11] * z + m[15] || 1;
+        return new Vec3((m[0] * x + m[4] * y + m[8] * z + m[12]) / w, (m[1] * x + m[5] * y + m[9] * z + m[13]) / w,
+                        (m[2] * x + m[6] * y + m[10] * z + m[14]) / w);
+      };
+      Mat4.prototype.transformDirection = function (v) {
+        var m = this.m, x = v.x || 0, y = v.y || 0, z = v.z || 0;
+        return new Vec3(m[0] * x + m[4] * y + m[8] * z, m[1] * x + m[5] * y + m[9] * z, m[2] * x + m[6] * y + m[10] * z);
+      };
+      Mat4.prototype.transpose = function () {
+        var m = this.m, r = new Array(16);
+        for (var c = 0; c < 4; c++) for (var row = 0; row < 4; row++) r[row * 4 + c] = m[c * 4 + row];
+        return new Mat4(r);
+      };
+      Mat4.prototype.determinant = function () {
+        var m = this.m;
+        var b0 = m[0] * m[5] - m[1] * m[4], b1 = m[0] * m[6] - m[2] * m[4], b2 = m[0] * m[7] - m[3] * m[4];
+        var b3 = m[1] * m[6] - m[2] * m[5], b4 = m[1] * m[7] - m[3] * m[5], b5 = m[2] * m[7] - m[3] * m[6];
+        var b6 = m[8] * m[13] - m[9] * m[12], b7 = m[8] * m[14] - m[10] * m[12], b8 = m[8] * m[15] - m[11] * m[12];
+        var b9 = m[9] * m[14] - m[10] * m[13], b10 = m[9] * m[15] - m[11] * m[13], b11 = m[10] * m[15] - m[11] * m[14];
+        return b0 * b11 - b1 * b10 + b2 * b9 + b3 * b8 - b4 * b7 + b5 * b6;
+      };
+      Mat4.prototype.inverse = function () {
+        var m = this.m;
+        var b0 = m[0] * m[5] - m[1] * m[4], b1 = m[0] * m[6] - m[2] * m[4], b2 = m[0] * m[7] - m[3] * m[4];
+        var b3 = m[1] * m[6] - m[2] * m[5], b4 = m[1] * m[7] - m[3] * m[5], b5 = m[2] * m[7] - m[3] * m[6];
+        var b6 = m[8] * m[13] - m[9] * m[12], b7 = m[8] * m[14] - m[10] * m[12], b8 = m[8] * m[15] - m[11] * m[12];
+        var b9 = m[9] * m[14] - m[10] * m[13], b10 = m[9] * m[15] - m[11] * m[13], b11 = m[10] * m[15] - m[11] * m[14];
+        var det = b0 * b11 - b1 * b10 + b2 * b9 + b3 * b8 - b4 * b7 + b5 * b6;
+        if (!det) return new Mat4();
+        var d = 1 / det;
+        return new Mat4([
+          (m[5] * b11 - m[6] * b10 + m[7] * b9) * d, (m[2] * b10 - m[1] * b11 - m[3] * b9) * d,
+          (m[13] * b5 - m[14] * b4 + m[15] * b3) * d, (m[10] * b4 - m[9] * b5 - m[11] * b3) * d,
+          (m[6] * b8 - m[4] * b11 - m[7] * b7) * d, (m[0] * b11 - m[2] * b8 + m[3] * b7) * d,
+          (m[14] * b2 - m[12] * b5 - m[15] * b1) * d, (m[8] * b5 - m[10] * b2 + m[11] * b1) * d,
+          (m[4] * b10 - m[5] * b8 + m[7] * b6) * d, (m[1] * b8 - m[0] * b10 - m[3] * b6) * d,
+          (m[12] * b4 - m[13] * b2 + m[15] * b0) * d, (m[9] * b2 - m[8] * b4 - m[11] * b0) * d,
+          (m[5] * b7 - m[4] * b9 - m[6] * b6) * d, (m[0] * b9 - m[1] * b7 + m[2] * b6) * d,
+          (m[13] * b1 - m[12] * b3 - m[14] * b0) * d, (m[8] * b3 - m[9] * b1 + m[10] * b0) * d
+        ]);
+      };
+      // The scale of each axis, and the angles of what is left once the scale is taken out.
+      Mat4.prototype.decompose = function () {
+        var m = this.m;
+        var sx = Math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]) || 1, sy = Math.sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6]) || 1;
+        var sz = Math.sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10]) || 1;
+        if (this.determinant() < 0) sx = -sx;
+        var r = [m[0] / sx, m[1] / sx, m[2] / sx, m[4] / sy, m[5] / sy, m[6] / sy, m[8] / sz, m[9] / sz, m[10] / sz];
+        var y = Math.asin(Math.max(-1, Math.min(1, -r[2])));
+        var x, z;
+        if (Math.abs(r[2]) < 0.99999) {
+          x = Math.atan2(r[5], r[8]);
+          z = Math.atan2(r[1], r[0]);
+        } else {
+          x = Math.atan2(-r[7], r[4]);
+          z = 0;
+        }
+        return { translation: new Vec3(m[12], m[13], m[14]), rotation: new Vec3(x / DEGREE, y / DEGREE, z / DEGREE),
+                 scale: new Vec3(sx, sy, sz) };
+      };
+      Mat4.prototype.extractEuler = function () { return this.decompose().rotation; };
+      Mat4.prototype.normalMatrix = function () {
+        var i = this.inverse().m;
+        return new Mat3([i[0], i[4], i[8], i[1], i[5], i[9], i[2], i[6], i[10]]);
+      };
+      Mat4.prototype.copy = function () { return new Mat4(this.m); };
+      Mat4.prototype.equals = function (other) {
+        return !!other && other.m && this.m.every(function (v, i) { return Math.abs(v - other.m[i]) < 1e-6; });
+      };
+      Mat4.prototype.toString = function () { return this.m.join(' '); };
+
+      // A 3×3 matrix for the plane: by columns, the place in the last one, the angle in degrees.
+      function times3(a, b) {
+        var r = new Array(9);
+        for (var column = 0; column < 3; column++) {
+          for (var row = 0; row < 3; row++) {
+            var sum = 0;
+            for (var k = 0; k < 3; k++) sum += a[k * 3 + row] * b[column * 3 + k];
+            r[column * 3 + row] = sum;
+          }
+        }
+        return r;
+      }
+      function Mat3(values) {
+        this.m = Array.isArray(values) && values.length === 9 ? values.slice() : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+      }
+      Mat3.identity = function () { return new Mat3(); };
+      Mat3.fromTranslation = function (v) { return new Mat3([1, 0, 0, 0, 1, 0, v.x || 0, v.y || 0, 1]); };
+      Mat3.fromScale = function (v) {
+        var x = typeof v === 'number' ? v : v.x, y = typeof v === 'number' ? v : v.y;
+        return new Mat3([x, 0, 0, 0, y, 0, 0, 0, 1]);
+      };
+      Mat3.fromRotation = function (angle) {
+        var c = Math.cos(angle * DEGREE), s = Math.sin(angle * DEGREE);
+        return new Mat3([c, s, 0, -s, c, 0, 0, 0, 1]);
+      };
+      Mat3.fromBasis = function (right, up) { return new Mat3([right.x, right.y, 0, up.x, up.y, 0, 0, 0, 1]); };
+      Mat3.fromMat4 = function (other) {
+        var m = other.m;
+        return new Mat3([m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]);
+      };
+      Mat3.compose = function (translation, rotation, scale) {
+        return Mat3.fromTranslation(translation).multiply(Mat3.fromRotation(rotation)).multiply(Mat3.fromScale(scale));
+      };
+      Mat3.prototype.translation = function (position) {
+        if (position) {
+          this.m[6] = position.x || 0;
+          this.m[7] = position.y || 0;
+        }
+        return new Vec2(this.m[6], this.m[7]);
+      };
+      Mat3.prototype.angle = function () { return Math.atan2(this.m[1], this.m[0]) / DEGREE; };
+      Mat3.prototype.add = function (other) { var o = other.m; return new Mat3(this.m.map(function (v, i) { return v + o[i]; })); };
+      Mat3.prototype.subtract = function (other) { var o = other.m; return new Mat3(this.m.map(function (v, i) { return v - o[i]; })); };
+      Mat3.prototype.multiply = function (value) {
+        if (typeof value === 'number') return new Mat3(this.m.map(function (v) { return v * value; }));
+        if (value instanceof Mat3) return new Mat3(times3(this.m, value.m));
+        var m = this.m, x = value.x || 0, y = value.y || 0, z = value.z === undefined ? 1 : value.z;
+        return new Vec3(m[0] * x + m[3] * y + m[6] * z, m[1] * x + m[4] * y + m[7] * z, m[2] * x + m[5] * y + m[8] * z);
+      };
+      Mat3.prototype.translate = function (v) { return this.multiply(Mat3.fromTranslation(v)); };
+      Mat3.prototype.rotate = function (angle) { return this.multiply(Mat3.fromRotation(angle)); };
+      Mat3.prototype.scale = function (v) { return this.multiply(Mat3.fromScale(v)); };
+      Mat3.prototype.transformPoint = function (v) {
+        var m = this.m;
+        return new Vec2(m[0] * v.x + m[3] * v.y + m[6], m[1] * v.x + m[4] * v.y + m[7]);
+      };
+      Mat3.prototype.transformDirection = function (v) {
+        var m = this.m;
+        return new Vec2(m[0] * v.x + m[3] * v.y, m[1] * v.x + m[4] * v.y);
+      };
+      Mat3.prototype.transpose = function () {
+        var m = this.m;
+        return new Mat3([m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]);
+      };
+      Mat3.prototype.determinant = function () {
+        var m = this.m;
+        return m[0] * (m[4] * m[8] - m[7] * m[5]) - m[3] * (m[1] * m[8] - m[7] * m[2]) + m[6] * (m[1] * m[5] - m[4] * m[2]);
+      };
+      Mat3.prototype.inverse = function () {
+        var m = this.m, det = this.determinant();
+        if (!det) return new Mat3();
+        var d = 1 / det;
+        return new Mat3([
+          (m[4] * m[8] - m[5] * m[7]) * d, (m[2] * m[7] - m[1] * m[8]) * d, (m[1] * m[5] - m[2] * m[4]) * d,
+          (m[5] * m[6] - m[3] * m[8]) * d, (m[0] * m[8] - m[2] * m[6]) * d, (m[2] * m[3] - m[0] * m[5]) * d,
+          (m[3] * m[7] - m[4] * m[6]) * d, (m[1] * m[6] - m[0] * m[7]) * d, (m[0] * m[4] - m[1] * m[3]) * d
+        ]);
+      };
+      Mat3.prototype.decompose = function () {
+        var m = this.m;
+        var sx = Math.sqrt(m[0] * m[0] + m[1] * m[1]), sy = Math.sqrt(m[3] * m[3] + m[4] * m[4]);
+        if (this.determinant() < 0) sy = -sy;
+        return { translation: new Vec2(m[6], m[7]), rotation: Math.atan2(m[1], m[0]) / DEGREE, scale: new Vec2(sx, sy) };
+      };
+      Mat3.prototype.copy = function () { return new Mat3(this.m); };
+      Mat3.prototype.equals = function (other) {
+        return !!other && other.m && this.m.every(function (v, i) { return Math.abs(v - other.m[i]) < 1e-6; });
+      };
+      Mat3.prototype.toString = function () { return this.m.join(' '); };
+
+      // A direction from angles on a sphere — around and up, in degrees — and as far as said; and back.
+      Vec3.fromSpherical = function (azimuth, elevation, radius) {
+        var r = radius === undefined ? 1 : radius, a = (azimuth || 0) * DEGREE, e = (elevation || 0) * DEGREE;
+        return new Vec3(r * Math.cos(e) * Math.cos(a), r * Math.sin(e), r * Math.cos(e) * Math.sin(a));
+      };
+      Vec3.prototype.toSpherical = function () {
+        var r = this.length();
+        return new Vec3(Math.atan2(this.z, this.x) / DEGREE, r > 0 ? Math.asin(Math.max(-1, Math.min(1, this.y / r))) / DEGREE : 0, r);
+      };
+      // Bent as light is through a surface, from one medium into one `ratio` times as dense.
+      Vec3.prototype.refract = function (normal, ratio) {
+        var cos = -this.dot(normal);
+        var k = 1 - ratio * ratio * (1 - cos * cos);
+        return k < 0 ? new Vec3(0, 0, 0) : this.multiply(ratio).add(normal.multiply(ratio * cos - Math.sqrt(k)));
+      };
 
       // The settings a script declares for itself: `createScriptProperties().addSlider({…}).finish()`.
       // Each has a name and a value, and the scene may give another value for it.
@@ -1933,6 +2187,12 @@ public enum WallpaperEngineRuntime {
           films.forEach(function (each) {
             var video = each.video;
             if (!each.seen || video.readyState < 2 || video.currentTime === each.shown || !video.videoWidth) return;
+            // Back at its start: it came to its end.
+            if (each.ended && each.shown > 0 && video.currentTime < each.shown - 0.25) {
+              each.ended.slice().forEach(function (callback) {
+                try { callback(); } catch (error) { note('a script fails in what it asked for at the end of a video: ' + error.message); }
+              });
+            }
             each.shown = video.currentTime;
             gl.bindTexture(gl.TEXTURE_2D, each.layer.texture);
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -2247,6 +2507,27 @@ public enum WallpaperEngineRuntime {
         // `inputs` are the textures by slot: { texture, resolution }.
         // `layer` is the object the pass belongs to and `onScreen` where its rectangle lands on what
         // is drawn on, for the shaders that ask.
+        // An effect reads its pictures without their smaller copies: it is drawn at the size of its
+        // layer, where they are not needed, and a shader that wraps the picture round — `frac` of
+        // where it reads, to scroll it — would otherwise have the smallest of them show as a line
+        // where it wraps. How each picture repeats and how smooth it is stay as they are.
+        var plainSamplers = {};
+        function plainSampler(texture) {
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          var wrapS = gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S), wrapT = gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T);
+          var smooth = gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER) !== gl.NEAREST;
+          var name = wrapS + ',' + wrapT + ',' + smooth;
+          if (!plainSamplers[name]) {
+            var sampler = gl.createSampler();
+            gl.samplerParameteri(sampler, gl.TEXTURE_WRAP_S, wrapS);
+            gl.samplerParameteri(sampler, gl.TEXTURE_WRAP_T, wrapT);
+            gl.samplerParameteri(sampler, gl.TEXTURE_MAG_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+            gl.samplerParameteri(sampler, gl.TEXTURE_MIN_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+            plainSamplers[name] = sampler;
+          }
+          return plainSamplers[name];
+        }
+
         function drawPass(pass, target, inputs, layer, onScreen) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
           gl.viewport(0, 0, target.width, target.height);
@@ -2256,6 +2537,7 @@ public enum WallpaperEngineRuntime {
           pass.slots.forEach(function (slot) {
             var input = inputs[slot];
             gl.activeTexture(gl.TEXTURE0 + slot);
+            gl.bindSampler(slot, input && input.texture ? plainSampler(input.texture) : null);
             gl.bindTexture(gl.TEXTURE_2D, input ? input.texture : null);
           });
           inputs.forEach(function (input, slot) {
@@ -2298,6 +2580,7 @@ public enum WallpaperEngineRuntime {
           });
           gl.bindVertexArray(passShape);
           gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          pass.slots.forEach(function (slot) { gl.bindSampler(slot, null); });
         }
 
         // --- Values that change -----------------------------------------------
@@ -2422,9 +2705,10 @@ public enum WallpaperEngineRuntime {
                  'createScriptProperties', 'Vec2', 'Vec3', 'Vec4', 'Mat3', 'Mat4',
                  'MediaPlaybackEvent', 'MediaPropertiesEvent', 'MediaThumbnailEvent', 'MediaStatusEvent', 'MediaTimelineEvent'],
                 [engineObject, sceneObject, layerObject(script.owner),
-                 script.subject && script.owner ? effectObject(script.owner, script.subject) : layerObject(script.owner),
+                 script.animationLayer ? script.animationLayer() :
+                   (script.subject && script.owner ? effectObject(script.owner, script.subject) : layerObject(script.owner)),
                  inputObject, shared, consoleObject, storageObject, lenient({}),
-                 scriptSettings(script.said.scriptproperties), Vec2, Vec3, Vec4, Matrix, Matrix,
+                 scriptSettings(script.said.scriptproperties), Vec2, Vec3, Vec4, Mat3, Mat4,
                  MEDIA_PLAYBACK, lenient({}), lenient({}), lenient({}), lenient({})]);
             } catch (error) {
               note('a script of “' + (script.owner ? script.owner.name : 'the scene') + '” cannot be read: ' + error.message);
@@ -2484,7 +2768,10 @@ public enum WallpaperEngineRuntime {
             return buffers;
           },
           setTimeout: function (callback, delay) { return later(callback, delay, false); },
-          setInterval: function (callback, delay) { return later(callback, delay, true); }
+          setInterval: function (callback, delay) { return later(callback, delay, true); },
+          // What setTimeout and setInterval give back stops what they started.
+          clearTimeout: function (handle) { if (typeof handle === 'function') handle(); },
+          clearInterval: function (handle) { if (typeof handle === 'function') handle(); }
         });
 
         // Calls a script back after a while of the scene's own time, which stands still while
@@ -2612,7 +2899,55 @@ public enum WallpaperEngineRuntime {
           object.getChildren = function () {
             return things.filter(function (each) { return each.parent !== undefined && String(each.parent) === String(thing.id); }).map(layerObject);
           };
+          // Hung on another layer, or on none: what it is placed from changes, not where it is said to be.
+          object.setParent = function (wanted) {
+            var parent = wanted === null || wanted === undefined ? null : find(wanted);
+            if (parent === thing) return false;
+            thing.parent = parent ? parent.id : undefined;
+            changed();
+            return true;
+          };
           object.isPlaying = function () { return true; };
+          if (thing.particles) {
+            // Particles made at once, as many as said, where the system makes them.
+            object.emitParticles = function (count) { if (thing.emitNow) thing.emitNow(Math.max(0, Math.round(Number(count) || 0))); };
+            // A system of particles as its scripts steer it: how many, how fast, how large; where
+            // its points are; whether it goes on making particles.
+            var override = function () { return thing.said.instanceoverride || (thing.said.instanceoverride = {}); };
+            ['count', 'rate', 'size', 'alpha', 'lifetime', 'speed'].forEach(function (name) {
+              Object.defineProperty(object.instanceValues || (object.instanceValues = {}), name, {
+                enumerable: true,
+                get: function () { return number(override()[name], 1); },
+                set: function (value) { override()[name] = Number(value); thing.settle(); dirty = true; }
+              });
+            });
+            Object.defineProperty(object.instanceValues, 'colorn', {
+              enumerable: true,
+              get: function () { var c = thing.recolor || [1, 1, 1]; return new Vec3(c[0], c[1], c[2]); },
+              set: function (value) { override().colorn = String(value); thing.settle(); dirty = true; }
+            });
+            object.instanceValues.setControlPointPosition = function (index, value) {
+              override()['controlpoint' + Math.round(Number(index) || 0)] = value && typeof value === 'object' ? [value.x, value.y, value.z || 0] : value;
+              dirty = true;
+            };
+            object.instanceValues.getControlPointPosition = function (index) {
+              var at = thing.pointAt(Math.round(Number(index) || 0));
+              return new Vec3(at[0], at[1], at[2]);
+            };
+            object.instanceValues.play = function () { thing.emitting = true; };
+            object.instanceValues.pause = function () { thing.emitting = false; };
+            object.instanceValues.stop = function () { thing.emitting = false; thing.particles = []; dirty = true; };
+            object.instanceValues.isPlaying = function () { return thing.emitting !== false; };
+            [0, 1, 2, 3, 4, 5, 6, 7].forEach(function (index) {
+              Object.defineProperty(object.instanceValues, 'controlpoint' + index, {
+                enumerable: true,
+                get: function () { return object.instanceValues.getControlPointPosition(index); },
+                set: function (value) { object.instanceValues.setControlPointPosition(index, value); }
+              });
+            });
+            object.instance = lenient(object.instanceValues);
+            delete object.instanceValues;
+          }
           if (thing.sound) {
             // A sound, to be started, stopped and made louder or softer.
             ['play', 'stop', 'pause', 'isPlaying'].forEach(function (name) { object[name] = thing.sound[name]; });
@@ -2629,8 +2964,99 @@ public enum WallpaperEngineRuntime {
             var effect = typeof wanted === 'number' ? effects[wanted] : effects.filter(function (each) { return each.name === wanted; })[0];
             return effect ? effectObject(thing, effect) : null;
           };
-          object.getAnimationLayerCount = function () { return thing.puppet && thing.puppet.moving ? 1 : 0; };
-          ['getAnimationLayer', 'getTextureAnimation', 'getVideoTexture', 'getMaterial'].forEach(function (name) { object[name] = unsteered; });
+          object.getAnimationLayerCount = function () { return thing.puppet ? thing.puppet.layers.length : 0; };
+          object.getMaterial = unsteered;
+          // The layers of animation of a picture that bends, and its bones.
+          object.getAnimationLayer = function (wanted) {
+            var layer = thing.puppet && thing.puppet.findLayer(wanted);
+            return layer ? thing.puppet.scriptLayer(layer) : unsteered();
+          };
+          object.createAnimationLayer = function (animation, config) {
+            var layer = thing.puppet && thing.puppet.addLayer(animation, config, false);
+            return layer ? thing.puppet.scriptLayer(layer) : unsteered();
+          };
+          object.playSingleAnimation = function (animation, config) {
+            var layer = thing.puppet && thing.puppet.addLayer(animation, config, true);
+            return layer ? thing.puppet.scriptLayer(layer) : unsteered();
+          };
+          object.destroyAnimationLayer = function (wanted) {
+            var layer = thing.puppet && thing.puppet.findLayer(wanted);
+            return layer ? thing.puppet.removeLayer(layer) : false;
+          };
+          function boneOf(wanted) { return thing.puppet ? thing.puppet.boneIndex(wanted) : -1; }
+          object.getBoneCount = function () { return thing.puppet ? thing.puppet.bones.length : 0; };
+          object.getBoneIndex = function (name) { return boneOf(name); };
+          object.getBoneParentIndex = function (wanted) {
+            var index = boneOf(wanted);
+            return index >= 0 ? thing.puppet.bones[index].parent : -1;
+          };
+          // A bone's place as a 4×4 matrix, from a 2D one.
+          function toMat4(two) { return new Mat4([two[0], two[1], 0, 0, two[2], two[3], 0, 0, 0, 0, 1, 0, two[4], two[5], 0, 1]); }
+          function fromMat4(matrix) {
+            var m = matrix && matrix.m ? matrix.m : [];
+            return [m[0], m[1], m[4], m[5], m[12], m[13]];
+          }
+          function setFromTwo(index, two) {
+            var scaleX = Math.sqrt(two[0] * two[0] + two[1] * two[1]), scaleY = Math.sqrt(two[2] * two[2] + two[3] * two[3]);
+            thing.puppet.setLocal(index, { origin: [two[4], two[5]], angle: Math.atan2(two[1], two[0]), scale: [scaleX, scaleY] });
+          }
+          object.getLocalBoneTransform = function (wanted) {
+            var index = boneOf(wanted);
+            var bone = index >= 0 ? thing.puppet.bones[index] : null;
+            return bone ? toMat4(bone.now || bone.rest) : new Mat4();
+          };
+          object.setLocalBoneTransform = function (wanted, matrix) {
+            var index = boneOf(wanted);
+            if (index >= 0) setFromTwo(index, fromMat4(matrix));
+          };
+          object.getBoneTransform = function (wanted) {
+            var index = boneOf(wanted);
+            return index >= 0 ? toMat4(thing.puppet.worldOf(index)) : new Mat4();
+          };
+          object.setBoneTransform = function (wanted, matrix) {
+            var index = boneOf(wanted);
+            if (index < 0) return;
+            // Taken back to its parent's own terms.
+            var parent = thing.puppet.bones[index].parent;
+            var two = fromMat4(matrix);
+            setFromTwo(index, parent >= 0 ? joined(undone(thing.puppet.worldOf(parent)), two) : two);
+          };
+          object.getLocalBoneAngles = function (wanted) {
+            var pose = thing.puppet ? thing.puppet.localPose(boneOf(wanted)) : null;
+            return new Vec3(0, 0, pose ? pose[2] * scale180 : 0);
+          };
+          object.setLocalBoneAngles = function (wanted, angles) {
+            var index = boneOf(wanted);
+            if (index >= 0) thing.puppet.setLocal(index, { angle: (typeof angles === 'number' ? angles : (angles && angles.z) || 0) / scale180 });
+          };
+          object.getLocalBoneOrigin = function (wanted) {
+            var pose = thing.puppet ? thing.puppet.localPose(boneOf(wanted)) : null;
+            return new Vec3(pose ? pose[0] : 0, pose ? pose[1] : 0, 0);
+          };
+          object.setLocalBoneOrigin = function (wanted, origin) {
+            var index = boneOf(wanted);
+            if (index >= 0 && origin) thing.puppet.setLocal(index, { origin: [origin.x || 0, origin.y || 0] });
+          };
+          // Bones that sway by themselves and shapes blended into others are not played: a script
+          // asking of them finds none, and pushing a bone does nothing.
+          object.applyBonePhysicsImpulse = function () {};
+          object.resetBonePhysicsSimulation = function () {};
+          object.getBlendShapeIndex = function () { return -1; };
+          object.getBlendShapeWeight = function () { return 0; };
+          object.setBlendShapeWeight = function () {};
+          // The points of a picture that bends that other objects hang on.
+          function attachment(wanted) {
+            if (!thing.puppet || !thing.puppet.attachment) return null;
+            return thing.puppet.attachment(typeof wanted === 'number' ? (thing.puppet.attachmentNames || [])[wanted] : wanted);
+          }
+          object.getAttachmentIndex = function (name) { return thing.puppet && thing.puppet.attachmentNames ? thing.puppet.attachmentNames.indexOf(name) : -1; };
+          object.getAttachmentOrigin = function (wanted) { var at = attachment(wanted); return new Vec3(at ? at[4] : 0, at ? at[5] : 0, 0); };
+          object.getAttachmentAngles = function (wanted) { var at = attachment(wanted); return new Vec3(0, 0, at ? Math.atan2(at[1], at[0]) * scale180 : 0); };
+          object.getAttachmentMatrix = function (wanted) { var at = attachment(wanted); return at ? toMat4(at) : new Mat4(); };
+          // Where the object is on the scene, as a matrix.
+          object.getTransformMatrix = function () { return new Mat4(standing(thing, true).matrix); };
+          object.getVideoTexture = function () { return videoObject(thing); };
+          object.getTextureAnimation = function () { return sheetObject(thing); };
           // An animation of one of the object's values, by the name the scene gives it.
           object.getAnimation = function (wanted) {
             var found = motionOf(thing, wanted);
@@ -2639,6 +3065,70 @@ public enum WallpaperEngineRuntime {
           thing.forScripts = lenient(object);
           standsFor.set(thing.forScripts, thing);
           return thing.forScripts;
+        }
+
+        // The video an object shows, as a script steers it; nothing to steer for one that shows none.
+        function videoObject(thing) {
+          var film = thing.picture && thing.picture.film && thing.picture.film.video ? thing.picture.film : null;
+          if (!film) {
+            films.forEach(function (each) { if (!film && each.users.indexOf(thing) >= 0) film = each; });
+          }
+          if (!film) return unsteered();
+          var video = film.video;
+          return lenient({
+            play: function () { var started = video.play(); if (started && started['catch']) started['catch'](function () {}); },
+            pause: function () { video.pause(); },
+            stop: function () { video.pause(); video.currentTime = 0; changed(); },
+            isPlaying: function () { return !video.paused && !video.ended; },
+            getCurrentTime: function () { return video.currentTime; },
+            setCurrentTime: function (seconds) { video.currentTime = Math.max(0, Number(seconds) || 0); changed(); },
+            get duration() { return isFinite(video.duration) ? video.duration : 0; },
+            get rate() { return video.playbackRate; },
+            set rate(value) { video.playbackRate = Math.max(0, Number(value) || 0); },
+            // Called each time the video comes to its end, also as it starts over.
+            addEndedCallback: function (callback) { if (typeof callback === 'function') (film.ended || (film.ended = [])).push(callback); }
+          });
+        }
+
+        // The animation of an object's texture — pictures one after another in one texture — as a
+        // script steers it: played, paused, stopped and put on a frame.
+        function sheetObject(thing) {
+          var picture = thing.picture;
+          if (!picture || !picture.frames || !picture.frames.length) return unsteered();
+          var sheet = thing.sheet || (thing.sheet = { playing: true, at: 0, rate: 1 });
+          function frameStart(index) {
+            var at = 0;
+            for (var i = 0; i < Math.min(index, picture.frames.length); i++) at += Math.max(picture.frames[i][1], 0.001);
+            return at;
+          }
+          function frameNow() {
+            var at = sheetTime(thing), total = frameStart(picture.frames.length);
+            at = total > 0 ? at % total : 0;
+            for (var i = 0; i < picture.frames.length; i++) {
+              at -= Math.max(picture.frames[i][1], 0.001);
+              if (at < 0) return i;
+            }
+            return 0;
+          }
+          return lenient({
+            get frameCount() { return picture.frames.length; },
+            get rate() { return sheet.rate; },
+            set rate(value) { sheet.at = sheetTime(thing); sheet.since = time; sheet.rate = Number(value) || 0; },
+            play: function () { sheet.at = sheetTime(thing); sheet.since = time; sheet.playing = true; changed(); },
+            pause: function () { sheet.at = sheetTime(thing); sheet.playing = false; changed(); },
+            stop: function () { sheet.at = 0; sheet.playing = false; changed(); },
+            isPlaying: function () { return sheet.playing; },
+            getFrame: function () { return frameNow(); },
+            setFrame: function (index) { sheet.at = frameStart(Math.max(0, Math.round(Number(index) || 0))); sheet.since = time; changed(); }
+          });
+        }
+
+        // The time an object's animated texture is at: the scene's own, unless a script steers it.
+        function sheetTime(thing) {
+          var sheet = thing && thing.sheet;
+          if (!sheet) return time;
+          if (sheet.since === undefined) sheet.since = time;
+          return sheet.playing ? sheet.at + (time - sheet.since) * sheet.rate : sheet.at;
         }
 
         // Parts of an object a script may steer that are not played — the animation of a puppet,
@@ -2771,8 +3261,20 @@ public enum WallpaperEngineRuntime {
             changed();
             return true;
           },
+          // Where the camera looks and how near: a script may move it about the scene and zoom in.
           getCameraTransforms: function () {
-            return { eye: new Vec3(0, 0, 1), center: new Vec3(0, 0, 0), up: new Vec3(0, 1, 0), zoom: 1 };
+            var x = sceneWidth / 2 + camera.x, y = sceneHeight / 2 + camera.y;
+            return { eye: new Vec3(x, y, 1), center: new Vec3(x, y, 0), up: new Vec3(0, 1, 0), zoom: camera.zoom };
+          },
+          setCameraTransforms: function (transforms) {
+            var said = transforms || {};
+            var at = said.center || said.eye;
+            if (at && typeof at.x === 'number') {
+              camera.x = at.x - sceneWidth / 2;
+              camera.y = at.y - sceneHeight / 2;
+            }
+            if (typeof said.zoom === 'number' && said.zoom > 0) camera.zoom = said.zoom;
+            dirty = true;
           },
           get bloom() { return flag(general.bloom, false); },
           set bloom(value) { general.bloom = !!value; dirty = true; },
@@ -3270,13 +3772,14 @@ public enum WallpaperEngineRuntime {
         }
 
         // `culls`: whether the picture's material leaves out the backs of its triangles.
-        function buildPuppet(said, layers, name, culls) {
+        function buildPuppet(said, layers, name, culls, owner) {
           var corners = numbersOf(said.corners, Float32Array);
           var triangles = numbersOf(said.triangles, Uint16Array);
           var count = Math.floor(corners.length / 12);
           var bones = (said.bones || []).map(function (bone) {
             var matrix = bone.matrix || [];
-            return { parent: number(bone.parent, -1), rest: [matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13]] };
+            return { name: typeof bone.name === 'string' ? bone.name : '', parent: number(bone.parent, -1),
+                     rest: [matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13]] };
           });
           if (!count || !triangles.length || !bones.length) return null;
           // Where every bone is at rest, from the picture and not from its parent; and the way back.
@@ -3300,30 +3803,78 @@ public enum WallpaperEngineRuntime {
             points[point.name] = { bone: bone, rest: [matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13]] };
           });
 
-          // The animations the scene has switched on, in its order. Of those that set the bones,
-          // the first that has not come to its end plays — one that plays once gives way to the
-          // next when it is over — and those that add to them move the bones further, each by
-          // how far it takes them from where they are at rest.
+          // The layers of animation the object has, in their order, each with its own clock: the
+          // frame it is on, whether it plays, how fast. A script may pause one, put it on a frame,
+          // add one that plays once, or take one away. Of those that set the bones, one a script
+          // started to play once comes first while it plays; else the first that has not come to
+          // its end — one that plays once gives way to the next when it is over. Those that add to
+          // them move the bones further, each by how far it takes them from where they are at rest,
+          // as much as its blend says.
+          var animations = said.animations || [];
+          function animationOf(wanted) {
+            return animations.filter(function (each) {
+              return typeof wanted === 'number' ? each.id === wanted : each.name === wanted || String(each.id) === String(wanted);
+            })[0] || null;
+          }
+          function makeLayer(animation, config) {
+            config = config || {};
+            return { name: typeof config.name === 'string' ? config.name : (animation.name || ''), animation: animation,
+                     frames: numbersOf(animation.frames, Float32Array), frameCount: animation.frameCount, length: animation.length,
+                     fps: animation.fps || 30, speed: number(plain(config.rate), 1), mode: animation.mode,
+                     adds: flag(config.additive, false), blend: Math.max(0, Math.min(1, number(plain(config.blend), 1))),
+                     visible: true, frame: 0, playing: true, done: false, ended: [], once: false };
+          }
           var playing = [];
-          (layers || []).forEach(function (layer) {
-            if (flag(layer.visible, true) === false) return;
-            var animation = (said.animations || []).filter(function (each) { return each.id === number(layer.animation, -1); })[0];
+          (layers || []).forEach(function (config) {
+            var animation = animationOf(number(plain(config.animation), -1));
             if (!animation) return;
-            playing.push({ frames: numbersOf(animation.frames, Float32Array), frameCount: animation.frameCount, length: animation.length,
-                           rate: animation.fps * number(layer.rate, 1), mode: animation.mode, adds: flag(layer.additive, false),
-                           blend: Math.max(0, Math.min(1, number(layer.blend, 1))) });
+            var layer = makeLayer(animation, config);
+            // Whether it shows may be a setting of the wallpaper's, or what a script says; such a
+            // script has the layer of animation for `thisObject`.
+            layer.shows = live(config.visible === undefined ? true : config.visible, 0, true, owner || null, 'flag');
+            if (layer.shows.script) layer.shows.script.animationLayer = function () { return puppet.scriptLayer(layer); };
+            layer.visible = layer.shows.now !== false;
+            playing.push(layer);
           });
-          var setting = playing.filter(function (layer) { return !layer.adds; });
-          var adding = playing.filter(function (layer) { return layer.adds; });
+          // A layer's clock moves on; what is said to happen when it comes to its end happens.
+          function advance(passed) {
+            playing.slice().forEach(function (layer) {
+              if (!layer.playing || !(passed > 0)) return;
+              var before = layer.frame;
+              layer.frame += passed * layer.fps * layer.speed;
+              var cycle = layer.mode === 'mirror' ? layer.length * 2 : layer.length;
+              if (!(cycle > 0)) return;
+              if (layer.mode === 'single' || layer.once) {
+                if (layer.frame >= layer.length) {
+                  layer.frame = layer.length;
+                  layer.playing = false;
+                  layer.done = true;
+                  ended(layer);
+                  if (layer.once) puppet.removeLayer(layer);
+                }
+              } else if (Math.floor(layer.frame / cycle) > Math.floor(before / cycle)) {
+                ended(layer);
+              }
+            });
+          }
+          function ended(layer) {
+            layer.ended.slice().forEach(function (callback) {
+              try {
+                callback();
+              } catch (error) {
+                note('a script fails in what it asked for at the end of an animation: ' + error.message);
+              }
+            });
+          }
           // Each bone at rest from its parent, as the frames have it: place, turn, scale.
           bones.forEach(function (bone) {
             var rest = bone.rest;
             bone.still = [rest[4], rest[5], Math.atan2(rest[1], rest[0]), Math.sqrt(rest[0] * rest[0] + rest[1] * rest[1]),
                           Math.sqrt(rest[2] * rest[2] + rest[3] * rest[3])];
           });
-          // Where an animation has a bone at a moment: place, turn, scale.
-          function sample(layer, index, seconds) {
-            var at = seconds * layer.rate;
+          // Where an animation has a bone on the frame its layer is on: place, turn, scale.
+          function sample(layer, index) {
+            var at = layer.frame;
             if (layer.mode === 'mirror') {
               at = at % (layer.length * 2);
               if (at > layer.length) at = layer.length * 2 - at;
@@ -3364,7 +3915,7 @@ public enum WallpaperEngineRuntime {
           gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.DYNAMIC_DRAW);
           gl.bindVertexArray(null);
 
-          var puppet = { shape: shape, count: triangles.length, moving: playing.length > 0 };
+          var puppet = { shape: shape, count: triangles.length, moving: playing.length > 0, layers: playing, bones: bones };
           // Which way round a triangle's corners go when its face is seen: as most go at rest. A
           // puppet may turn part of itself over to hide it — an eye closing folds the eyeball
           // under the lid — and with a material that leaves out backs, what is turned over is
@@ -3392,31 +3943,185 @@ public enum WallpaperEngineRuntime {
           }).filter(function (clip) { return parts[clip.part] && parts.length > 1; });
           // Where a point to hang things on is as the picture was last posed, in the picture's own
           // pixels from its middle; null for a point the puppet does not have.
+          puppet.attachmentNames = Object.keys(points);
           puppet.attachment = function (name) {
             var point = points[name];
             if (!point) return null;
             var bone = bones[point.bone];
-            return joined(playing.length && bone.moved ? bone.moved : atRest(point.bone, 0), point.rest);
+            return joined(bone.moved || atRest(point.bone, 0), point.rest);
           };
-          // Puts every corner where the bones are at a moment.
+          // Layers of animation made by scripts: by an animation's name or number, or by what a
+          // layer is described by in a scene. One made to play once goes away when it is over.
+          puppet.addLayer = function (wanted, config, once) {
+            var described = wanted && typeof wanted === 'object' ? wanted : (config || {});
+            var asked = wanted && typeof wanted === 'object' ? (wanted.animation !== undefined ? wanted.animation : wanted.name) : wanted;
+            var animation = animationOf(asked);
+            // A script may name a layer of the object for its animation.
+            if (!animation) {
+              var named = puppet.findLayer(String(asked));
+              animation = named ? named.animation : null;
+            }
+            if (!animation) return null;
+            var layer = makeLayer(animation, described);
+            if (described.visible !== undefined) layer.visible = flag(described.visible, true);
+            layer.once = !!once;
+            playing.push(layer);
+            puppet.moving = true;
+            if (owner) owner.moving = true;
+            changed();
+            return layer;
+          };
+          puppet.removeLayer = function (layer) {
+            var at = playing.indexOf(layer);
+            if (at < 0) return false;
+            playing.splice(at, 1);
+            changed();
+            return true;
+          };
+          puppet.findLayer = function (wanted) {
+            if (typeof wanted === 'number') return playing[wanted] || null;
+            if (wanted && typeof wanted === 'object') return playing.filter(function (layer) { return layer.forScripts === wanted; })[0] || null;
+            return playing.filter(function (layer) { return layer.name === wanted; })[0] || null;
+          };
+          // A layer of animation as scripts have it.
+          puppet.scriptLayer = function (layer) {
+            if (!layer.forScripts) {
+              layer.forScripts = lenient({
+                get fps() { return layer.fps; },
+                get frameCount() { return layer.frameCount; },
+                get duration() { return layer.length / (layer.fps || 30); },
+                get name() { return layer.name; },
+                set name(value) { layer.name = String(value); },
+                get rate() { return layer.speed; },
+                set rate(value) { layer.speed = Number(value) || 0; },
+                get blend() { return layer.blend; },
+                set blend(value) { layer.blend = Math.max(0, Math.min(1, Number(value) || 0)); changed(); },
+                get visible() { return layer.visible; },
+                set visible(value) { layer.visible = !!value; changed(); },
+                play: function () {
+                  if (layer.done) {
+                    layer.frame = 0;
+                    layer.done = false;
+                  }
+                  layer.playing = true;
+                  if (owner) owner.moving = true;
+                  changed();
+                },
+                pause: function () { layer.playing = false; },
+                stop: function () {
+                  layer.playing = false;
+                  layer.frame = 0;
+                  layer.done = false;
+                  changed();
+                },
+                isPlaying: function () { return layer.playing; },
+                // Where in the animation it is, its repeats left out.
+                getFrame: function () {
+                  var length = layer.length > 0 ? layer.length : 1;
+                  if (layer.mode === 'single' || layer.once) return Math.min(layer.frame, length);
+                  if (layer.mode === 'mirror') {
+                    var at = layer.frame % (length * 2);
+                    return at > length ? length * 2 - at : at;
+                  }
+                  return layer.frame % length;
+                },
+                setFrame: function (frame) {
+                  layer.frame = Math.max(0, Number(frame) || 0);
+                  layer.done = false;
+                  changed();
+                },
+                addEndedCallback: function (callback) { if (typeof callback === 'function') layer.ended.push(callback); }
+              });
+            }
+            return layer.forScripts;
+          };
+          // What scripts have set of a bone, in place of what the animations say: where it is from
+          // its parent and how it is turned and scaled there.
+          puppet.overridden = false;
+          puppet.boneIndex = function (wanted) {
+            if (typeof wanted === 'number') return bones[wanted] ? wanted : -1;
+            for (var i = 0; i < bones.length; i++) if (bones[i].name === wanted) return i;
+            return -1;
+          };
+          puppet.localPose = function (index) {
+            var bone = bones[index];
+            if (!bone) return null;
+            var now = bone.now || bone.rest;
+            var pose = [now[4], now[5], Math.atan2(now[1], now[0]), Math.sqrt(now[0] * now[0] + now[1] * now[1]), Math.sqrt(now[2] * now[2] + now[3] * now[3])];
+            // What a script has set shows from the next frame on, and is read back at once.
+            var override = bone.override;
+            if (override) {
+              if (override.origin) {
+                pose[0] = override.origin[0];
+                pose[1] = override.origin[1];
+              }
+              if (override.angle !== undefined) pose[2] = override.angle;
+              if (override.scale) {
+                pose[3] = override.scale[0];
+                pose[4] = override.scale[1];
+              }
+            }
+            return pose;
+          };
+          puppet.setLocal = function (index, change) {
+            var bone = bones[index];
+            if (!bone) return;
+            var pose = puppet.localPose(index);
+            bone.override = bone.override || {};
+            if (change.origin) bone.override.origin = change.origin;
+            if (change.angle !== undefined) bone.override.angle = change.angle;
+            if (change.scale) bone.override.scale = change.scale;
+            if (!bone.override.origin) bone.override.origin = [pose[0], pose[1]];
+            puppet.overridden = true;
+            if (owner) owner.moving = true;
+            changed();
+          };
+          puppet.worldOf = function (index) {
+            var bone = bones[index];
+            return bone ? (bone.moved || atRest(index, 0)) : null;
+          };
+          // Puts every corner where the bones are at a moment of the scene.
+          var lastSeconds = null;
           puppet.pose = function (seconds) {
-            if (!playing.length) return;
-            var base = setting.filter(function (layer) { return layer.mode !== 'single' || seconds * layer.rate < layer.length; })[0] ||
+            var passed = lastSeconds === null ? 0 : Math.max(0, seconds - lastSeconds);
+            lastSeconds = seconds;
+            advance(passed);
+            playing.forEach(function (layer) {
+              if (layer.shows) layer.visible = layer.shows.read() !== false;
+            });
+            var showing = playing.filter(function (layer) { return layer.visible; });
+            if (!showing.length && !puppet.overridden) return;
+            var setting = showing.filter(function (layer) { return !layer.adds; });
+            var adding = showing.filter(function (layer) { return layer.adds; });
+            var once = setting.filter(function (layer) { return layer.once && !layer.done; });
+            var base = once[once.length - 1] || setting.filter(function (layer) { return layer.mode !== 'single' || !layer.done; })[0] ||
                        setting[setting.length - 1] || null;
             // Each bone from its parent in this frame: scaled, turned, then moved.
             bones.forEach(function (bone, index) {
-              var pose = base ? sample(base, index, seconds) : bone.still.slice();
+              var pose = base ? sample(base, index) : bone.still.slice();
               if (base && base.blend < 1) {
                 for (var part = 0; part < 5; part++) pose[part] = bone.still[part] + (pose[part] - bone.still[part]) * base.blend;
               }
               adding.forEach(function (layer) {
-                var more = sample(layer, index, seconds);
+                var more = sample(layer, index);
                 pose[0] += (more[0] - bone.still[0]) * layer.blend;
                 pose[1] += (more[1] - bone.still[1]) * layer.blend;
                 pose[2] += (more[2] - bone.still[2]) * layer.blend;
                 if (bone.still[3] > 1e-6) pose[3] *= 1 + (more[3] / bone.still[3] - 1) * layer.blend;
                 if (bone.still[4] > 1e-6) pose[4] *= 1 + (more[4] / bone.still[4] - 1) * layer.blend;
               });
+              var override = bone.override;
+              if (override) {
+                if (override.origin) {
+                  pose[0] = override.origin[0];
+                  pose[1] = override.origin[1];
+                }
+                if (override.angle !== undefined) pose[2] = override.angle;
+                if (override.scale) {
+                  pose[3] = override.scale[0];
+                  pose[4] = override.scale[1];
+                }
+              }
               var cos = Math.cos(pose[2]), sin = Math.sin(pose[2]);
               bone.now = [cos * pose[3], sin * pose[3], -sin * pose[4], cos * pose[4], pose[0], pose[1]];
               bone.done = false;
@@ -3568,11 +4273,20 @@ public enum WallpaperEngineRuntime {
             // Drawn into the layer that holds it, an object is placed in that layer's own
             // coordinates; the layer's place is added when the layer is drawn.
             if (!parent.holds || whole) matrix = times(up.matrix, matrix);
-          } else if (eye && eye.on) {
-            // What hangs together moves with the pointer together.
-            var moved = shifted(thing);
-            matrix[12] += moved[0];
-            matrix[13] += moved[1];
+          } else {
+            if ((eye && eye.on) || (shake && shake.on)) {
+              // What hangs together moves with the pointer together, and shakes with the camera.
+              var moved = shifted(thing);
+              matrix[12] += moved[0] + (shake ? shake.x : 0);
+              matrix[13] += moved[1] + (shake ? shake.y : 0);
+            }
+            if (camera && (camera.x || camera.y || camera.zoom !== 1)) {
+              // Where a script has put the camera: the scene seen from there, nearer or further.
+              var cx = sceneWidth / 2, cy = sceneHeight / 2;
+              [0, 1, 4, 5].forEach(function (index) { matrix[index] *= camera.zoom; });
+              matrix[12] = cx + (matrix[12] - cx - camera.x) * camera.zoom;
+              matrix[13] = cy + (matrix[13] - cy - camera.y) * camera.zoom;
+            }
           }
           return { matrix: matrix, alpha: alpha, above: above, visible: above && state.visible !== false };
         }
@@ -3806,7 +4520,7 @@ public enum WallpaperEngineRuntime {
           // A picture that bends, if its bones came with the scene and could be read.
           var bends = model && model.puppet ? puppets[key(model.puppet)] : null;
           if (bends) {
-            layer.puppet = buildPuppet(bends, object.animationlayers, layer.name, key(String(base.cullmode || 'normal')) !== 'nocull');
+            layer.puppet = buildPuppet(bends, object.animationlayers, layer.name, key(String(base.cullmode || 'normal')) !== 'nocull', layer);
             if (layer.puppet && layer.puppet.moving) layer.moving = true;
           } else if (model && model.puppet) {
             note('“' + layer.name + '” is a picture that bends, but its bones could not be read; it is shown still');
@@ -4054,7 +4768,7 @@ public enum WallpaperEngineRuntime {
           // The picture as it comes: a frame of it, if it is animated.
           var source = null;
           if (layer.picture) {
-            var shown = frameAt(layer.picture, time);
+            var shown = frameAt(layer.picture, sheetTime(layer));
             var first = shown ? shown.layer : layer.picture.layers[0];
             source = { texture: first.texture, frame: shown ? shown.frame : null, channels: layer.picture.channels,
                        resolution: layer.plain ? [nominal[0], nominal[1], nominal[0], nominal[1]] : [first.width, first.height, first.width, first.height] };
@@ -4407,10 +5121,129 @@ public enum WallpaperEngineRuntime {
                 particle.y = mix(here[1], there[1], share);
                 particle.z = mix(here[2], there[2], share);
               };
+            case 'colorlist':
+              // One of the colors of a list, each as likely as another.
+              var listed = (Array.isArray(said.colors) ? said.colors : []).map(function (each) { return color(each, 1); });
+              if (!listed.length) return null;
+              return function (particle) {
+                var chosen = listed[Math.floor(Math.random() * listed.length)];
+                particle.red = chosen[0];
+                particle.green = chosen[1];
+                particle.blue = chosen[2];
+              };
+            case 'positionoffsetrandom':
+              // Put somewhere within a distance of where it was made.
+              var within = number(said.distance, 0);
+              return function (particle) {
+                var turn = Math.random() * Math.PI * 2, far = Math.sqrt(Math.random()) * within;
+                particle.x += Math.cos(turn) * far;
+                particle.y += Math.sin(turn) * far;
+              };
+            case 'inheritcontrolpointvelocity':
+              // Sent off with a share of the speed one of the system's points moves at: particles made
+              // where the pointer is fly off the way it was going.
+              var moving = number(said.controlpoint, 0);
+              least = number(said.min, 1);
+              most = number(said.max, 1);
+              return function (particle) {
+                var speed = system.pointVelocity(moving), share = pick(least, most);
+                particle.vx += speed[0] * share;
+                particle.vy += speed[1] * share;
+                particle.vz += speed[2] * share;
+              };
+            case 'remapinitialvalue':
+              return remapping(said, system);
+            case 'inheritinitialvaluefromevent':
+              // A child's particle made by one of its parent's starts as that one is.
+              var taking = inheriting(said);
+              return function (particle) {
+                var parent = particle.from && (particle.from.source || particle.from.host);
+                if (parent) taking(particle, parent);
+              };
             default:
               note('“' + system.name + '”: what sets up a particle by “' + said.name + '” is not played');
               return null;
           }
+        }
+
+        // A property of a new particle set by something measured: how far it is from one of the
+        // system's points, how far two points are apart, how long the system has run — or chance.
+        function remapping(said, system) {
+          var input = key(said.input || 'random');
+          var from = number(said.inputrangemin, 0), to = number(said.inputrangemax, 1);
+          var low = numbers(said.outputrangemin, 3, 0), high = numbers(said.outputrangemax, 3, 1);
+          var how = key(said.operation || 'remap');
+          var output = key(said.output || '');
+          var first = number(said.inputcontrolpoint0, 0), second = number(said.inputcontrolpoint1, 1);
+          function measured(particle) {
+            var a, b;
+            if (input === 'distancetocontrolpoint') {
+              a = system.pointAt(first);
+              return Math.sqrt(Math.pow(particle.x - a[0], 2) + Math.pow(particle.y - a[1], 2) + Math.pow(particle.z - a[2], 2));
+            }
+            if (input === 'distancebetweencontrolpoints') {
+              a = system.pointAt(first);
+              b = system.pointAt(second);
+              return Math.sqrt(Math.pow(a[0] - b[0], 2) + Math.pow(a[1] - b[1], 2) + Math.pow(a[2] - b[2], 2));
+            }
+            if (input === 'particlesystemtime' || input === 'time') return system.age;
+            if (input === 'lifetime') return particle.life;
+            return mix(from, to, Math.random());
+          }
+          function put(old, value) {
+            return how === 'add' ? old + value : (how === 'multiply' ? old * value : value);
+          }
+          var setters = {
+            color: function (particle, value) {
+              particle.red = put(particle.red, value[0]);
+              particle.green = put(particle.green, value[1]);
+              particle.blue = put(particle.blue, value[2]);
+            },
+            size: function (particle, value) { particle.size = put(particle.size, value[0]); },
+            alpha: function (particle, value) { particle.alpha = put(particle.alpha, value[0]); },
+            lifetime: function (particle, value) { particle.life = Math.max(0.01, put(particle.life, value[0])); },
+            velocity: function (particle, value) {
+              particle.vx = put(particle.vx, value[0]);
+              particle.vy = put(particle.vy, value[1]);
+              particle.vz = put(particle.vz, value[2]);
+            },
+            rotation: function (particle, value) { particle.angle = put(particle.angle, value[2]); },
+            angularvelocity: function (particle, value) { particle.spin = put(particle.spin, value[2]); }
+          };
+          setters.opacity = setters.alpha;
+          setters.angle = setters.rotation;
+          var set = setters[output];
+          if (!set) {
+            note('“' + system.name + '”: a particle\'s “' + String(said.output) + '” set by “' + said.name + '” is not played');
+            return null;
+          }
+          return function (particle) {
+            var share = to === from ? 0 : Math.max(0, Math.min(1, (measured(particle) - from) / (to - from)));
+            set(particle, [mix(low[0], high[0], share), mix(low[1], high[1], share), mix(low[2], high[2], share)]);
+          };
+        }
+
+        // Takes what a particle of a child has from the particle of its parent it goes with: its
+        // color unless another property is said.
+        function inheriting(said) {
+          var what = key(said.input || said.output || 'color');
+          return function (particle, parent) {
+            if (what === 'size') {
+              particle.size = parent.size * (parent.sizeNow || 1);
+            } else if (what === 'alpha' || what === 'opacity') {
+              particle.alpha = parent.alpha * (parent.alphaNow || 1);
+            } else if (what === 'velocity') {
+              particle.vx = parent.vx;
+              particle.vy = parent.vy;
+              particle.vz = parent.vz;
+            } else if (what === 'rotation' || what === 'angle') {
+              particle.angle = parent.angle;
+            } else {
+              particle.red = parent.red * (parent.redNow || 1);
+              particle.green = parent.green * (parent.greenNow || 1);
+              particle.blue = parent.blue * (parent.blueNow || 1);
+            }
+          };
         }
 
         // How far a change that runs from `start` to `end` of a particle's life has got.
@@ -4508,6 +5341,7 @@ public enum WallpaperEngineRuntime {
                 particle.vy += dy * by;
                 particle.vz += dz * by;
               };
+            case 'vortex_v2':
             case 'vortex':
               // Swept round one of the system's points: fastest within the inner distance, less
               // and less up to the outer one.
@@ -4560,12 +5394,183 @@ public enum WallpaperEngineRuntime {
               if (remapped === 'alpha' || remapped === 'opacity') {
                 return function (particle, seconds, share) { particle.alphaNow *= mix(lowest[0], highest[0], wandered(particle, share, 0)); };
               }
+              if (remapped === 'color') {
+                return function (particle, seconds, share) {
+                  particle.redNow *= mix(lowest[0], highest[0], wandered(particle, share, 0));
+                  particle.greenNow *= mix(lowest[1], highest[1], wandered(particle, share, 1));
+                  particle.blueNow *= mix(lowest[2], highest[2], wandered(particle, share, 2));
+                };
+              }
+              if (remapped === 'rotation' || remapped === 'angle') {
+                return function (particle, seconds, share) { particle.angle = taken(particle.angle, mix(lowest[2], highest[2], wandered(particle, share, 2)), seconds); };
+              }
+              if (remapped === 'angularvelocity') {
+                return function (particle, seconds, share) { particle.spin = taken(particle.spin, mix(lowest[2], highest[2], wandered(particle, share, 2)), seconds); };
+              }
               note('“' + system.name + '”: a particle\'s “' + String(said.output) + '” changed by “remapvalue” is not played');
               return null;
+            case 'capvelocity':
+              // No faster than a speed, from a point of its life on.
+              var fastest = number(said.maxspeed, 100), capFrom = number(said.blendinstart, 0), capTo = number(said.blendinend, 0);
+              return function (particle, seconds, share) {
+                var speed = Math.sqrt(particle.vx * particle.vx + particle.vy * particle.vy + particle.vz * particle.vz);
+                if (speed <= fastest || speed < 0.000001) return;
+                var by = mix(1, fastest / speed, ramp(share, capFrom, capTo));
+                particle.vx *= by;
+                particle.vy *= by;
+                particle.vz *= by;
+              };
+            case 'reducemovementnearcontrolpoint':
+              // Slowed near one of the system's points: the most within the inner distance, less and
+              // less up to the outer one.
+              var slowAt = number(said.controlpoint, 0), slowInner = number(said.distanceinner, 0), slowOuter = number(said.distanceouter, 100);
+              var cutInner = number(said.reductioninner, 1), cutOuter = number(said.reductionouter, 0);
+              return function (particle, seconds) {
+                var point = system.pointAt(slowAt);
+                var far = Math.sqrt(Math.pow(particle.x - point[0], 2) + Math.pow(particle.y - point[1], 2) + Math.pow(particle.z - point[2], 2));
+                var out = slowOuter > slowInner ? Math.max(0, Math.min(1, (far - slowInner) / (slowOuter - slowInner))) : (far > slowOuter ? 1 : 0);
+                var keep = Math.max(0, 1 - mix(cutInner, cutOuter, out) * seconds);
+                particle.vx *= keep;
+                particle.vy *= keep;
+                particle.vz *= keep;
+              };
+            case 'maintaindistancetocontrolpoint':
+              // Kept at a distance from one of the system's points: drawn back to it from either side.
+              var keptFrom = number(said.controlpoint, 0), keptAt = number(said.distance, 100), firm = number(said.variablestrength, 5);
+              return function (particle, seconds) {
+                var point = system.pointAt(keptFrom);
+                var dx = particle.x - point[0], dy = particle.y - point[1], dz = particle.z - point[2];
+                var far = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (far < 0.0001) return;
+                var by = (keptAt - far) / far * Math.min(1, firm * seconds);
+                particle.x += dx * by;
+                particle.y += dy * by;
+                particle.z += dz * by;
+              };
+            case 'maintaindistancebetweencontrolpoints':
+              // Kept on the way between two of the system's points, as on a string held between them.
+              var endA = number(said.controlpointstart, 0), endB = number(said.controlpointend, 1), hold = number(said.variablestrength, 5);
+              return function (particle, seconds) {
+                var a = system.pointAt(endA), b = system.pointAt(endB);
+                var wx = b[0] - a[0], wy = b[1] - a[1], wz = b[2] - a[2];
+                var length = wx * wx + wy * wy + wz * wz;
+                var along = length > 0 ? Math.max(0, Math.min(1, ((particle.x - a[0]) * wx + (particle.y - a[1]) * wy + (particle.z - a[2]) * wz) / length)) : 0;
+                var by = Math.min(1, hold * seconds);
+                particle.x += (a[0] + wx * along - particle.x) * by;
+                particle.y += (a[1] + wy * along - particle.y) * by;
+                particle.z += (a[2] + wz * along - particle.z) * by;
+              };
+            case 'boids':
+              // A flock: drawn to the middle of those near it and kept apart from the nearest,
+              // going the way they go.
+              var sight = Math.max(1, number(said.neighborthreshold, 50));
+              var cohesion = number(said.cohesionfactor, 1), separation = number(said.separationfactor, 1), alignment = number(said.alignmentfactor, 0);
+              return function (particle, seconds) {
+                var near = system.neighbors(particle, sight);
+                if (!near.length) return;
+                var cx = 0, cy = 0, cz = 0, sx = 0, sy = 0, sz = 0, ax = 0, ay = 0, az = 0;
+                near.forEach(function (other) {
+                  cx += other.x;
+                  cy += other.y;
+                  cz += other.z;
+                  ax += other.vx;
+                  ay += other.vy;
+                  az += other.vz;
+                  var dx = particle.x - other.x, dy = particle.y - other.y, dz = particle.z - other.z;
+                  var far = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.0001;
+                  var push = (sight - far) / sight / far;
+                  sx += dx * push;
+                  sy += dy * push;
+                  sz += dz * push;
+                });
+                var count = near.length;
+                particle.vx += ((cx / count - particle.x) * cohesion + sx * separation * sight + (ax / count - particle.vx) * alignment) * seconds;
+                particle.vy += ((cy / count - particle.y) * cohesion + sy * separation * sight + (ay / count - particle.vy) * alignment) * seconds;
+                particle.vz += ((cz / count - particle.z) * cohesion + sz * separation * sight + (az / count - particle.vz) * alignment) * seconds;
+              };
+            case 'collisionplane':
+            case 'collisionquad':
+            case 'collisionsphere':
+            case 'collisionbounds':
+              return collision(said, system);
+            case 'inheritvaluefromevent':
+              // A child's particle that goes with one of its parent's keeps taking after it.
+              var takingNow = inheriting(said);
+              return function (particle) {
+                var parent = particle.from && (particle.from.host || particle.from.source);
+                if (parent) takingNow(particle, parent);
+              };
             default:
               note('“' + system.name + '”: what changes a particle by “' + said.name + '” is not played');
               return null;
           }
+        }
+
+        // What a particle meets and what then becomes of it: it bounces off, slides along, stops or
+        // dies. A plane (the ground, say), a rectangle of one, a ball, or the edges of the scene.
+        function collision(said, system) {
+          var kind = key(said.name);
+          var behavior = key(said.collisionbehavior || 'bounce');
+          var bounce = number(said.bouncefactor, behavior === 'slide' ? 0 : 0.5);
+          var origin = numbers(said.origin, 3, 0);
+          var normal = numbers(said.plane || said.normal || said.forward, 3, [0, 1, 0]);
+          var length = Math.sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]) || 1;
+          normal = normal.map(function (part) { return part / length; });
+          var distance = number(said.distance, 0);
+          var size = numbers(said.size, 2, 100);
+          var radius = number(said.radius, 100);
+          // Meets a surface with `n` pointing to the side it must stay on, `under` deep beyond it.
+          function meet(particle, n, under) {
+            particle.x += n[0] * under;
+            particle.y += n[1] * under;
+            particle.z += n[2] * under;
+            if (behavior === 'kill' || behavior === 'die') {
+              particle.age = particle.life;
+              return;
+            }
+            var toward = particle.vx * n[0] + particle.vy * n[1] + particle.vz * n[2];
+            if (toward >= 0) return;
+            var by = behavior === 'stop' ? 1 : (behavior === 'slide' ? 1 : 1 + bounce);
+            particle.vx -= n[0] * toward * by;
+            particle.vy -= n[1] * toward * by;
+            particle.vz -= n[2] * toward * by;
+            if (behavior === 'stop') {
+              particle.vx = particle.vy = particle.vz = 0;
+            }
+          }
+          if (kind === 'collisionsphere') {
+            return function (particle) {
+              var dx = particle.x - origin[0], dy = particle.y - origin[1], dz = particle.z - origin[2];
+              var far = Math.sqrt(dx * dx + dy * dy + dz * dz);
+              if (far >= radius || far < 0.0001) return;
+              meet(particle, [dx / far, dy / far, dz / far], radius - far);
+            };
+          }
+          if (kind === 'collisionbounds') {
+            return function (particle) {
+              var box = system.sceneBox();
+              if (!box) return;
+              if (particle.x < box[0]) meet(particle, [1, 0, 0], box[0] - particle.x);
+              if (particle.x > box[2]) meet(particle, [-1, 0, 0], particle.x - box[2]);
+              if (particle.y < box[1]) meet(particle, [0, 1, 0], box[1] - particle.y);
+              if (particle.y > box[3]) meet(particle, [0, -1, 0], particle.y - box[3]);
+            };
+          }
+          // A plane through `origin` (a quad) or at `distance` from the system's middle.
+          var through = kind === 'collisionquad' ? origin[0] * normal[0] + origin[1] * normal[1] + origin[2] * normal[2] : distance;
+          return function (particle) {
+            var side = particle.x * normal[0] + particle.y * normal[1] + particle.z * normal[2] - through;
+            if (side >= 0) return;
+            if (kind === 'collisionquad') {
+              // Only within the rectangle, which lies across the plane.
+              var rx = particle.x - origin[0], rz = particle.z - origin[2], ry = particle.y - origin[1];
+              var across = Math.abs(normal[1]) > 0.5 ? [rx, rz] : [rx, ry];
+              if (Math.abs(across[0]) > size[0] / 2 || Math.abs(across[1]) > size[1] / 2) return;
+              // A particle that is well past it came round, not through it.
+              if (side < -Math.max(4, Math.abs(particle.vx) + Math.abs(particle.vy) + Math.abs(particle.vz)) * 0.1) return;
+            }
+            meet(particle, normal, -side);
+          };
         }
 
         function buildParticles(object, thing) {
@@ -4671,6 +5676,9 @@ public enum WallpaperEngineRuntime {
           system.pointAt = function (index) {
             var point = points.filter(function (each) { return each.id === index; })[0];
             if (!point) return [0, 0, 0];
+            // A script may have put the point somewhere since.
+            var put = (thing.said.instanceoverride || {})['controlpoint' + index];
+            if (put !== undefined && put !== null) point.onScene = numbers(put, 3, 0);
             if (point.onScene) {
               var matrix = placement(true).matrix;
               var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
@@ -4679,6 +5687,57 @@ public enum WallpaperEngineRuntime {
               return [(dx * matrix[5] - dy * matrix[4]) / area, (dy * matrix[0] - dx * matrix[1]) / area, point.onScene[2]];
             }
             return point.follows ? [pointerThere[0] + point.offset[0], pointerThere[1] + point.offset[1], point.offset[2]] : point.offset;
+          };
+          // How fast each of the system's points moves, measured from one step to the next.
+          var pointsBefore = {}, pointSpeeds = {};
+          system.pointVelocity = function (index) {
+            return pointSpeeds[index] || [0, 0, 0];
+          };
+          function measurePoints(seconds) {
+            if (!(seconds > 0)) return;
+            points.forEach(function (point) {
+              var now = system.pointAt(point.id), before = pointsBefore[point.id];
+              pointSpeeds[point.id] = before ? [(now[0] - before[0]) / seconds, (now[1] - before[1]) / seconds, (now[2] - before[2]) / seconds] : [0, 0, 0];
+              pointsBefore[point.id] = now;
+            });
+          }
+          // The scene's edges in the system's own coordinates: left, bottom, right, top.
+          system.sceneBox = function () {
+            var matrix = placement(true).matrix;
+            var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
+            if (Math.abs(area) < 1e-9) return null;
+            var xs = [], ys = [];
+            [[0, 0], [sceneWidth, 0], [0, sceneHeight], [sceneWidth, sceneHeight]].forEach(function (corner) {
+              var dx = corner[0] - matrix[12], dy = corner[1] - matrix[13];
+              xs.push((dx * matrix[5] - dy * matrix[4]) / area);
+              ys.push((dy * matrix[0] - dx * matrix[1]) / area);
+            });
+            return [Math.min.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, xs), Math.max.apply(null, ys)];
+          };
+          // The particles near one, found through a grid of cells as large as the distance looked
+          // across, made once a step.
+          var grid = null, gridSize = 0, gridAge = -1;
+          system.neighbors = function (particle, reach) {
+            if (gridAge !== system.age || gridSize !== reach) {
+              grid = {};
+              gridSize = reach;
+              gridAge = system.age;
+              system.particles.forEach(function (each) {
+                var cell = Math.floor(each.x / reach) + ',' + Math.floor(each.y / reach);
+                (grid[cell] || (grid[cell] = [])).push(each);
+              });
+            }
+            var near = [], cx = Math.floor(particle.x / reach), cy = Math.floor(particle.y / reach);
+            for (var gx = cx - 1; gx <= cx + 1; gx++) {
+              for (var gy = cy - 1; gy <= cy + 1; gy++) {
+                (grid[gx + ',' + gy] || []).forEach(function (other) {
+                  if (other === particle || near.length >= 32) return;
+                  var dx = other.x - particle.x, dy = other.y - particle.y, dz = other.z - particle.z;
+                  if (dx * dx + dy * dy + dz * dz < reach * reach) near.push(other);
+                });
+              }
+            }
+            return near;
           };
           function findPointer() {
             var matrix = placement(true).matrix;
@@ -4691,6 +5750,8 @@ public enum WallpaperEngineRuntime {
             return {
               point: number(emitter.controlpoint, 0), withPointer: follows(number(emitter.controlpoint, 0)),
               box: key(emitter.name) === 'boxrandom',
+              // Made all over a layer's picture: here, over the scene where the system lies.
+              layer: key(emitter.name) === 'layerimage',
               origin: numbers(emitter.origin, 3, 0), directions: numbers(emitter.directions, 3, 1),
               least: numbers(emitter.distancemin, 3, 0), most: numbers(emitter.distancemax, 3, 256),
               sign: numbers(emitter.sign, 3, 0),
@@ -4740,7 +5801,7 @@ public enum WallpaperEngineRuntime {
           // Something happened to a particle of the parent: it was made, or it died.
           system.event = function (particle) {
             var at = ownPoint(particle.x + (particle.shiftX || 0), particle.y + (particle.shiftY || 0), particle.z);
-            if (at) system.instances.push({ at: at, age: 0, owed: [], burst: [], alive: 0 });
+            if (at) system.instances.push({ at: at, age: 0, owed: [], burst: [], alive: 0, source: particle });
           };
 
           // A child that follows the parent's particles makes its particles where each of them is.
@@ -4769,7 +5830,10 @@ public enum WallpaperEngineRuntime {
                              angle: 0, spin: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, from: instance, base: instance.at.slice() };
             var away = [0, 0, 0];
             var axis;
-            if (emitter.box) {
+            var spread = emitter.layer ? system.sceneBox() : null;
+            if (spread) {
+              away = [mix(spread[0], spread[2], Math.random()), mix(spread[1], spread[3], Math.random()), 0];
+            } else if (emitter.box) {
               for (axis = 0; axis < 3; axis++) {
                 var side = emitter.sign[axis] > 0 ? 1 : (emitter.sign[axis] < 0 ? -1 : (Math.random() < 0.5 ? -1 : 1));
                 away[axis] = side * mix(emitter.least[axis], emitter.most[axis], Math.random()) * emitter.directions[axis];
@@ -4805,8 +5869,17 @@ public enum WallpaperEngineRuntime {
             tell('eventspawn', particle);
           }
 
+          system.emitNow = function (count) {
+            var instance = system.instances[0];
+            if (!instance) return;
+            for (var made = 0; made < count && room(instance); made++) {
+              system.emitters.forEach(function (emitter) { if (room(instance)) make(emitter, instance); });
+            }
+            dirty = true;
+          };
           system.step = function (seconds) {
             system.age += seconds;
+            if (points.length) measurePoints(seconds);
             if (points.some(function (point) { return point.follows; })) findPointer();
             if (kind === 'eventfollow' && system.owner) followParent();
             system.instances.forEach(function (instance) {
@@ -4815,6 +5888,8 @@ public enum WallpaperEngineRuntime {
                 if (instance.age < emitter.waits) return;
                 // Particles made where the pointer is are not made while it is away.
                 if (emitter.withPointer && !pointerSeen) return;
+                // A script may have stopped the system making particles.
+                if (system.emitting === false) return;
                 if (emitter.burst > 0 && !instance.burst[index]) {
                   instance.burst[index] = true;
                   for (var first = 0; first < emitter.burst && room(instance); first++) make(emitter, instance);
@@ -5525,6 +6600,7 @@ public enum WallpaperEngineRuntime {
 
         // Whether anything of the scene is another picture every frame.
         function isMoving() {
+          if (shake.on) return true;
           return objects.some(function (object) {
             // What changes by itself over time, also whether the object shows.
             if (Object.keys(object.lives).some(function (name) {
@@ -5552,8 +6628,34 @@ public enum WallpaperEngineRuntime {
         // middle, and follows the pointer with a delay.
 
         var eye = { on: false, amount: 0, x: 0, y: 0, settling: false };
+        // The camera may shake: the whole scene is moved a little, smoothly and without end, as
+        // far as the amplitude says (a share of the scene's height), as fast as the speed says,
+        // and the rougher, the more of a quicker trembling there is in it.
+        var shake = { on: false, x: 0, y: 0 };
+        // Where a script has moved the camera from the scene's middle, and how near it is.
+        var camera = { x: 0, y: 0, zoom: 1 };
+
+        function tremble() {
+          shake.on = flag(general.camerashake, false);
+          if (!shake.on) {
+            if (shake.x || shake.y) {
+              shake.x = shake.y = 0;
+              dirty = true;
+            }
+            return;
+          }
+          var reach = number(general.camerashakeamplitude, 0.5) / 100 * sceneHeight;
+          var at = time * number(general.camerashakespeed, 3), rough = Math.max(0, number(general.camerashakeroughness, 1));
+          function wobble(seed) {
+            return (smoothNoise(at, seed * 13.7, 4096, seed) - 0.5) * 2 + rough * 0.5 * (smoothNoise(at * 4, seed * 29.1, 4096, seed + 1) - 0.5) * 2;
+          }
+          shake.x = reach * wobble(3);
+          shake.y = reach * wobble(9);
+          dirty = true;
+        }
 
         function look(seconds) {
+          tremble();
           eye.on = flag(general.cameraparallax, false);
           if (!eye.on) {
             eye.settling = false;
@@ -5624,7 +6726,11 @@ public enum WallpaperEngineRuntime {
         ].join('\n'), 'the player\'s own shader');
 
         function glow() {
-          var strength = number(general.bloomstrength, 2), threshold = number(general.bloomthreshold, 0.65);
+          // In a scene drawn with a high range of brightness, the glow has settings of its own; its
+          // threshold counts from brighter than white, which a picture here never is.
+          var hdr = flag(general.hdr, false);
+          var strength = hdr ? number(general.bloomhdrstrength, 2) : number(general.bloomstrength, 2);
+          var threshold = hdr ? Math.min(0.95, number(general.bloomhdrthreshold, 1) * 0.65) : number(general.bloomthreshold, 0.65);
           if (!brightProgram || !blurProgram || !(strength > 0)) return;
           var quarter = acquire(sceneTarget.width / 4, sceneTarget.height / 4);
           var small = [acquire(sceneTarget.width / 8, sceneTarget.height / 8), acquire(sceneTarget.width / 8, sceneTarget.height / 8)];
@@ -5690,12 +6796,20 @@ public enum WallpaperEngineRuntime {
 
         var frames = 0;
 
+        var keptWidth = 0; // the size of the picture kept from before, for a scene that does not clear it
         function draw() {
           gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
           gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
           gl.disable(gl.BLEND);
-          gl.clearColor(clear[0], clear[1], clear[2], 1);
-          gl.clear(gl.COLOR_BUFFER_BIT);
+          // A scene may say not to clear what was drawn before, so that what moves leaves its trace
+          // on the picture. The glow is added onto the picture, so with it the picture is cleared
+          // all the same, as it is for the first frame.
+          var keeps = general.clearenabled === false && !flag(general.bloom, false) && frames > 0 && sceneTarget.width === keptWidth;
+          keptWidth = sceneTarget.width;
+          if (!keeps) {
+            gl.clearColor(clear[0], clear[1], clear[2], 1);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+          }
           surface = { target: sceneTarget, copy: copyTarget, width: sceneWidth, height: sceneHeight, left: 0, bottom: 0 };
           objects.slice().forEach(function (object) {
             // What a layer holds is drawn by that layer.
