@@ -1,14 +1,14 @@
 import AppKit
+import CEFHost
 import CoreServices
 import WallpaperCore
-import WebKit
 
-/// Shows a web wallpaper — a scene or any page of the library — in a web view.
+/// Shows a web wallpaper — a scene or any page of the library — drawn by Chromium.
 ///
-/// Pausing hides the web view behind a still of itself: a hidden page stops its videos, its
-/// animations and its timers, which is what saves the energy, whatever the page is made of.
+/// Pausing hides the page behind a still of itself: a hidden page stops its animations and its
+/// timers, which is what saves the energy, whatever the page is made of.
 @MainActor
-final class WebWallpaperView: NSView, WKNavigationDelegate {
+final class WebWallpaperView: NSView, CEFPageViewDelegate {
     /// Called, on the main thread, when the wallpaper's files change on disk.
     var onContentChange: (() -> Void)?
 
@@ -32,8 +32,9 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     var frameRate = 0 {
         didSet {
             guard frameRate != oldValue, let webView, let project else { return }
-            installUserScripts(in: webView.configuration.userContentController, for: project)
-            webView.evaluateJavaScript("window.__wallaeroDrawing && window.__wallaeroDrawing.setFrameRate(\(frameRate))")
+            installUserScripts(in: webView, for: project)
+            webView.frameRateLimit = Int32(drawingRate)
+            webView.executeScript("window.__wallaeroDrawing && window.__wallaeroDrawing.setFrameRate(\(frameRate))")
         }
     }
 
@@ -49,8 +50,8 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         }
     }
 
-    /// Makes the web engine refuse to start any video or sound by itself, the way it refuses
-    /// videos in Low Power Mode. Only the helper that checks that the app starts them sets this.
+    /// Makes the web engine refuse to start any video or sound by itself. Chromium is started
+    /// with that allowed for every page, so this is kept only for the helper that sets it.
     var mediaNeedsUserAction = false
 
     // The scene editor shows its preview with this view too. These are set before `show`.
@@ -61,7 +62,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     /// the scene file is reported here instead of being shown.
     var onSceneFileChange: (() -> Void)?
 
-    private var webView: WKWebView?
+    private var webView: CEFPageView?
     private let stillView = NSImageView()
     /// A picture of the page, behind it. A web view is see-through until its page has drawn,
     /// and on a busy Mac — at login above all — that can take seconds; this picture is what is
@@ -131,26 +132,23 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
             _ = try? SceneProject.refreshGeneratedFiles(in: project.folder)
         }
 
-        let configuration = WKWebViewConfiguration()
-        configuration.mediaTypesRequiringUserActionForPlayback = mediaNeedsUserAction ? .all : []
-        // A page opened from a file may not load the other files of its folder as modules or
-        // fetch them: to the web engine every file is a site of its own. Wallpapers written as
-        // modules need that, and the page can read nothing outside its folder either way.
-        configuration.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
-        installUserScripts(in: configuration.userContentController, for: project)
-        configuration.userContentController.add(MessageRelay { [weak self] in self?.hostMessage($0) }, name: "wallaeroHost")
-        if editorScript != nil {
-            configuration.userContentController.add(MessageRelay { [weak self] in self?.onEditorMessage?($0) }, name: "wallaeroEditor")
-        }
-        let webView = WKWebView(frame: bounds, configuration: configuration)
+        let webView = CEFPageView(frame: bounds)
         webView.autoresizingMask = [.width, .height]
-        webView.navigationDelegate = self
-        // Black shows through until the page has drawn, instead of a white flash.
-        webView.setValue(false, forKey: "drawsBackground")
+        webView.delegate = self
+        // The page may load the files of its own folder and no others.
+        webView.readableFolders = [project.folder.path]
+        webView.frameRateLimit = Int32(drawingRate)
+        webView.audioMuted = isMuted
+        // The editor's preview is worked with the mouse; a wallpaper on the desktop is told of
+        // the pointer by `PointerForwarder`.
+        webView.forwardsMouse = editorScript != nil
+        installUserScripts(in: webView, for: project)
+        // See-through until the page has drawn: black, or the picture behind, shows instead of a
+        // white flash.
         addSubview(webView, positioned: .below, relativeTo: stillView)
         self.webView = webView
         beginLoading()
-        webView.loadFileURL(project.entryURL, allowingReadAccessTo: project.folder)
+        webView.load(project.entryURL)
 
         if watchingForChanges {
             watcher = FolderWatcher(folder: project.folder) { [weak self] paths in
@@ -164,7 +162,8 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         freezeGeneration += 1
         loadGeneration += 1
         isReady = false
-        webView?.navigationDelegate = nil
+        webView?.delegate = nil
+        webView?.close()
         webView?.removeFromSuperview()
         webView = nil
         project = nil
@@ -189,15 +188,17 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     /// Runs a script in the page, once it is there.
     func evaluate(_ script: String) {
         guard hasLoaded else { return }
-        webView?.evaluateJavaScript(script)
+        webView?.executeScript(script)
     }
 
     /// What a script evaluates to in the page; nil if it fails or the page is not there.
     func value(of script: String) async -> Any? {
         guard hasLoaded, let webView else { return nil }
-        return await withCheckedContinuation { continuation in
-            webView.evaluateJavaScript(script) { value, _ in continuation.resume(returning: value) }
+        let json: String? = await withCheckedContinuation { continuation in
+            webView.evaluateScript(script) { continuation.resume(returning: $0) }
         }
+        guard let data = json?.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
     }
 
     /// Whether the page is hidden behind a still of itself, as it is while paused.
@@ -205,11 +206,19 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
 
     /// A picture of the page as it looks now.
     func snapshot() async -> CGImage? {
-        guard let webView else { return nil }
-        let image: NSImage? = await withCheckedContinuation { continuation in
-            webView.takeSnapshot(with: nil) { image, _ in continuation.resume(returning: image) }
-        }
-        return image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        webView?.copySnapshot()
+    }
+
+    /// The page as last drawn, at the view's size in points.
+    private func still() -> NSImage? {
+        guard let image = webView?.copySnapshot() else { return nil }
+        return NSImage(cgImage: image, size: bounds.size)
+    }
+
+    /// How many frames a second Chromium draws the page at: the app's rate, or else the screen's.
+    private var drawingRate: Int {
+        if frameRate > 0 { return frameRate }
+        return max(60, window?.screen?.maximumFramesPerSecond ?? NSScreen.main?.maximumFramesPerSecond ?? 60)
     }
 
     // MARK: - Playback settings
@@ -228,12 +237,13 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         guard muted != isMuted || volume != self.volume else { return }
         isMuted = muted
         self.volume = volume
+        webView?.audioMuted = muted
         applyHostSettings()
     }
 
     private func applyHostSettings() {
         guard hasLoaded else { return }
-        webView?.evaluateJavaScript("window.__wallaeroHost && window.__wallaeroHost.apply(\(hostSettingsJSON))")
+        webView?.executeScript("window.__wallaeroHost && window.__wallaeroHost.apply(\(hostSettingsJSON))")
     }
 
     /// What the page's media is to do: `playing` is false while the wallpaper is paused.
@@ -247,7 +257,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
             isFrozen = false
             freezeGeneration += 1
             let generation = freezeGeneration
-            webView.isHidden = false
+            webView.pageHidden = false
             applyHostSettings() // lets the videos run again
             // The page takes a moment to draw again; the still covers it until then.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -260,11 +270,12 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
             freezeGeneration += 1
             let generation = freezeGeneration
             applyHostSettings() // stands the videos still; hiding the page does not always
-            webView.takeSnapshot(with: nil) { [weak self] image, _ in
+            // A moment for the videos' last frame to be drawn before the picture is taken.
+            DispatchQueue.main.async { [weak self] in
                 guard let self, self.freezeGeneration == generation else { return }
-                self.stillView.image = image
+                self.stillView.image = self.still()
                 self.stillView.isHidden = false
-                self.webView?.isHidden = true
+                self.webView?.pageHidden = true
             }
         }
     }
@@ -276,7 +287,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     func pointer(_ kind: PointerForwarder.Kind, at point: CGPoint) {
         guard hasLoaded, isPlaying, !isFrozen else { return }
         let place = String(format: "%.1f, %.1f", point.x, point.y)
-        webView?.evaluateJavaScript("window.__wallaeroHost && window.__wallaeroHost.pointer('\(kind.rawValue)', \(place))")
+        webView?.executeScript("window.__wallaeroHost && window.__wallaeroHost.pointer('\(kind.rawValue)', \(place))")
     }
 
     // MARK: - Sound
@@ -311,7 +322,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         isToldMedia = wanted
         if wanted {
             NowPlaying.shared.addListener(self) { [weak self] script in
-                self?.webView?.evaluateJavaScript(script)
+                self?.webView?.executeScript(script)
             }
         } else {
             NowPlaying.shared.removeListener(self)
@@ -326,7 +337,7 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         isHearingSound = wanted
         if wanted {
             SoundSpectrum.shared.addListener(self) { [weak self] script in
-                self?.webView?.evaluateJavaScript(script)
+                self?.webView?.executeScript(script)
             }
         } else {
             SoundSpectrum.shared.removeListener(self)
@@ -371,20 +382,15 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
 
     /// A page is blank while it loads again. A picture of how it looked covers that; a paused
     /// wallpaper already has its still in front.
-    private func coverWhileLoading(_ webView: WKWebView) {
-        guard stillView.isHidden else { return }
-        let generation = loadGeneration
-        webView.takeSnapshot(with: nil) { [weak self] image, _ in
-            guard let self, let image, self.loadGeneration == generation, !self.isReady, !self.isFrozen else { return }
-            self.stillView.image = image
-            self.stillView.isHidden = false
-        }
+    private func coverWhileLoading() {
+        guard stillView.isHidden, let image = still() else { return }
+        stillView.image = image
+        stillView.isHidden = false
     }
 
     // MARK: - Page set-up
 
-    private func installUserScripts(in controller: WKUserContentController, for project: WebProject) {
-        controller.removeAllUserScripts()
+    private func installUserScripts(in webView: CEFPageView, for project: WebProject) {
         var source = Self.bridgeScript.replacingOccurrences(of: "__HOST_SETTINGS__", with: hostSettingsJSON)
         if project.isScene, let scene = Self.sceneJSON(in: project.folder) {
             // File pages cannot fetch files, so the scene is handed to the runtime directly.
@@ -396,12 +402,15 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         let drawing = Self.drawingScript
             .replacingOccurrences(of: "__FRAME_RATE__", with: String(max(0, frameRate)))
             .replacingOccurrences(of: "__RENDER_SCALE__", with: String(max(0.05, min(1, renderScale))))
-        controller.addUserScript(WKUserScript(source: drawing, injectionTime: .atDocumentStart, forMainFrameOnly: false))
-        controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        controller.addUserScript(WKUserScript(source: Self.frameScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        var scripts = [
+            CEFUserScript(source: drawing, atDocumentEnd: false, mainFrameOnly: false),
+            CEFUserScript(source: source, atDocumentEnd: false, mainFrameOnly: true),
+            CEFUserScript(source: Self.frameScript, atDocumentEnd: false, mainFrameOnly: false),
+        ]
         if let editorScript {
-            controller.addUserScript(WKUserScript(source: editorScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+            scripts.append(CEFUserScript(source: editorScript, atDocumentEnd: true, mainFrameOnly: true))
         }
+        webView.userScripts = scripts
     }
 
     /// The scene file's text, if it is valid JSON; it goes to the page as is, unknown keys and all.
@@ -446,11 +455,9 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         }
         start(media);
       }
-      // In Low Power Mode WebKit does not start a video by itself, and over one marked
-      // `autoplay` it draws a start button of its own, which a page cannot hide. So the mark
-      // is taken off and the video is started from here instead. A script the app runs counts
-      // as the user's own action, which may start a video in any mode; `apply` is how the app
-      // does that once the page has loaded.
+      // A video marked `autoplay` is started from here instead of by the web engine, which
+      // may hold such a video back (a web engine does in some modes, such as WebKit in Low
+      // Power Mode); `apply` is how the app does that once the page has loaded.
       var autoplaying = new WeakSet();
       function start(media) {
         if (media.autoplay) {
@@ -850,13 +857,19 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     })();
     """#
 
-    // MARK: - WKNavigationDelegate
+    // MARK: - CEFPageViewDelegate
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard webView === self.webView else { return }
+    func pageView(_ view: CEFPageView, didFinishLoadingWithError error: String?) {
+        guard view === webView else { return }
+        if let error {
+            Log.playback.error("Cannot show the web wallpaper \(self.project?.folder.lastPathComponent ?? "?", privacy: .public): \(error, privacy: .public)")
+            pageDidSettle()
+            pageIsReady()
+            return
+        }
         if let properties = project?.userPropertiesJSON {
             // The wallpaper's own settings, at the values its author chose.
-            webView.evaluateJavaScript("""
+            view.executeScript("""
             (function (properties) {
               var listener = window.wallpaperPropertyListener;
               if (listener && typeof listener.applyUserProperties === 'function') listener.applyUserProperties(properties);
@@ -866,19 +879,17 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
         pageDidSettle()
     }
 
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        pageFailed(webView, error)
-    }
-
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        pageFailed(webView, error)
-    }
-
-    private func pageFailed(_ webView: WKWebView, _ error: Error) {
-        guard webView === self.webView else { return }
-        Log.playback.error("Cannot show the web wallpaper \(self.project?.folder.lastPathComponent ?? "?", privacy: .public): \(error.localizedDescription, privacy: .public)")
-        pageDidSettle()
-        pageIsReady()
+    func pageView(_ view: CEFPageView, didReceiveMessage json: String, forHandler handler: String) {
+        guard view === webView, let data = json.data(using: .utf8),
+              let message = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else {
+            return
+        }
+        switch handler {
+        case "wallaeroHost": hostMessage(message)
+        case "wallaeroEditor": onEditorMessage?(message)
+        default: break
+        }
     }
 
     private func pageDidSettle() {
@@ -918,9 +929,9 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
                 return
             }
             // Only the scene changed: redraw it in place, so the video does not start over.
-            installUserScripts(in: webView.configuration.userContentController, for: project)
+            installUserScripts(in: webView, for: project)
             if let scene = Self.sceneJSON(in: project.folder) {
-                webView.evaluateJavaScript("window.wallaero && window.wallaero.setScene(\(scene))")
+                webView.executeScript("window.wallaero && window.wallaero.setScene(\(scene))")
             }
         } else {
             reloadPage()
@@ -932,31 +943,18 @@ final class WebWallpaperView: NSView, WKNavigationDelegate {
     private func reloadPage() {
         guard let project, let webView, let reread = WebProject(folder: project.folder) else { return }
         self.project = reread
-        installUserScripts(in: webView.configuration.userContentController, for: reread)
+        installUserScripts(in: webView, for: reread)
         hasLoaded = false
         pageWantsSound = false
         pageWantsMedia = false
         updateListening()
         beginLoading()
-        coverWhileLoading(webView)
-        webView.isHidden = false
+        coverWhileLoading()
+        webView.pageHidden = false
         isFrozen = false
         freezeGeneration += 1
-        webView.loadFileURL(reread.entryURL, allowingReadAccessTo: reread.folder)
-    }
-}
-
-/// Hands a page's messages on without the page keeping the view alive.
-private final class MessageRelay: NSObject, WKScriptMessageHandler {
-    private let handler: ([String: Any]) -> Void
-
-    init(handler: @escaping ([String: Any]) -> Void) {
-        self.handler = handler
-    }
-
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any] else { return }
-        handler(body)
+        webView.readableFolders = [reread.folder.path]
+        webView.load(reread.entryURL)
     }
 }
 

@@ -5,7 +5,7 @@ Live wallpapers for macOS: videos, GIFs and pictures on your desktop — beneath
 
 ## Installation
 
-Build the app on your Mac. You need Xcode or its Command Line Tools (`xcode-select --install`) and macOS 13 Ventura or later.
+Build the app on your Mac. You need Xcode or its Command Line Tools (`xcode-select --install`) and macOS 13 Ventura or later. The first build downloads Chromium, which draws web wallpapers and scenes (about 130 MB for each processor), and builds the video encoders; later builds reuse them.
 
 ```bash
 git clone https://github.com/M1nata1/WallAero-Engine.git
@@ -15,7 +15,7 @@ scripts/build.sh --native && open "build/WallAero Engine.app"
 
 An app built on your own Mac opens right away. To keep it in your Applications folder, run `scripts/build.sh --native --install`.
 
-To run it straight from the sources, without building the app:
+To run it straight from the sources, without building the app (Chromium comes from the first `scripts/build.sh --native`):
 
 ```bash
 swift run --build-system native WallAeroEngine
@@ -23,7 +23,7 @@ swift run --build-system native WallAeroEngine
 
 ### Ready-made build
 
-A ready-made build is in the repository: [**download WallAeroEngine.zip**](https://github.com/M1nata1/WallAero-Engine/raw/main/dist/WallAeroEngine.zip). It runs on Macs with Apple silicon or Intel processors and needs macOS 13 Ventura or later.
+A ready-made build is on the Releases page: [**download WallAeroEngine.zip**](https://github.com/M1nata1/WallAero-Engine/releases/latest/download/WallAeroEngine.zip). It runs on Macs with Apple silicon or Intel processors and needs macOS 13 Ventura or later.
 
 1. Unzip the archive and drag WallAero Engine to your Applications folder.
 2. Open the app. It is not notarized by Apple, so on first launch macOS stops it and says it cannot verify it. Close that message.
@@ -66,7 +66,7 @@ The app is universal: macOS runs the version for its own processor, Apple silico
 ```bash
 scripts/build.sh              # build "build/WallAero Engine.app" for Apple silicon and Intel
 scripts/build.sh --install    # build and copy to /Applications
-scripts/build.sh --dist       # build and pack into dist/WallAeroEngine.zip, the download above
+scripts/build.sh --dist       # build and pack into dist/WallAeroEngine.zip, for a release
 scripts/build.sh --native     # this Mac's processor only: twice as fast, for development
 swift test                    # import, conversion and cursor-reading tests
 scripts/screenshots.sh        # retake the README screenshots in both languages in docs/screenshots
@@ -156,9 +156,10 @@ A wallpaper made for Wallpaper Engine is added the way it was downloaded: click 
 - **A web wallpaper** becomes a scene with the page as its background. The page's own settings — colors, sliders, switches, lists — show in the wallpaper's settings, named in the app's language when the wallpaper has a translation, and a change shows on the desktop at once. In the editor you can put layers of your own over the page: a clock, a text, a picture.
 - **A video wallpaper** is added as a plain video.
 - **A scene** — a wallpaper with `scene.pkg` in it — is played as it is: its pictures and the videos that stand in for pictures, with their effects, drawn by the scene's own shaders, pictures that bend on bones with their animations, its particles, also those that trail the pointer, its texts and sounds, the values it changes over time and its scripts, which follow the clock, the pointer and clicks. Layers hang on one another and are turned in depth as the scene has them. It moves with the pointer and glows where it is bright if it is made to. A text is written in the font the scene names if the Mac has it, and in a similar one if not. The settings its author gave it show in the wallpaper's settings. A wallpaper that shows what music is playing — its title, artist and cover — shows what plays in the app's own music, in Apple Music or in Spotify; for the cover from the last two, macOS asks once to let the app talk to them. In the app it is the background of a scene, and the editor lists its objects: each can be hidden, moved, scaled and turned with the mouse or in the inspector, and given another opacity or color; a text another size, particles more or fewer of them, faster or slower, in another color; each effect can be switched off or set otherwise, and the scene as a whole can follow the pointer and glow or not. The scene's own files stay as they came, so any change can be taken back. Layers of your own go on top of it. 3D models and lights are not played and are left out, and the app says so when it adds the wallpaper. Where a scene uses a texture that only Wallpaper Engine has — the shapes of its stock particles, for one — one drawn by the app stands in for it.
-- Audio visualizers follow the sound your Mac is playing, see [Reacting to sound](#reacting-to-sound). The rest of Wallpaper Engine's media API (the track's title, cover and position) is not there.
+- Audio visualizers follow the sound your Mac is playing, see [Reacting to sound](#reacting-to-sound).
+- Chromium plays only open video formats, so the videos and sounds of a web wallpaper or a scene are turned into WebM (VP9 and Opus) once, when it is added; the originals stay in the wallpaper's hidden `.originals` folder. Wallpapers added by an earlier version of the app are converted in the background when it first starts.
 - The mouse reaches web wallpapers and scenes: they follow the pointer while it is over the desktop and take clicks on it. A click goes to the desktop as well, as ever, and where a window covers the wallpaper the mouse is the window's.
-- Scenes and web wallpapers use more energy and memory than plain video: they are drawn by the web engine built into macOS. In the settings, under General → Energy, you choose how many frames a second they draw — 30 unless you change it — and at what render scale: 1× is the display's own resolution, 0.75× a quarter less each way, down to 0.25×. Below 1×, what a page's scripts draw takes fewer pixels, while its text and pictures stay sharp. Plain videos keep taking the direct route. While paused, the page stands completely still.
+- Scenes and web wallpapers use more energy and memory than plain video: they are drawn by Chromium, which comes with the app. In the settings, under General → Energy, you choose how many frames a second they draw — 30 unless you change it — and at what render scale: 1× is the display's own resolution, 0.75× a quarter less each way, down to 0.25×. Below 1×, what a page's scripts draw takes fewer pixels, while its text and pictures stay sharp. Plain videos keep taking the direct route. While paused, the page stands completely still.
 
 Any other folder with an `index.html` in it, or an archive of one, is added the same way and shown as it is.
 
@@ -215,13 +216,17 @@ swift run cursorctl reset              # bring back the system cursors
 
 Each display gets a borderless window at desktop level (`kCGDesktopWindowLevel`): above the system wallpaper but below Finder icons and ordinary windows. The window lets clicks through, is present on every Space and is not hidden by ⌘H. Video plays through `AVQueuePlayer` + `AVPlayerLooper` — a seamless loop without reloading the file.
 
-Scenes and web wallpapers are shown by a `WKWebView` in the same window. A scene is stored as `scene.json`, and a small script, `runtime.js`, builds the page from it; the editor shows that same page and adds selecting and dragging on top. While paused, the web view hides behind a snapshot of itself: a hidden page stops its videos, animations and timers.
+Scenes and web wallpapers are drawn by Chromium (the Chromium Embedded Framework) off screen, in processes of its own; each frame reaches the window through the graphics chip as an `IOSurface`, without a copy through the processor. A scene is stored as `scene.json`, and a small script, `runtime.js`, builds the page from it; the editor shows that same page and adds selecting and dragging on top. While paused, the page stops drawing and stands behind a snapshot of itself: its videos, animations and timers stop.
 
 Cursors are registered with the WindowServer through undocumented CoreGraphics functions (`CGSRegisterCursorWithImages` and its neighbours). The frames of an `.ani` are taken from its embedded `.cur` images at the largest size and passed as a single vertical strip — the form in which the WindowServer accepts an animated cursor.
 
 ```
 Sources/
-  WallpaperCore/          import, GIF → H.264 conversion, thumbnails, library, music, scenes (no UI, covered by tests)
+  WallpaperCore/          import, GIF → H.264 and video → WebM conversion, thumbnails, library, music, scenes (no UI, covered by tests)
+  CEFHost/                Chromium in the app: starting it, pages drawn off screen, the bridge to pages
+  CEFWrapper/             CEF's headers and C++ wrapper, as CEF ships them
+  WallAeroHelper/         the program Chromium starts its processes with
+  CCodecs/                loading the VP9 and Opus encoders (libvpx, libopus)
   CursorCore/             reading .ani/.cur and install.inf, applying and resetting cursors (covered by tests)
   CGSCursor/              Swift declarations of the undocumented cursor API (C)
   cursorctl/              command-line tool for cursors
@@ -232,9 +237,9 @@ Sources/
     ScreenshotMode.swift  taking the README screenshots (--screenshots)
 Tests/                    WallpaperCore and CursorCore tests
 Resources/                Info.plist, icon, translations
-scripts/                  building the .app, drawing the icon, screenshots
+scripts/                  building the .app, preparing Chromium and the encoders, drawing the icon, screenshots
 docs/screenshots/         README screenshots: en/ and ru/
-dist/                     the ready-made build to download (scripts/build.sh --dist)
+dist/                     the ready-made build for a release (scripts/build.sh --dist)
 ```
 
 The library is kept in `~/Library/Application Support/WallAeroEngine`: imported files are copies, so you can move or delete the originals. The saved system cursors are kept there too, in `CursorBackup`.

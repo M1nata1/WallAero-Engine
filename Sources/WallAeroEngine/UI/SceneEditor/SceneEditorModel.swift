@@ -341,7 +341,10 @@ final class SceneEditorModel: ObservableObject {
         panel.prompt = NSLocalizedString("Choose", comment: "Open panel button")
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         do {
-            return try SceneProject.addMedia(url, to: folder)
+            let source = try SceneProject.addMedia(url, to: folder)
+            // A video or sound Chromium cannot play is turned into WebM; the preview loads again then.
+            MediaConversion.shared.convertSoon(folder)
+            return source
         } catch {
             NSAlert(error: error).runModal()
             return nil
