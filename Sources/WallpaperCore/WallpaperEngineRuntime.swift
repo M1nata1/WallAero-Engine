@@ -2079,7 +2079,7 @@ public enum WallpaperEngineRuntime {
           gl.attachShader(program, vertex);
           gl.attachShader(program, fragment);
           // The same places in every program, so that one shape serves them all.
-          ['a_Position', 'a_TexCoord', 'a_Place', 'a_Color', 'a_Frame', 'a_Spot', 'a_Uv', 'a_More'].forEach(function (name, index) {
+          ['a_Position', 'a_TexCoord', 'a_Place', 'a_Color', 'a_Frame', 'a_Spot', 'a_Uv', 'a_More', 'a_Normal'].forEach(function (name, index) {
             gl.bindAttribLocation(program, index, name);
           });
           gl.linkProgram(program);
@@ -2373,9 +2373,29 @@ public enum WallpaperEngineRuntime {
           (targets[target.id] = targets[target.id] || []).push(target);
         }
 
+        // What a target needs for objects in three dimensions: how near what was drawn on each of
+        // its pixels is, so that what is behind is hidden. Made when first needed, and cleared
+        // once a frame, before the first such object is drawn on it.
+        function depthOf(target) {
+          if (!target.depth) {
+            target.depth = gl.createRenderbuffer();
+            gl.bindRenderbuffer(gl.RENDERBUFFER, target.depth);
+            gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, target.width, target.height);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+            gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, target.depth);
+          }
+          if (target.depthCleared !== frames) {
+            target.depthCleared = frames;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+            gl.depthMask(true);
+            gl.clear(gl.DEPTH_BUFFER_BIT);
+          }
+        }
+
         function forgetTargets() {
           Object.keys(targets).forEach(function (id) {
             targets[id].forEach(function (target) {
+              if (target.depth) gl.deleteRenderbuffer(target.depth);
               gl.deleteFramebuffer(target.framebuffer);
               gl.deleteTexture(target.texture);
             });
@@ -3087,10 +3107,22 @@ public enum WallpaperEngineRuntime {
             var index = boneOf(wanted);
             if (index >= 0 && origin) thing.puppet.setLocal(index, { origin: [origin.x || 0, origin.y || 0] });
           };
-          // Bones that sway by themselves and shapes blended into others are not played: a script
-          // asking of them finds none, and pushing a bone does nothing.
-          object.applyBonePhysicsImpulse = function () {};
-          object.resetBonePhysicsSimulation = function () {};
+          // Bones that sway by themselves may be pushed — one by its name or number, or all of
+          // them — and stilled. Shapes blended into others are not played: a script asking of
+          // them finds none.
+          object.applyBonePhysicsImpulse = function (wanted, moving, turning) {
+            if (!thing.puppet || !thing.puppet.pushSway) return;
+            var index = wanted === undefined || wanted === null ? -1 : boneOf(wanted);
+            if (index < 0 && wanted !== undefined && wanted !== null) return;
+            var by = moving && typeof moving === 'object' ? [Number(moving.x) || 0, Number(moving.y) || 0] : [0, 0];
+            var spin = turning && typeof turning === 'object' ? (Number(turning.z) || 0) / scale180 : (Number(turning) || 0) / scale180;
+            thing.puppet.pushSway(index, by, spin);
+          };
+          object.resetBonePhysicsSimulation = function (wanted) {
+            if (!thing.puppet || !thing.puppet.resetSway) return;
+            var index = wanted === undefined || wanted === null ? -1 : boneOf(wanted);
+            thing.puppet.bones.forEach(function (bone, at) { if (index < 0 || at === index) thing.puppet.resetSway(bone); });
+          };
           object.getBlendShapeIndex = function () { return -1; };
           object.getBlendShapeWeight = function () { return 0; };
           object.setBlendShapeWeight = function () {};
@@ -3821,6 +3853,38 @@ public enum WallpaperEngineRuntime {
           return [a, b, c, d, -(a * move[4] + c * move[5]), -(b * move[4] + d * move[5])];
         }
 
+        // How a bone sways by itself, as Wallpaper Engine's editor writes it: on a spring that
+        // brings it back (`se`), or hanging free (`re`) where only friction holds it; turning about
+        // its root (`r`), or moving (`t`), or both; pulled by gravity (`ge`, `gd`) or not, and
+        // turned no further than it may (`la`, `lamin`, `lamax`). How stiff the spring is (`rs`,
+        // `ts`), how much friction (`rf`, `tf`), how heavy it moves (`ri`, `ti`), and where its
+        // tip is from its root (`tp`). Null for a bone that does not sway; bones bent towards a
+        // target (`ik`) do not either.
+        function swayOf(text) {
+          if (typeof text !== 'string' || text.charAt(0) !== '{') return null;
+          var said;
+          try { said = JSON.parse(text); } catch (error) { return null; }
+          if (!said || (!said.se && !said.re)) return null;
+          var turns = said.r !== false && said.r !== null, moves = !!said.t;
+          if (!turns && !moves) return null;
+          var tip = numbers(said.tp, 3, 0);
+          var gravity = numbers(said.gd, 3, 0);
+          if (!said.gd) gravity = [0, -1, 0];
+          var limited = !!said.la;
+          return {
+            spring: !!said.se, turns: turns, moves: moves,
+            stiff: said.se ? number(said.rs, 200) : 0, friction: number(said.rf, 20), weight: Math.max(0.01, number(said.ri, 30)),
+            moveStiff: said.se ? number(said.ts, 200) : 0, moveFriction: number(said.tf, 20), moveWeight: Math.max(0.01, number(said.ti, 30)),
+            gravity: said.ge ? gravity : null,
+            low: limited ? numbers(said.lamin, 3, 0)[2] : -Infinity, high: limited ? numbers(said.lamax, 3, 0)[2] : Infinity,
+            tip: Math.hypot(tip[0], tip[1]) > 1e-3 ? [tip[0], tip[1]] : null,
+            angle: 0, spin: 0, shift: [0, 0], speed: [0, 0], last: null
+          };
+        }
+
+        // How strongly gravity pulls on a swaying bone, in pixels of the scene a second squared.
+        var SWAY_GRAVITY = 1000;
+
         // `culls`: whether the picture's material leaves out the backs of its triangles.
         function buildPuppet(said, layers, name, culls, owner) {
           var corners = numbersOf(said.corners, Float32Array);
@@ -3829,7 +3893,7 @@ public enum WallpaperEngineRuntime {
           var bones = (said.bones || []).map(function (bone) {
             var matrix = bone.matrix || [];
             return { name: typeof bone.name === 'string' ? bone.name : '', parent: number(bone.parent, -1),
-                     rest: [matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13]] };
+                     rest: [matrix[0], matrix[1], matrix[4], matrix[5], matrix[12], matrix[13]], sway: swayOf(bone.physics) };
           });
           if (!count || !triangles.length || !bones.length) return null;
           // Where every bone is at rest, from the picture and not from its parent; and the way back.
@@ -3965,7 +4029,8 @@ public enum WallpaperEngineRuntime {
           gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.DYNAMIC_DRAW);
           gl.bindVertexArray(null);
 
-          var puppet = { shape: shape, count: triangles.length, moving: playing.length > 0, layers: playing, bones: bones };
+          var swaying = bones.some(function (bone) { return bone.sway; });
+          var puppet = { shape: shape, count: triangles.length, moving: playing.length > 0 || swaying, layers: playing, bones: bones };
           // Which way round a triangle's corners go when its face is seen: as most go at rest. A
           // puppet may turn part of itself over to hide it — an eye closing folds the eyeball
           // under the lid — and with a material that leaves out backs, what is turned over is
@@ -4130,9 +4195,112 @@ public enum WallpaperEngineRuntime {
             var bone = bones[index];
             return bone ? (bone.moved || atRest(index, 0)) : null;
           };
+          // A bone that sways: where the animation puts it, then turned and moved further by what
+          // it keeps of its own motion. It is moved in the scene — by its parent, the animation,
+          // the object it is on — and lags behind, swings, and comes back as a spring does, or
+          // hangs as gravity has it. `above`: where its parent is in the picture; `placed`: where
+          // the picture is in the scene.
+          function sway(bone, above, placed, passed) {
+            var state = bone.sway;
+            var m = placed || [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+            var inScene = [m[0], m[1], m[4], m[5], m[12], m[13]];
+            var animated = above ? joined(above, bone.now) : bone.now;
+            var world = joined(inScene, animated);
+            var root = [world[4], world[5]];
+            var angle = Math.atan2(world[1], world[0]);
+            var tipLocal = state.tip || [50, 0];
+            var tip = [world[0] * tipLocal[0] + world[2] * tipLocal[1], world[1] * tipLocal[0] + world[3] * tipLocal[1]];
+            var length = Math.max(1, Math.hypot(tip[0], tip[1]));
+            var last = state.last;
+            // How fast the root moves and turns, and how that changes: what the bone lags behind.
+            var push = [0, 0], twist = 0;
+            if (last && passed > 0) {
+              var step = Math.min(passed, 0.1);
+              var velocity = [(root[0] - last.root[0]) / step, (root[1] - last.root[1]) / step];
+              var turn = angle - last.angle;
+              turn = Math.atan2(Math.sin(turn), Math.cos(turn)) / step;
+              if (last.velocity) {
+                push = [(velocity[0] - last.velocity[0]) / step, (velocity[1] - last.velocity[1]) / step];
+                twist = (turn - last.turn) / step;
+              }
+              // A jump — a new loop of the animation, a scene put elsewhere — is not a push.
+              var most = 20 * SWAY_GRAVITY;
+              var strength = Math.hypot(push[0], push[1]);
+              if (strength > most) push = [push[0] * most / strength, push[1] * most / strength];
+              twist = Math.max(-200, Math.min(200, twist));
+              state.last = { root: root, angle: angle, velocity: velocity, turn: turn };
+            } else {
+              state.last = { root: root, angle: angle, velocity: null, turn: 0 };
+            }
+            var pull = state.gravity ? [state.gravity[0] * SWAY_GRAVITY, state.gravity[1] * SWAY_GRAVITY] : [0, 0];
+            var left = Math.min(passed, 0.1);
+            while (left > 1e-6) {
+              var dt = Math.min(left, 1 / 120);
+              left -= dt;
+              if (state.turns) {
+                // What pulls across the bone, at its tip, turns it.
+                var now = Math.atan2(tip[1], tip[0]) + state.angle;
+                var across = [-Math.sin(now), Math.cos(now)];
+                var force = ((pull[0] - push[0]) * across[0] + (pull[1] - push[1]) * across[1]) / length;
+                var spin = force - twist + (-state.stiff * state.angle - state.friction * state.spin) / state.weight;
+                state.spin += spin * dt;
+                state.angle += state.spin * dt;
+                if (state.angle < state.low) { state.angle = state.low; state.spin = Math.max(0, state.spin); }
+                if (state.angle > state.high) { state.angle = state.high; state.spin = Math.min(0, state.spin); }
+              }
+              if (state.moves) {
+                for (var axis = 0; axis < 2; axis++) {
+                  var speedUp = pull[axis] - push[axis] + (-state.moveStiff * state.shift[axis] - state.moveFriction * state.speed[axis]) / state.moveWeight;
+                  state.speed[axis] += speedUp * dt;
+                  state.shift[axis] += state.speed[axis] * dt;
+                }
+                // Hanging free, it goes no further than its own length.
+                var far = Math.hypot(state.shift[0], state.shift[1]);
+                if (!state.spring && far > length) {
+                  state.shift = [state.shift[0] * length / far, state.shift[1] * length / far];
+                  state.speed = [0, 0];
+                }
+              }
+            }
+            if (!isFinite(state.angle) || !isFinite(state.shift[0]) || !isFinite(state.shift[1])) puppet.resetSway(bone);
+            // Back from the scene into the parent's coordinates: the turn as it is, the move
+            // through the parent and the picture.
+            var now2 = bone.now.slice();
+            if (state.angle) {
+              var c = Math.cos(state.angle), s2 = Math.sin(state.angle);
+              now2 = [c * now2[0] - s2 * now2[1], s2 * now2[0] + c * now2[1], c * now2[2] - s2 * now2[3], s2 * now2[2] + c * now2[3], now2[4], now2[5]];
+            }
+            if (state.shift[0] || state.shift[1]) {
+              var outer = above ? joined(inScene, above) : inScene;
+              var back = undone(outer);
+              now2[4] += back[0] * state.shift[0] + back[2] * state.shift[1];
+              now2[5] += back[1] * state.shift[0] + back[3] * state.shift[1];
+            }
+            bone.now = now2;
+          }
+          puppet.resetSway = function (bone) {
+            var state = bone && bone.sway;
+            if (!state) return;
+            state.angle = state.spin = 0;
+            state.shift = [0, 0];
+            state.speed = [0, 0];
+            state.last = null;
+          };
+          // A push given by a script: a bone, or all of them, moved and turned faster at once.
+          puppet.pushSway = function (index, moving, turning) {
+            bones.forEach(function (bone, at) {
+              if (!bone.sway || (index >= 0 && at !== index)) return;
+              bone.sway.speed[0] += moving[0];
+              bone.sway.speed[1] += moving[1];
+              bone.sway.spin += turning;
+            });
+            if (owner) owner.moving = true;
+            changed();
+          };
+
           // Puts every corner where the bones are at a moment of the scene.
           var lastSeconds = null;
-          puppet.pose = function (seconds) {
+          puppet.pose = function (seconds, placed) {
             var passed = lastSeconds === null ? 0 : Math.max(0, seconds - lastSeconds);
             lastSeconds = seconds;
             advance(passed);
@@ -4140,7 +4308,7 @@ public enum WallpaperEngineRuntime {
               if (layer.shows) layer.visible = layer.shows.read() !== false;
             });
             var showing = playing.filter(function (layer) { return layer.visible; });
-            if (!showing.length && !puppet.overridden) return;
+            if (!showing.length && !puppet.overridden && !swaying) return;
             var setting = showing.filter(function (layer) { return !layer.adds; });
             var adding = showing.filter(function (layer) { return layer.adds; });
             var once = setting.filter(function (layer) { return layer.once && !layer.done; });
@@ -4180,7 +4348,9 @@ public enum WallpaperEngineRuntime {
               var bone = bones[index];
               if (!bone.done) {
                 var parent = bones[bone.parent];
-                bone.moved = parent && depth < 64 ? joined(whole(bone.parent, depth + 1), bone.now) : bone.now;
+                var above = parent && depth < 64 ? whole(bone.parent, depth + 1) : null;
+                if (bone.sway) sway(bone, above, placed, passed);
+                bone.moved = above ? joined(above, bone.now) : bone.now;
                 // From where the corner is at rest to where the bone has taken it.
                 bone.takes = joined(bone.moved, bone.back);
                 bone.done = true;
@@ -4227,6 +4397,252 @@ public enum WallpaperEngineRuntime {
           };
           return puppet;
         }
+        // --- Models in three dimensions --------------------------------------
+        //
+        // A scene may hold models: meshes with a picture laid over them, lit by the scene's lights,
+        // by the light that comes from everywhere (ambient) and from the sky above. Wallpaper
+        // Engine's own shaders for them are not in the wallpapers; they are drawn here by one of the
+        // player's own, much as Wallpaper Engine lights them: what faces a light is lit by it, as
+        // much as is left of it at that distance, with a shine as sharp as the material is smooth
+        // and of the picture's own color as far as it is metal.
+
+        var MAX_LIGHTS = 8;
+        var modelProgram = link([
+          '#version 300 es',
+          'in vec3 a_Position;',
+          'in vec3 a_Normal;',
+          'in vec2 a_TexCoord;',
+          'uniform mat4 u_Model;',
+          'uniform mat4 u_ViewProjection;',
+          'uniform mat3 u_NormalMatrix;',
+          'out vec3 v_World;',
+          'out vec3 v_Normal;',
+          'out vec2 v_Uv;',
+          'void main() {',
+          '  vec4 world = u_Model * vec4(a_Position, 1.0);',
+          '  v_World = world.xyz;',
+          '  v_Normal = u_NormalMatrix * a_Normal;',
+          '  v_Uv = a_TexCoord;',
+          '  gl_Position = u_ViewProjection * world;',
+          '}'
+        ].join('\n'), [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec3 v_World;',
+          'in vec3 v_Normal;',
+          'in vec2 v_Uv;',
+          'uniform sampler2D u_Texture;',
+          'uniform int u_Channels;',
+          'uniform vec4 u_Tint;',
+          'uniform vec3 u_Ambient;',
+          'uniform vec3 u_Sky;',
+          'uniform vec3 u_Eye;',
+          'uniform float u_Metallic;',
+          'uniform float u_Roughness;',
+          'uniform int u_LightCount;',
+          'uniform vec4 u_LightPlace[' + MAX_LIGHTS + '];', // where (w 1), or which way it shines (w 0)
+          'uniform vec4 u_LightColor[' + MAX_LIGHTS + '];', // color times strength, and how far it reaches
+          'uniform vec4 u_LightAim[' + MAX_LIGHTS + '];',   // which way a spot points, and how fast it fades
+          'out vec4 color;',
+          'void main() {',
+          '  vec4 base = texture(u_Texture, v_Uv);',
+          '  if (u_Channels == 1) base = vec4(1.0, 1.0, 1.0, base.r);',
+          '  if (u_Channels == 2) base = vec4(base.rrr, base.g);',
+          '  base *= u_Tint;',
+          '  vec3 n = normalize(v_Normal);',
+          '  if (!gl_FrontFacing) n = -n;',
+          '  vec3 toEye = normalize(u_Eye - v_World);',
+          '  vec3 diffuse = base.rgb * (1.0 - u_Metallic);',
+          '  vec3 shineColor = mix(vec3(0.04), base.rgb, u_Metallic);',
+          '  float rough = clamp(u_Roughness, 0.03, 1.0);',
+          '  float sharp = max(1.0, 2.0 / (rough * rough * rough * rough) - 2.0);',
+          '  vec3 lit = u_Ambient * base.rgb + u_Sky * base.rgb * (0.5 + 0.5 * n.y);',
+          '  for (int i = 0; i < ' + MAX_LIGHTS + '; i++) {',
+          '    if (i >= u_LightCount) break;',
+          '    vec3 toLight;',
+          '    float left = 1.0;',
+          '    if (u_LightPlace[i].w > 0.5) {',
+          '      vec3 way = u_LightPlace[i].xyz - v_World;',
+          '      float far = length(way);',
+          '      toLight = way / max(far, 0.0001);',
+          '      float reach = u_LightColor[i].w;',
+          '      if (reach > 0.0) left = pow(clamp(1.0 - far / reach, 0.0, 1.0), max(u_LightAim[i].w, 0.01));',
+          '      if (dot(u_LightAim[i].xyz, u_LightAim[i].xyz) > 0.0) left *= smoothstep(0.5, 0.9, dot(-toLight, normalize(u_LightAim[i].xyz)));',
+          '    } else {',
+          '      toLight = normalize(-u_LightPlace[i].xyz);',
+          '    }',
+          '    float facing = max(dot(n, toLight), 0.0);',
+          '    vec3 halfway = normalize(toLight + toEye);',
+          '    float shine = pow(max(dot(n, halfway), 0.0), sharp) * (sharp + 8.0) / 25.0;',
+          '    lit += u_LightColor[i].rgb * left * facing * (diffuse + shineColor * shine);',
+          '  }',
+          '  color = vec4(lit, base.a);',
+          '}'
+        ].join('\n'), 'the player\'s own shader');
+
+        // The lights of the scene as they are now, for the models: at most so many, the strongest.
+        function sceneLights() {
+          var list = [];
+          objects.forEach(function (thing) {
+            if (!thing.lightKind) return;
+            var stands = standing(thing, true);
+            if (!stands.visible) return;
+            var m = stands.matrix;
+            var shade = thing.state.color || [1, 1, 1];
+            var strength = number((thing.state.intensity || [])[0], 1);
+            // Which way it shines: down its own z axis.
+            var aim = [-m[8], -m[9], -m[10]];
+            var length = Math.sqrt(aim[0] * aim[0] + aim[1] * aim[1] + aim[2] * aim[2]) || 1;
+            aim = aim.map(function (part) { return part / length; });
+            list.push({
+              place: thing.lightKind === 'directional' ? [aim[0], aim[1], aim[2], 0] : [m[12], m[13], m[14], 1],
+              color: [shade[0] * strength, shade[1] * strength, shade[2] * strength, number((thing.state.radius || [])[0], 0)],
+              aim: thing.lightKind === 'spot' ? [aim[0], aim[1], aim[2], number((thing.state.exponent || [])[0], 1)] : [0, 0, 0, number((thing.state.exponent || [])[0], 1)],
+              strength: strength
+            });
+          });
+          list.sort(function (a, b) { return b.strength - a.strength; });
+          return list.slice(0, MAX_LIGHTS);
+        }
+
+        // From the scene to where it lands on what is drawn on: the scene's own flat view, with
+        // nearer for larger z; or, for a scene seen through a lens, from in front of its middle.
+        function viewProjection() {
+          var w = surface.width, h = surface.height;
+          var far = Math.max(1, number(general.farz, 10000));
+          // What is drawn is kept with its top row first, as the pictures are: y is turned over.
+          if (general.orthogonalprojection) {
+            return [2 / w, 0, 0, 0, 0, -2 / h, 0, 0, 0, 0, -1 / far, 0,
+                    -1 - 2 * surface.left / w, 1 + 2 * surface.bottom / h, 0, 1];
+          }
+          var fov = number(general.perspectiveoverridefov, number(general.fov, 50)) * Math.PI / 180;
+          var away = (sceneHeight / 2) / Math.tan(fov / 2);
+          var near = Math.max(0.01, number(general.nearz, 0.01)), f = 1 / Math.tan(fov / 2), aspect = w / h;
+          var lens = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
+          var look = Mat4.lookAt(new Vec3(sceneWidth / 2, sceneHeight / 2, away), new Vec3(sceneWidth / 2, sceneHeight / 2, 0), new Vec3(0, 1, 0)).m;
+          var seen = times4(lens, look);
+          [1, 5, 9, 13].forEach(function (index) { seen[index] = -seen[index]; });
+          return seen;
+        }
+
+        function buildModel(object, thing) {
+          var name = String(plain(object.model) || '');
+          var mesh = puppets[key(name)];
+          if (!mesh || !mesh.solid || !modelProgram) {
+            note('“' + thing.name + '”: its model, ' + name + ', ' + (mesh ? 'has no faces to light' : 'is not in the scene') + '; it is left out');
+            return null;
+          }
+          var corners = numbersOf(mesh.solid, Float32Array);
+          var triangles = numbersOf(mesh.triangles, Uint16Array);
+          var count = Math.floor(corners.length / 8);
+          if (!count || !triangles.length) return null;
+          // How large it is, for what is said to bounce off it.
+          var low = [Infinity, Infinity, Infinity], high = [-Infinity, -Infinity, -Infinity];
+          for (var corner = 0; corner < count; corner++) {
+            for (var axis = 0; axis < 3; axis++) {
+              low[axis] = Math.min(low[axis], corners[corner * 8 + axis]);
+              high[axis] = Math.max(high[axis], corners[corner * 8 + axis]);
+            }
+          }
+          var middle = [(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, (low[2] + high[2]) / 2];
+          var radius = 0;
+          for (corner = 0; corner < count; corner++) {
+            radius = Math.max(radius, Math.hypot(corners[corner * 8] - middle[0], corners[corner * 8 + 1] - middle[1], corners[corner * 8 + 2] - middle[2]));
+          }
+          thing.bounds = { middle: middle, radius: radius };
+          var material = json(String(object.material || mesh.material || '')) || {};
+          var pass = (material.passes || [])[0] || {};
+          var constants = {};
+          Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
+          var picture = (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null;
+          var shape = gl.createVertexArray();
+          gl.bindVertexArray(shape);
+          gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+          gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
+          gl.enableVertexAttribArray(0);
+          gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 32, 0);
+          gl.enableVertexAttribArray(8);
+          gl.vertexAttribPointer(8, 3, gl.FLOAT, false, 32, 12);
+          gl.enableVertexAttribArray(1);
+          gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 32, 24);
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+          gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
+          gl.bindVertexArray(null);
+          var culls = key(String(pass.cullmode || 'normal')) !== 'nocull';
+          var tests = key(String(pass.depthtest || 'enabled')) !== 'disabled';
+          var writes = key(String(pass.depthwrite || 'enabled')) !== 'disabled';
+          var blending = key(String(pass.blending || 'normal'));
+          var metallic = number(plain(constants.metallic), 0), roughness = number(plain(constants.roughness), 0.5);
+          var white = null;
+          thing.draw = function () {
+            var stands = standing(thing);
+            if (!stands.visible) return;
+            var target = surface.target;
+            depthOf(target);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+            gl.viewport(0, 0, target.width, target.height);
+            var program = modelProgram;
+            // A uniform the compiler left out has no place; setting it at none does nothing.
+            function at(name) { var uniform = program.uniforms[name]; return uniform ? uniform.location : null; }
+            gl.useProgram(program.program);
+            var model = stands.matrix;
+            gl.uniformMatrix4fv(at('u_Model'), false, new Float32Array(model));
+            gl.uniformMatrix4fv(at('u_ViewProjection'), false, new Float32Array(viewProjection()));
+            gl.uniformMatrix3fv(at('u_NormalMatrix'), false, new Float32Array(new Mat4(model).normalMatrix().m));
+            var tint = thing.state.color || [1, 1, 1];
+            gl.uniform4f(at('u_Tint'), tint[0], tint[1], tint[2], stands.alpha);
+            var ambient = numbers(general.ambientcolor, 3, 0), sky = numbers(general.skylightcolor, 3, 0);
+            gl.uniform3f(at('u_Ambient'), ambient[0], ambient[1], ambient[2]);
+            gl.uniform3f(at('u_Sky'), sky[0], sky[1], sky[2]);
+            gl.uniform3f(at('u_Eye'), sceneWidth / 2, sceneHeight / 2, Math.max(sceneWidth, sceneHeight) * 4);
+            gl.uniform1f(at('u_Metallic'), metallic);
+            gl.uniform1f(at('u_Roughness'), roughness);
+            var lights = sceneLights();
+            gl.uniform1i(at('u_LightCount'), lights.length);
+            if (lights.length) {
+              var places = [], shades = [], aims = [];
+              lights.forEach(function (light) { places.push.apply(places, light.place); shades.push.apply(shades, light.color); aims.push.apply(aims, light.aim); });
+              gl.uniform4fv(at('u_LightPlace'), new Float32Array(places));
+              gl.uniform4fv(at('u_LightColor'), new Float32Array(shades));
+              gl.uniform4fv(at('u_LightAim'), new Float32Array(aims));
+            }
+            var layer = picture && picture.ready !== false ? picture.layers[0] : null;
+            if (!layer) white = white || flat(255, 255, 255, 255);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, (layer || white.layers[0]).texture);
+            gl.uniform1i(at('u_Texture'), 0);
+            gl.uniform1i(at('u_Channels'), layer ? (CHANNELS[picture.channels] || 0) : 0);
+            if (tests) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.depthMask(writes);
+            if (culls) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);
+            // Turned over, the faces that look this way go round the other way.
+            gl.frontFace(gl.CW);
+            gl.enable(gl.BLEND);
+            if (blending === 'additive') gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
+            else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            gl.bindVertexArray(shape);
+            gl.drawElements(gl.TRIANGLES, triangles.length, gl.UNSIGNED_SHORT, 0);
+            gl.bindVertexArray(null);
+            gl.disable(gl.DEPTH_TEST);
+            gl.disable(gl.CULL_FACE);
+            gl.frontFace(gl.CCW);
+            gl.depthMask(true);
+          };
+          return thing;
+        }
+
+        // A light: where it is, its color and strength, how far it reaches and how fast it fades
+        // there. A light that shines from far away in one direction has no place, only a way.
+        function buildLight(object, thing) {
+          var kind = key(String(plain(object.light) || 'lpoint'));
+          thing.lightKind = /dir|sun/.test(kind) ? 'directional' : (/spot/.test(kind) ? 'spot' : 'point');
+          also(thing, 'intensity', live(object.intensity === undefined ? 1 : object.intensity, 1, 1, thing));
+          also(thing, 'radius', live(object.radius === undefined ? 0 : object.radius, 1, 0, thing));
+          also(thing, 'exponent', live(object.exponent === undefined ? 1 : object.exponent, 1, 1, thing));
+          return thing;
+        }
+
         // --- Pictures ---------------------------------------------------------
 
         function merged(first, second) {
@@ -4810,7 +5226,7 @@ public enum WallpaperEngineRuntime {
           // picture's own pixels from its middle.
           var mesh = layer.puppet || null;
           if (mesh) {
-            mesh.pose(time);
+            mesh.pose(time, matrix);
             place = placeOf(matrix, [1, 1]);
           }
           var effects = layer.effects.filter(function (effect) { return effect.shown.now; });
@@ -5542,6 +5958,7 @@ public enum WallpaperEngineRuntime {
             case 'collisionquad':
             case 'collisionsphere':
             case 'collisionbounds':
+            case 'collisionmodel':
               return collision(said, system);
             case 'inheritvaluefromevent':
               // A child's particle that goes with one of its parent's keeps taking after it.
@@ -5596,6 +6013,33 @@ public enum WallpaperEngineRuntime {
               meet(particle, [dx / far, dy / far, dz / far], radius - far);
             };
           }
+          if (kind === 'collisionmodel') {
+            // The model the scene names for it, met as the ball around its shape: the n-th such
+            // operator of the system meets the n-th model its object depends on.
+            var which = system.collisionModels = (system.collisionModels || 0) + 1;
+            var needs = ((system.owner && system.owner.said && system.owner.said.dependencies) || []).filter(function (each) {
+              return each && key(String(each.type || '')) === 'collisionmodel';
+            });
+            var need = needs.filter(function (each) { return number(each.index, 0) === which - 1; })[0] || needs[which - 1] || needs[0];
+            if (!need) return null;
+            return function (particle) {
+              var model = byId[String(need.id)];
+              if (!model || !model.bounds) return;
+              var stands = standing(model, true);
+              if (!stands.visible) return;
+              var m = stands.matrix, b = model.bounds.middle;
+              var middle = system.fromScene(m[0] * b[0] + m[4] * b[1] + m[8] * b[2] + m[12],
+                                            m[1] * b[0] + m[5] * b[1] + m[9] * b[2] + m[13],
+                                            m[2] * b[0] + m[6] * b[1] + m[10] * b[2] + m[14]);
+              if (!middle) return;
+              var grown = Math.max(Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6]), Math.hypot(m[8], m[9], m[10]));
+              var reach = model.bounds.radius * grown * middle[3];
+              var dx = particle.x - middle[0], dy = particle.y - middle[1], dz = particle.z - middle[2];
+              var far = Math.sqrt(dx * dx + dy * dy + dz * dz);
+              if (far >= reach || far < 0.0001) return;
+              meet(particle, [dx / far, dy / far, dz / far], reach - far);
+            };
+          }
           if (kind === 'collisionbounds') {
             return function (particle) {
               var box = system.sceneBox();
@@ -5635,6 +6079,68 @@ public enum WallpaperEngineRuntime {
           var warm = Math.min(60, Math.max(0, system.warm));
           for (var played = 0; played < warm; played += 1 / 20) system.step(1 / 20);
           return system;
+        }
+
+        // The object of the scene another one depends on for something — `kind` as the scene
+        // names it — the n-th of them, or the first; null for none.
+        function dependency(thing, kind, nth) {
+          var needs = ((thing.said && thing.said.dependencies) || []).filter(function (each) {
+            return each && key(String(each.type || '')) === kind;
+          });
+          var need = needs.filter(function (each) { return number(each.index, 0) === nth; })[0] || needs[nth] || needs[0];
+          return need ? { id: String(need.id) } : null;
+        }
+
+        // A point of the scene where a picture shows, picked at random among the places it is not
+        // see-through: the picture is read back once, made small, when it has come.
+        var OPAQUE_SIDE = 128;
+        function opaqueSpot(wanted) {
+          var picture = byId[wanted.id];
+          if (!picture || !picture.size) return null;
+          var source = picture.picture;
+          var layer = source && source.ready !== false && source.layers ? source.layers[0] : null;
+          if (!layer || !layer.texture) return null;
+          if (picture.opaque === undefined || picture.opaqueFrom !== layer.texture) {
+            picture.opaqueFrom = layer.texture;
+            picture.opaque = opaqueCells(layer.texture, layer.width || source.width, layer.height || source.height, source.channels);
+          }
+          var cells = picture.opaque;
+          if (!cells || !cells.length) return null;
+          var cell = cells[Math.floor(Math.random() * cells.length)];
+          var u = (cell % OPAQUE_SIDE + Math.random()) / OPAQUE_SIDE, v = (Math.floor(cell / OPAQUE_SIDE) + Math.random()) / OPAQUE_SIDE;
+          var x = (u - 0.5) * picture.size[0], y = (0.5 - v) * picture.size[1];
+          var m = standing(picture, true).matrix;
+          return [m[0] * x + m[4] * y + m[12], m[1] * x + m[5] * y + m[13], m[2] * x + m[6] * y + m[14]];
+        }
+        function opaqueCells(texture, width, height, channels) {
+          if (!(width > 0 && height > 0)) return null;
+          var wasRead = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING), wasDrawn = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+          var read = gl.createFramebuffer(), small = gl.createFramebuffer(), store = gl.createRenderbuffer();
+          gl.bindRenderbuffer(gl.RENDERBUFFER, store);
+          gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, OPAQUE_SIDE, OPAQUE_SIDE);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, small);
+          gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, store);
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, read);
+          gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+          var cells = null;
+          if (gl.checkFramebufferStatus(gl.READ_FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, small);
+            gl.blitFramebuffer(0, 0, width, height, 0, 0, OPAQUE_SIDE, OPAQUE_SIDE, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, small);
+            var pixels = new Uint8Array(OPAQUE_SIDE * OPAQUE_SIDE * 4);
+            gl.readPixels(0, 0, OPAQUE_SIDE, OPAQUE_SIDE, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+            // How see-through a texel is: its alpha, or for a texture of one or two channels the
+            // last of them.
+            var part = channels === 'r8' ? 0 : (channels === 'rg88' ? 1 : 3);
+            cells = [];
+            for (var i = 0; i < OPAQUE_SIDE * OPAQUE_SIDE; i++) if (pixels[i * 4 + part] > 127) cells.push(i);
+          }
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, wasRead);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, wasDrawn);
+          gl.deleteFramebuffer(read);
+          gl.deleteFramebuffer(small);
+          gl.deleteRenderbuffer(store);
+          return cells;
         }
 
         // A system of particles, made of its file, drawn for `thing`, the object of the scene that
@@ -5752,6 +6258,16 @@ public enum WallpaperEngineRuntime {
             });
           }
           // The scene's edges in the system's own coordinates: left, bottom, right, top.
+          // A point of the scene in the system's own coordinates, and how much larger a length of
+          // the scene is there; null where the system has no size.
+          system.owner = thing;
+          system.fromScene = function (x, y, z) {
+            var matrix = placement(true).matrix;
+            var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
+            if (Math.abs(area) < 1e-9) return null;
+            var dx = x - matrix[12], dy = y - matrix[13];
+            return [(dx * matrix[5] - dy * matrix[4]) / area, (dy * matrix[0] - dx * matrix[1]) / area, (z - matrix[14]) / Math.sqrt(Math.abs(area)), 1 / Math.sqrt(Math.abs(area))];
+          };
           system.sceneBox = function () {
             var matrix = placement(true).matrix;
             var area = matrix[0] * matrix[5] - matrix[4] * matrix[1];
@@ -5796,8 +6312,13 @@ public enum WallpaperEngineRuntime {
             var dx = pointer[0] * sceneWidth - matrix[12], dy = (1 - pointer[1]) * sceneHeight - matrix[13];
             pointerThere = [(dx * matrix[5] - dy * matrix[4]) / area, (dy * matrix[0] - dx * matrix[1]) / area];
           }
+          var layerEmitters = 0;
           system.emitters = (said.emitter || []).map(function (emitter) {
+            var fromLayer = key(emitter.name) === 'layerimage';
             return {
+              // The picture of the scene it is made over, as the object names it; the n-th such
+              // emitter has the n-th one.
+              picture: fromLayer ? dependency(thing, 'emitterimage', layerEmitters++) : null,
               point: number(emitter.controlpoint, 0), withPointer: follows(number(emitter.controlpoint, 0)),
               box: key(emitter.name) === 'boxrandom',
               // Made all over a layer's picture: here, over the scene where the system lies.
@@ -5880,8 +6401,19 @@ public enum WallpaperEngineRuntime {
                              angle: 0, spin: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, from: instance, base: instance.at.slice() };
             var away = [0, 0, 0];
             var axis;
-            var spread = emitter.layer ? system.sceneBox() : null;
-            if (spread) {
+            var spot = emitter.picture ? opaqueSpot(emitter.picture) : null;
+            var spread = emitter.layer && !spot && !emitter.picture ? system.sceneBox() : null;
+            if (emitter.picture && !spot) {
+              // Its picture shows nothing yet, or nowhere: nothing is made.
+              return null;
+            }
+            if (spot) {
+              var there = system.fromScene(spot[0], spot[1], spot[2]);
+              if (!there) return null;
+              var from0 = system.pointAt(emitter.point);
+              away = [there[0] - emitter.origin[0] - from0[0] - instance.at[0], there[1] - emitter.origin[1] - from0[1] - instance.at[1],
+                      there[2] - emitter.origin[2] - from0[2] - instance.at[2]];
+            } else if (spread) {
               away = [mix(spread[0], spread[2], Math.random()), mix(spread[1], spread[3], Math.random()), 0];
             } else if (emitter.box) {
               for (axis = 0; axis < 3; axis++) {
@@ -6568,16 +7100,24 @@ public enum WallpaperEngineRuntime {
 
         function idle() {}
         var hasChildren = {};
+        // Objects others make use of — a picture particles are made over, say — are made even
+        // when hidden.
+        var usedByOthers = {};
         all.forEach(function (object) {
           if (object.parent !== undefined && object.parent !== null) hasChildren[String(object.parent)] = true;
+          (Array.isArray(object.dependencies) ? object.dependencies : []).forEach(function (need) {
+            if (need && need.id !== undefined) usedByOthers[String(need.id)] = true;
+          });
         });
 
         // Puts an object on the scene, above what is there.
         function add(object) {
           var hidden = object.visible === false;
           var make = object.image ? buildImage : (object.particle ? buildParticles : (object.sound ? buildSound :
-                     (object.text !== undefined && object.text !== null ? buildText : null)));
-          var thing = placed(object, String(plain(object.image) || plain(object.particle) || (object.sound ? 'sound' : (make ? 'text' : 'group'))));
+                     (object.text !== undefined && object.text !== null ? buildText :
+                     (object.model ? buildModel : (object.light ? buildLight : null)))));
+          var thing = placed(object, String(plain(object.image) || plain(object.particle) || plain(object.model) ||
+                                            (object.light ? 'light' : (object.sound ? 'sound' : (make ? 'text' : 'group')))));
           thing.draw = idle;
           objects.push(thing);
           // A layer made to put effects over others either takes what the scene shows under it or
@@ -6589,14 +7129,14 @@ public enum WallpaperEngineRuntime {
             thing.held = [];
           }
           // What is hidden for good is only there for what hangs on it to be hidden with it.
-          if (hidden && !scripted) {
+          if (hidden && !scripted && !usedByOthers[String(object.id)]) {
             thing.unmade = !!make;
             return thing;
           }
           if (!make) {
             // Something with only a place holds the objects that hang on it together.
-            if (!hidden && (object.model || object.light || object.camera)) {
-              note('“' + thing.name + '” is ' + (object.model ? 'a 3D model' : (object.light ? 'a light' : 'a camera')) + ', which is not played');
+            if (!hidden && object.camera) {
+              note('“' + thing.name + '” is a camera, which is not played');
             }
             return thing;
           }
@@ -6614,7 +7154,7 @@ public enum WallpaperEngineRuntime {
             }
             return built;
           }
-          if (thing.state.visible || (!object.image && !object.particle)) {
+          if (thing.state.visible || (!object.image && !object.particle && !object.model) || usedByOthers[String(object.id)]) {
             finish();
           } else {
             // A picture that is hidden is made ready when it first shows: its files are not

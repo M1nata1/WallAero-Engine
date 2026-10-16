@@ -35,6 +35,8 @@ struct WallpaperEnginePuppet {
         var parent: Int
         /// Where it is from its parent, at rest: a matrix of four by four, column by column.
         var matrix: [Float]
+        /// What makes it sway by itself, as the editor wrote it: a JSON text; nil for none.
+        var physics: String? = nil
     }
 
     /// A point of the picture another object of the scene may hang on, to go where the point
@@ -77,6 +79,12 @@ struct WallpaperEnginePuppet {
 
     /// For every corner: x, y, its place in the picture (2), four bones, their four weights.
     var corners: [Float]
+    /// A model in three dimensions, without bones: for every corner its place (3), the way it
+    /// faces (3) and its place in the picture (2). Nil for a picture that bends, and for a
+    /// model whose corners do not say which way they face.
+    var solid: [Float]?
+    /// The material the file names, as the scene's files have it.
+    var material: String?
     var triangles: [UInt16]
     var bones: [Bone]
     /// In the order they are drawn; empty when the file does not say, and the triangles are
@@ -98,15 +106,17 @@ struct WallpaperEnginePuppet {
         var reader = BinaryReader(data)
         guard reader.textToZero()?.hasPrefix("MDLV") == true,
               reader.uint32() != nil, reader.uint32() != nil, reader.uint32() != nil,
-              reader.textToZero(atMost: 1024) != nil
+              let material = reader.textToZero(atMost: 1024)
         else {
             return nil
         }
+        self.material = material.isEmpty ? nil : material
         guard let bonesAt = Self.place(of: "MDLS", in: data, from: reader.offset) else {
             // No bones: the picture hangs whole on one that stays where it is.
             guard let mesh = Self.mesh(in: data, from: reader.offset, before: data.count, onBones: false) else { return nil }
             corners = mesh.corners
             triangles = mesh.triangles
+            solid = mesh.solid
             bones = [Bone(parent: -1, matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])]
             (parts, clips) = Self.layout(in: data, from: mesh.end, before: data.count, indexCount: mesh.triangles.count)
             attachments = []
@@ -114,6 +124,7 @@ struct WallpaperEnginePuppet {
             return
         }
         guard let mesh = Self.mesh(in: data, from: reader.offset, before: bonesAt, onBones: true) else { return nil }
+        solid = nil
         let cornerCount = mesh.corners.count / Self.floatsPerCorner
 
         // The bones.
@@ -135,9 +146,9 @@ struct WallpaperEnginePuppet {
                 guard let value = reader.float32(), value.isFinite else { return nil }
                 matrix.append(value)
             }
-            // What makes the bone sway by itself, as a text; not played.
-            guard reader.textToZero(atMost: 65536) != nil else { return nil }
-            bones.append(Bone(name: name, parent: parent, matrix: matrix))
+            // What makes the bone sway by itself, as a text.
+            guard let physics = reader.textToZero(atMost: 65536) else { return nil }
+            bones.append(Bone(name: name, parent: parent, matrix: matrix, physics: physics.isEmpty ? nil : physics))
         }
         // A corner hangs on bones the puppet has.
         for corner in 0..<cornerCount {
@@ -253,7 +264,8 @@ struct WallpaperEnginePuppet {
     /// triangles of those very corners, all of it before the bones — and where every corner
     /// then reads as one: on a few bones, by weights that are shares. Of the lengths a corner
     /// may have, the one by which the triangles use every corner is tried first.
-    private static func mesh(in data: Data, from start: Int, before end: Int, onBones: Bool) -> (corners: [Float], triangles: [UInt16], end: Int)? {
+    private static func mesh(in data: Data, from start: Int, before end: Int, onBones: Bool)
+        -> (corners: [Float], triangles: [UInt16], end: Int, solid: [Float]?)? {
         guard start >= 0, end <= data.count, start < end else { return nil }
         for place in start..<min(start + 512, end - 8) {
             guard let cornerBytes = number(in: data, at: place), cornerBytes > 0, cornerBytes <= 16 * 1024 * 1024,
@@ -272,10 +284,37 @@ struct WallpaperEnginePuppet {
             let sizes = cornerSizes.map { onBones ? $0 : $0 - bonesAndWeights }.filter { cornerBytes % $0 == 0 }
             for size in sizes.filter({ cornerBytes / $0 == last + 1 }) + sizes.filter({ cornerBytes / $0 != last + 1 }) {
                 guard last < cornerBytes / size, let corners = corners(in: packed, each: size, onBones: onBones) else { continue }
-                return (corners, triangles, place + 4 + cornerBytes + 4 + triangleBytes)
+                // Without bones, a corner of 32 or 48 bytes says which way it faces right after
+                // its place: then it is a model in three dimensions.
+                let solid = !onBones && (size == 32 || size == 48) ? Self.solid(in: packed, each: size) : nil
+                return (corners, triangles, place + 4 + cornerBytes + 4 + triangleBytes, solid)
             }
         }
         return nil
+    }
+
+    /// The corners of a model in three dimensions: place, the way it faces, place in the picture.
+    private static func solid(in packed: Data, each size: Int) -> [Float]? {
+        let count = packed.count / size
+        var result: [Float] = []
+        result.reserveCapacity(count * 8)
+        let whole = packed.withUnsafeBytes { raw -> Bool in
+            func float(_ at: Int) -> Float {
+                Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: at, as: UInt32.self)))
+            }
+            for corner in 0..<count {
+                let base = corner * size
+                let values = [float(base), float(base + 4), float(base + 8), float(base + 12), float(base + 16), float(base + 20),
+                              float(base + size - 8), float(base + size - 4)]
+                guard values.allSatisfy({ $0.isFinite }) else { return false }
+                // The way it faces is one long, or nought where the file leaves it out.
+                let length = values[3] * values[3] + values[4] * values[4] + values[5] * values[5]
+                guard length < 1.1 else { return false }
+                result += values
+            }
+            return true
+        }
+        return whole ? result : nil
     }
 
     /// The corners out of their bytes, if the bytes are corners of that length: nil if one of
@@ -393,10 +432,14 @@ struct WallpaperEnginePuppet {
         for corner in triangles {
             withUnsafeBytes(of: corner.littleEndian) { triangleData.append(contentsOf: $0) }
         }
-        return [
+        var table: [String: Any] = [
             "corners": packed(corners),
             "triangles": triangleData.base64EncodedString(),
-            "bones": bones.map { ["name": $0.name, "parent": $0.parent, "matrix": $0.matrix.map(Double.init)] as [String: Any] },
+            "bones": bones.map { bone in
+                var entry: [String: Any] = ["name": bone.name, "parent": bone.parent, "matrix": bone.matrix.map(Double.init)]
+                if let physics = bone.physics { entry["physics"] = physics }
+                return entry
+            },
             "attachments": attachments.map { ["name": $0.name, "bone": $0.bone, "matrix": $0.matrix.map(Double.init)] as [String: Any] },
             "parts": parts.map { [$0.start, $0.count] },
             "clips": clips.map { ["part": $0.part, "masks": $0.masks, "texture": $0.texture] as [String: Any] },
@@ -405,5 +448,9 @@ struct WallpaperEnginePuppet {
                  "frameCount": $0.frameCount, "frames": packed($0.frames)] as [String: Any]
             },
         ]
+        // A model in three dimensions, and the material its file names.
+        if let solid { table["solid"] = packed(solid) }
+        if let material { table["material"] = material }
+        return table
     }
 }
