@@ -980,6 +980,23 @@ enum ScreenshotMode {
                 view.setPlaying(false, rate: 1)
             }
         }
+        // `--frame-at <seconds> <picture.png>`: the picture the lock screen would get then.
+        if let index = arguments.firstIndex(of: "--frame-at"), index + 2 < arguments.count,
+           let moment = Double(arguments[index + 1]) {
+            let output = URL(fileURLWithPath: arguments[index + 2])
+            DispatchQueue.main.asyncAfter(deadline: .now() + moment) {
+                Task {
+                    if let frame = await view.currentFrame(),
+                       let data = NSBitmapImageRep(cgImage: frame).representation(using: .png, properties: [:]) {
+                        try? data.write(to: output)
+                        print("frame at \(moment) s: \(frame.width)×\(frame.height) → \(output.path)")
+                    } else {
+                        print("frame at \(moment) s: none")
+                    }
+                    fflush(stdout)
+                }
+            }
+        }
 
         // How many of the seconds the window was out of sight, covered or on another Space.
         var hiddenSeconds = 0

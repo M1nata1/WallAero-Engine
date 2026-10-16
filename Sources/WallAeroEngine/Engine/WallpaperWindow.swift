@@ -85,6 +85,58 @@ final class WallpaperView: NSView {
         layoutMedia()
     }
 
+    // MARK: - The picture shown now
+
+    /// What the wallpaper shows at this moment, as large as the view in pixels and laid out as
+    /// on the desktop: a web wallpaper's last frame, the video's picture where the player stands,
+    /// or the picture. Nil when nothing is shown yet.
+    func currentFrame() async -> CGImage? {
+        if let webView {
+            return await webView.snapshot()
+        }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        var picture: CGImage?
+        var gravity = CALayerContentsGravity.resize
+        if let player, let item = player.currentItem, !playerLayer.isHidden {
+            let generator = AVAssetImageGenerator(asset: item.asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            picture = try? await generator.image(at: player.currentTime()).image
+            switch playerLayer.videoGravity {
+            case .resizeAspect: gravity = .resizeAspect
+            case .resizeAspectFill: gravity = .resizeAspectFill
+            default: break
+            }
+        } else if !imageLayer.isHidden, let contents = imageLayer.contents {
+            picture = (contents as! CGImage)
+            gravity = imageLayer.contentsGravity
+        }
+        guard let picture else { return nil }
+        let width = Int((bounds.width * scale).rounded()), height = Int((bounds.height * scale).rounded())
+        guard width > 0, height > 0,
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { return nil }
+        context.setFillColor(NSColor.black.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.interpolationQuality = .high
+        // The layer's frame, in pixels, with its gravity inside it.
+        var frame = playerLayer.isHidden ? imageLayer.frame : playerLayer.frame
+        frame = CGRect(x: frame.minX * scale, y: frame.minY * scale, width: frame.width * scale, height: frame.height * scale)
+        let size = CGSize(width: picture.width, height: picture.height)
+        if gravity == .resizeAspect || gravity == .resizeAspectFill, size.width > 0, size.height > 0 {
+            let fit = gravity == .resizeAspect
+                ? min(frame.width / size.width, frame.height / size.height)
+                : max(frame.width / size.width, frame.height / size.height)
+            let drawn = CGSize(width: size.width * fit, height: size.height * fit)
+            frame = CGRect(x: frame.midX - drawn.width / 2, y: frame.midY - drawn.height / 2, width: drawn.width, height: drawn.height)
+        }
+        context.draw(picture, in: frame)
+        return context.makeImage()
+    }
+
     // MARK: - Content
 
     func showVideo(at url: URL) {
