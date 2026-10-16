@@ -1,0 +1,544 @@
+import AppKit
+import Combine
+import SwiftUI
+import UniformTypeIdentifiers
+import WallpaperCore
+
+/// A scene of Wallpaper Engine's being made or changed in the editor: its project, what is
+/// selected, and the history of changes to take back. Every change shows in the preview at once
+/// and is written to the project a moment later; the project is then laid out for the player
+/// anew, so a wallpaper on the desktop follows the editor.
+@MainActor
+final class EngineEditorModel: ObservableObject {
+    /// The scene of the app.
+    let folder: URL
+    /// Its Wallpaper Engine project.
+    let projectFolder: URL
+    let title: String
+
+    @Published var document: WallpaperEngineDocument {
+        didSet { documentDidChange(from: oldValue) }
+    }
+    /// The object selected; nil is the scene as a whole.
+    @Published var selection: Int? {
+        didSet {
+            if selection != oldValue { preview?.select(selection) }
+        }
+    }
+    /// What the player says of the scene once it plays: the values of the effects, among others.
+    @Published private(set) var description: EngineSceneDescription?
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
+    @Published var isPlaying = true {
+        didSet { preview?.setPlaying(isPlaying) }
+    }
+    /// A sheet the editor shows: the effects to add, a system of particles to change.
+    @Published var sheet: Sheet?
+
+    enum Sheet: Identifiable {
+        case effects(object: Int)
+        case particles(object: Int)
+        case puppet(object: Int)
+
+        var id: String {
+            switch self {
+            case .effects(let object): return "effects-\(object)"
+            case .particles(let object): return "particles-\(object)"
+            case .puppet(let object): return "puppet-\(object)"
+            }
+        }
+    }
+
+    /// Called after the scene was written and laid out.
+    var onSave: (() -> Void)?
+    weak var preview: EngineEditorPreviewController?
+
+    private var undoStack: [WallpaperEngineDocument] = []
+    private var redoStack: [WallpaperEngineDocument] = []
+    private var lastChange = Date.distantPast
+    private var isApplyingHistory = false
+    private var saveTask: Task<Void, Never>?
+    private var layoutTask: Task<Void, Never>?
+    /// The project as it is on disk.
+    private var savedDocument: WallpaperEngineDocument
+    /// Files were brought into the project that the player does not have yet.
+    private var hasNewFiles = false
+
+    init(folder: URL, title: String) throws {
+        guard let project = WallpaperEngineProjectFolder.project(ofScene: folder) else {
+            throw WallpaperEngineProjectFolder.Problem.noScene
+        }
+        self.folder = folder
+        projectFolder = project
+        self.title = title
+        let read = try WallpaperEngineProjectFolder.read(from: project)
+        document = read
+        savedDocument = read
+    }
+
+    // MARK: - Changes
+
+    private func documentDidChange(from old: WallpaperEngineDocument) {
+        guard document != old else { return }
+        if !isApplyingHistory {
+            // Changes that follow closely — a slider being dragged — are one step to undo.
+            if Date().timeIntervalSince(lastChange) > 0.6 {
+                undoStack.append(old)
+                if undoStack.count > 200 { undoStack.removeFirst() }
+                redoStack = []
+            }
+            lastChange = Date()
+        }
+        canUndo = !undoStack.isEmpty
+        canRedo = !redoStack.isEmpty
+        if let selection, document.object(selection) == nil {
+            self.selection = nil
+        }
+        preview?.show(document, after: old)
+        scheduleSave()
+    }
+
+    /// The next change starts a new step to undo, however soon it comes.
+    func endGesture() {
+        lastChange = .distantPast
+    }
+
+    /// Makes a change as one step of its own.
+    func change(_ body: (inout WallpaperEngineDocument) throws -> Void) rethrows {
+        endGesture()
+        var copy = document
+        try body(&copy)
+        document = copy
+        endGesture()
+    }
+
+    func undo() {
+        guard let previous = undoStack.popLast() else { return }
+        redoStack.append(document)
+        restore(previous)
+    }
+
+    func redo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(document)
+        restore(next)
+    }
+
+    private func restore(_ other: WallpaperEngineDocument) {
+        isApplyingHistory = true
+        document = other
+        isApplyingHistory = false
+        canUndo = !undoStack.isEmpty
+        canRedo = !redoStack.isEmpty
+        endGesture()
+    }
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            saveNow()
+        }
+    }
+
+    /// Writes the project at once if it changed, and lays it out for the player.
+    func saveNow() {
+        saveTask?.cancel()
+        saveTask = nil
+        guard document != savedDocument || hasNewFiles else { return }
+        do {
+            try WallpaperEngineProjectFolder.write(document, previous: savedDocument, to: projectFolder)
+            savedDocument = document
+        } catch {
+            Log.playback.error("Cannot save the project \(self.folder.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let reload = hasNewFiles
+        hasNewFiles = false
+        let folder = self.folder
+        layoutTask?.cancel()
+        layoutTask = Task { [weak self] in
+            let done = await Task.detached(priority: .userInitiated) { () -> Bool in
+                (try? WallpaperEngineProjectFolder.layOut(scene: folder)) != nil
+            }.value
+            guard let self, done, !Task.isCancelled else { return }
+            if reload {
+                self.preview?.reload()
+                // A video plays in the editor once it is WebM.
+                MediaConversion.shared.convertSoon(folder)
+            }
+            self.onSave?()
+        }
+    }
+
+    // MARK: - From the preview
+
+    func playerDidStart(_ description: EngineSceneDescription) {
+        if description != self.description {
+            self.description = description
+        }
+    }
+
+    /// An object moved, scaled or turned with the mouse; the page shows it already.
+    func applyFromPreview(object id: Int, patch: [String: Double]) {
+        document.update(id) { object in
+            if patch["x"] != nil || patch["y"] != nil {
+                var origin = object["origin"]?.vector ?? [0, 0, 0]
+                while origin.count < 3 { origin.append(0) }
+                if let x = patch["x"] { origin[0] = x }
+                if let y = patch["y"] { origin[1] = y }
+                object["origin"] = (object["origin"] ?? .null).replacingPlain(with: .vector(origin))
+            }
+            if patch["scaleX"] != nil || patch["scaleY"] != nil {
+                var scale = object["scale"]?.vector ?? [1, 1, 1]
+                while scale.count < 3 { scale.append(1) }
+                if let x = patch["scaleX"] { scale[0] = x }
+                if let y = patch["scaleY"] { scale[1] = y }
+                object["scale"] = (object["scale"] ?? .null).replacingPlain(with: .vector(scale))
+            }
+            if let rotation = patch["rotation"] {
+                var angles = object["angles"]?.vector ?? [0, 0, 0]
+                while angles.count < 3 { angles.append(0) }
+                angles[2] = -rotation * .pi / 180
+                object["angles"] = (object["angles"] ?? .null).replacingPlain(with: .vector(angles))
+            }
+        }
+    }
+
+    // MARK: - The lock screen
+
+    /// Whether an object is part of the still picture the lock screen shows. The app keeps this
+    /// beside the project, in the scene's own file: Wallpaper Engine has nothing of the kind,
+    /// and the project stays as it takes it.
+    func showsOnLockScreen(_ id: Int) -> Binding<Bool> {
+        Binding(
+            get: { [weak self] in
+                guard let self, let scene = try? SceneProject.read(from: self.folder) else { return true }
+                return scene.background.engine[object: id].showsOnLockScreen ?? true
+            },
+            set: { [weak self] shows in
+                guard let self, var scene = try? SceneProject.read(from: self.folder) else { return }
+                scene.background.engine[object: id].showsOnLockScreen = shows ? nil : false
+                try? SceneProject.write(scene, to: self.folder)
+                self.objectWillChange.send()
+                self.onSave?()
+            }
+        )
+    }
+
+    // MARK: - Objects
+
+    /// The objects as the list shows them: the one in front first, each followed by those that
+    /// hang on it, one step further in.
+    var rows: [(id: Int, depth: Int)] {
+        let ids = document.objectIDs
+        let known = Set(ids)
+        var children: [Int: [Int]] = [:]
+        var roots: [Int] = []
+        for id in ids {
+            if let parent = document.parent(of: id), parent != id, known.contains(parent) {
+                children[parent, default: []].append(id)
+            } else {
+                roots.append(id)
+            }
+        }
+        var result: [(Int, Int)] = []
+        var seen: Set<Int> = []
+        func add(_ id: Int, depth: Int) {
+            guard seen.insert(id).inserted else { return }
+            result.append((id, depth))
+            for child in (children[id] ?? []).reversed() { add(child, depth: depth + 1) }
+        }
+        roots.reversed().forEach { add($0, depth: 0) }
+        ids.reversed().forEach { add($0, depth: 0) }
+        return result
+    }
+
+    func name(of id: Int) -> String {
+        guard let object = document.object(id) else { return "" }
+        if let name = object["name"]?.plain.stringValue, !name.isEmpty { return name }
+        return Self.kindTitle(WallpaperEngineDocument.kind(of: object))
+    }
+
+    func kind(of id: Int) -> WallpaperEngineDocument.ObjectKind {
+        document.object(id).map(WallpaperEngineDocument.kind(of:)) ?? .group
+    }
+
+    func isVisible(_ id: Int) -> Bool {
+        document.object(id)?["visible"]?.plain.boolValue ?? true
+    }
+
+    func toggleVisibility(of id: Int) {
+        let shown = !isVisible(id)
+        change { document in
+            document.update(id) { $0["visible"] = ($0["visible"] ?? .null).replacingPlain(with: .bool(shown)) }
+        }
+    }
+
+    func rename(_ id: Int, to name: String) {
+        change { document in document.update(id) { $0["name"] = .string(name) } }
+    }
+
+    func delete(_ id: Int) {
+        change { $0.remove(id) }
+    }
+
+    func duplicate(_ id: Int) {
+        var made: Int?
+        change { made = $0.duplicate(id) }
+        selection = made
+    }
+
+    /// Moves an object one place nearer the front, or further back, among those it hangs with.
+    func move(_ id: Int, forward: Bool) {
+        let parent = document.parent(of: id)
+        var order = document.objectIDs
+        let siblings = order.filter { document.parent(of: $0) == parent }
+        guard let at = siblings.firstIndex(of: id) else { return }
+        let other = forward ? at + 1 : at - 1
+        guard siblings.indices.contains(other) else { return }
+        let a = order.firstIndex(of: id)!, b = order.firstIndex(of: siblings[other])!
+        order.swapAt(a, b)
+        change { $0.reorder(order) }
+    }
+
+    /// Hangs an object on another, or on nothing; it stays where it is in the scene.
+    func setParent(of id: Int, to parent: Int?) {
+        guard parent != id, !(parent.map { isInside($0, id) } ?? false) else { return }
+        let before = worldOrigin(of: id)
+        let base = parent.map(worldOrigin(of:)) ?? [0, 0]
+        change { document in
+            document.update(id) { object in
+                if let parent { object["parent"] = .number(Double(parent)) } else { object["parent"] = nil }
+                var origin = object["origin"]?.vector ?? [0, 0, 0]
+                while origin.count < 3 { origin.append(0) }
+                origin[0] = before[0] - base[0]
+                origin[1] = before[1] - base[1]
+                object["origin"] = (object["origin"] ?? .null).replacingPlain(with: .vector(origin))
+            }
+            // Drawn with what it now hangs on: just after it and its own.
+            var order = document.objectIDs.filter { $0 != id }
+            if let parent, let at = order.lastIndex(where: { $0 == parent || self.isInside($0, parent, in: document) }) {
+                order.insert(id, at: at + 1)
+            } else {
+                order.append(id)
+            }
+            document.reorder(order)
+        }
+    }
+
+    /// Whether an object hangs on another, at any depth.
+    func isInside(_ id: Int, _ other: Int) -> Bool {
+        isInside(id, other, in: document)
+    }
+
+    private func isInside(_ id: Int, _ other: Int, in document: WallpaperEngineDocument) -> Bool {
+        var at = document.parent(of: id)
+        var steps = 0
+        while let current = at, steps < 64 {
+            if current == other { return true }
+            at = document.parent(of: current)
+            steps += 1
+        }
+        return false
+    }
+
+    /// Where an object is in the scene, as the places of what it hangs on add up.
+    private func worldOrigin(of id: Int) -> [Double] {
+        var total = [0.0, 0.0]
+        var at: Int? = id
+        var steps = 0
+        while let current = at, steps < 64 {
+            let origin = document.object(current)?["origin"]?.vector ?? [0, 0]
+            total[0] += origin.first ?? 0
+            total[1] += origin.count > 1 ? origin[1] : 0
+            at = document.parent(of: current)
+            steps += 1
+        }
+        return total
+    }
+
+    // MARK: - Adding
+
+    /// Where a new object goes: into the selected composition layer or group, else on its own.
+    private var newParent: Int? {
+        guard let selection else { return nil }
+        let kind = self.kind(of: selection)
+        return kind == .composition || kind == .group ? selection : nil
+    }
+
+    func addPicture() {
+        guard let url = choose([.image]) else { return }
+        do {
+            let picture = try WallpaperEngineProjectFolder.addPicture(url, to: projectFolder)
+            hasNewFiles = true
+            var made = 0
+            change { made = $0.addImage(texture: picture.texture, width: picture.width, height: picture.height,
+                                        name: url.deletingPathExtension().lastPathComponent, under: newParent) }
+            selection = made
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    func addVideo() {
+        guard let url = choose([.movie]) else { return }
+        let projectFolder = self.projectFolder
+        let parent = newParent
+        Task {
+            do {
+                let video = try await WallpaperEngineVideo.prepare(url)
+                let texture = try WallpaperEngineProjectFolder.addVideo(video.file, width: video.width, height: video.height,
+                                                                         named: url.deletingPathExtension().lastPathComponent, to: projectFolder)
+                hasNewFiles = true
+                var made = 0
+                change { made = $0.addImage(texture: texture, width: video.width, height: video.height,
+                                            name: url.deletingPathExtension().lastPathComponent, under: parent) }
+                selection = made
+            } catch {
+                NSAlert(error: error).runModal()
+            }
+        }
+    }
+
+    func addText() {
+        var made = 0
+        change { made = $0.addText(NSLocalizedString("Text", comment: "Text of a new text object"), name: Self.kindTitle(.text), under: newParent) }
+        selection = made
+    }
+
+    func addSolid() {
+        let size = document.size
+        var made = 0
+        change { made = $0.addSolid(color: [0.2, 0.5, 0.9], width: size.width / 3, height: size.height / 3, name: Self.kindTitle(.solid), under: newParent) }
+        selection = made
+    }
+
+    func addComposition() {
+        var made = 0
+        change { made = $0.addComposition(name: Self.kindTitle(.composition), under: newParent) }
+        selection = made
+    }
+
+    func addGroup() {
+        var made = 0
+        change { made = $0.addGroup(name: Self.kindTitle(.group), under: newParent) }
+        selection = made
+    }
+
+    func addParticles(_ preset: WallpaperEngineParticlePreset) {
+        do {
+            var made = 0
+            try change { made = try $0.addParticles(preset, projectFolder: projectFolder) }
+            hasNewFiles = true
+            selection = made
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    func addSound() {
+        guard let url = choose([.audio]) else { return }
+        do {
+            let file = try WallpaperEngineProjectFolder.addFile(url, into: "sounds", of: projectFolder)
+            hasNewFiles = true
+            var made = 0
+            change { made = $0.addSound(file, name: url.deletingPathExtension().lastPathComponent) }
+            selection = made
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    /// Puts a picture in place of the one an image object shows.
+    func replacePicture(of id: Int) {
+        guard let url = choose([.image]), let material = document.material(ofObject: id) else { return }
+        do {
+            let picture = try WallpaperEngineProjectFolder.addPicture(url, to: projectFolder)
+            hasNewFiles = true
+            change { document in
+                var value = material.value
+                if var passes = value["passes"]?.arrayValue, !passes.isEmpty {
+                    passes[0]["textures"] = .array([.string(picture.texture)])
+                    value["passes"] = .array(passes)
+                }
+                document.setFile(material.name, value)
+                document.update(id) { $0["size"] = .vector([Double(picture.width), Double(picture.height)]) }
+            }
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    /// A font file brought into the project, for a text to be written in.
+    func importFont(for id: Int) {
+        let types = ["ttf", "otf"].compactMap { UTType(filenameExtension: $0) }
+        guard let url = choose(types) else { return }
+        do {
+            let file = try WallpaperEngineProjectFolder.addFile(url, into: "fonts", of: projectFolder)
+            hasNewFiles = true
+            change { document in document.update(id) { $0["font"] = .string(file) } }
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    /// Files were written into the project — a puppet, say — that the player is to read.
+    func markNewFiles() {
+        hasNewFiles = true
+        scheduleSave()
+    }
+
+    // MARK: - Effects
+
+    func addEffect(_ effect: WallpaperEngineEffect, to id: Int) {
+        do {
+            try change { try $0.addEffect(effect, to: id, projectFolder: projectFolder) }
+            hasNewFiles = true
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func choose(_ types: [UTType]) -> URL? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = types
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = NSLocalizedString("Choose", comment: "Open panel button")
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    static func kindTitle(_ kind: WallpaperEngineDocument.ObjectKind) -> String {
+        switch kind {
+        case .image: return NSLocalizedString("Image", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .text: return NSLocalizedString("Text", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .particles: return NSLocalizedString("Particles", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .sound: return NSLocalizedString("Sound", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .model: return NSLocalizedString("3D Model", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .light: return NSLocalizedString("Light Source", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .solid: return NSLocalizedString("Solid Color", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .composition: return NSLocalizedString("Composition Layer", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .fullscreen: return NSLocalizedString("Fullscreen Layer", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .group: return NSLocalizedString("Group", comment: "Kind of an object of a Wallpaper Engine scene")
+        }
+    }
+
+    static func symbol(_ kind: WallpaperEngineDocument.ObjectKind) -> String {
+        switch kind {
+        case .image: return "photo"
+        case .text: return "textformat"
+        case .particles: return "sparkles"
+        case .sound: return "speaker.wave.2"
+        case .model: return "cube"
+        case .light: return "lightbulb"
+        case .solid: return "square.fill"
+        case .composition: return "square.stack.3d.up"
+        case .fullscreen: return "rectangle.inset.filled"
+        case .group: return "square.dashed"
+        }
+    }
+}

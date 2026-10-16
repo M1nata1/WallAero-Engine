@@ -7035,6 +7035,30 @@ public enum WallpaperEngineRuntime {
         // The values of an object that are played as they change.
         var FOLLOWED = ['origin', 'scale', 'angles', 'alpha', 'color', 'visible', 'text', 'pointsize', 'volume'];
 
+        // An object without what is played as it changes — those values, its name, and of its
+        // effects whether they show and their values: what stays the same while an object is only
+        // moved, recolored or set otherwise.
+        function skeleton(object) {
+          var copy = merged(object, {});
+          FOLLOWED.forEach(function (name) { delete copy[name]; });
+          delete copy.name;
+          copy.effects = (object.effects || []).map(function (use) {
+            return { file: use && use.file, passes: ((use && use.passes) || []).map(function (pass) {
+              return { combos: pass && pass.combos, textures: pass && pass.textures };
+            }) };
+          });
+          return copy;
+        }
+
+        // A value as text with its keys in order, to tell whether two are the same.
+        function canonical(value) {
+          if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+          if (value && typeof value === 'object') {
+            return '{' + Object.keys(value).sort().map(function (name) { return JSON.stringify(name) + ':' + canonical(value[name]); }).join(',') + '}';
+          }
+          return JSON.stringify(value === undefined ? null : value);
+        }
+
         // Brings what is played of an object up to the object as the editor has changed it. False
         // when that cannot be done without playing the scene anew: something that was not made
         // ready because it was hidden is to show.
@@ -7604,6 +7628,32 @@ public enum WallpaperEngineRuntime {
             var followed = things.slice().every(function (thing) {
               var original = isSet(thing.id) ? pristine.objects[String(thing.id)] : null;
               return !original || follow(thing, amended(original, changeOf(thing.id)));
+            });
+            changed();
+            return followed;
+          },
+          // The scene as the editor now has it, its file written anew. What changed of the values
+          // played as they change shows at once; false when anything else changed, which needs the
+          // scene played anew from the new file.
+          setDescription: function (text) {
+            var next;
+            try { next = JSON.parse(text); } catch (error) { return false; }
+            if (stopped) return true;
+            var nextObjects = Array.isArray(next && next.objects) ? next.objects : [];
+            if (nextObjects.length !== pristine.order.length) return false;
+            if (canonical(next.general || {}) !== canonical(pristine.general)) return false;
+            for (var i = 0; i < nextObjects.length; i++) {
+              var before = pristine.order[i] || {}, after = nextObjects[i] || {};
+              if (String(before.id) !== String(after.id) || canonical(skeleton(before)) !== canonical(skeleton(after))) return false;
+            }
+            files['scene.json'] = text;
+            pristine.order = nextObjects;
+            nextObjects.forEach(function (object) {
+              if (isSet(object.id)) pristine.objects[String(object.id)] = object;
+            });
+            var followed = things.slice().every(function (thing) {
+              var object = isSet(thing.id) ? pristine.objects[String(thing.id)] : null;
+              return !object || follow(thing, amended(object, changeOf(thing.id)));
             });
             changed();
             return followed;

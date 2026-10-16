@@ -407,6 +407,8 @@ enum SceneEditorScript {
       window.wallaeroEditor = {
         select: function (id) { select(id, false); },
         selectObject: function (id) { selectObject(id, false); },
+        // The scene changed in the editor: what the player has of it is read again.
+        refresh: describeEngine,
         setAccent: function (color) { document.documentElement.style.setProperty('--wallaero-accent', color); }
       };
       post({ type: 'ready' });

@@ -1,4 +1,5 @@
 import CoreGraphics
+import CryptoKit
 import Foundation
 import ImageIO
 
@@ -40,10 +41,12 @@ public enum WallpaperEngineScene {
     /// Lays the scene out in `folder/engine`. Throws when the scene has nothing to draw.
     /// - Parameter chosen: the pictures chosen for the settings of the scene that take a
     ///   picture, by the settings' names.
-    static func export(_ package: WallpaperEnginePackage, into folder: URL, chosen: [String: URL] = [:]) throws -> LeftOut {
+    /// - Parameter allowEmpty: whether a scene with nothing to draw yet is laid out too: one
+    ///   being made in the editor.
+    static func export(_ package: WallpaperEnginePackage, into folder: URL, chosen: [String: URL] = [:], allowEmpty: Bool = false) throws -> LeftOut {
         guard let description = package.json(named: "scene.json") else { throw ImportError.unreadable }
         let objects = (description["objects"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
-        guard objects.contains(where: { has($0["image"]) || has($0["particle"]) || has($0["text"]) }) else {
+        guard allowEmpty || objects.contains(where: { has($0["image"]) || has($0["particle"]) || has($0["text"]) }) else {
             throw ImportError.noPicturesInScene
         }
 
@@ -60,6 +63,13 @@ public enum WallpaperEngineScene {
         var fontFiles: [String: String] = [:]
         var puppets: [String: Any] = [:]
         var number = 0
+        // Files are named after what is in them, so that laying a scene out again — the editor
+        // does after every change — writes only what is new. What a texture was read as is kept
+        // next to them, so that a picture is not read again either.
+        let cacheURL = engine.appendingPathComponent(cacheName)
+        let cache = ((try? Data(contentsOf: cacheURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
+        var newCache: [String: Any] = [:]
+        func written(_ url: URL) -> Bool { files.fileExists(atPath: url.path) }
         for name in package.names {
             let key = Self.key(name)
             let fileExtension = (key as NSString).pathExtension
@@ -73,22 +83,31 @@ public enum WallpaperEngineScene {
                 }
                 texts[key] = text
             case "tex":
-                guard let data = package.data(named: name), let texture = WallpaperEngineTexture.texture(from: data) else { continue }
+                guard let data = package.data(named: name) else { continue }
+                let digest = Self.digest(data)
+                if let entry = cache[digest] as? [String: Any], Self.filesNamed(in: entry).allSatisfy({ written(folder.appendingPathComponent($0)) }) {
+                    textures[(key as NSString).deletingPathExtension] = entry
+                    newCache[digest] = entry
+                    continue
+                }
+                guard let texture = WallpaperEngineTexture.texture(from: data) else { continue }
                 if let video = texture.video {
-                    number += 1
-                    let fileName = "\(number).mp4"
-                    try video.file.write(to: pictures.appendingPathComponent(fileName))
-                    textures[(key as NSString).deletingPathExtension] = [
+                    let fileName = "\(digest).mp4"
+                    if !written(pictures.appendingPathComponent(fileName)) {
+                        try video.file.write(to: pictures.appendingPathComponent(fileName))
+                    }
+                    let entry: [String: Any] = [
                         "video": "\(folderName)/tex/\(fileName)", "width": video.width, "height": video.height,
                         "clamp": texture.isClamped, "smooth": texture.isSmooth,
-                    ] as [String: Any]
+                    ]
+                    textures[(key as NSString).deletingPathExtension] = entry
+                    newCache[digest] = entry
                     continue
                 }
                 var written: [[String: Any]] = []
-                for picture in texture.pictures {
-                    number += 1
+                for (index, picture) in texture.pictures.enumerated() {
                     // A PNG or JPEG the texture held is kept as it is; anything else is saved as PNG.
-                    let fileName = "\(number).\(picture.file?.fileExtension ?? "png")"
+                    let fileName = "\(digest)-\(index).\(picture.file?.fileExtension ?? "png")"
                     if let file = picture.file {
                         try file.data.write(to: pictures.appendingPathComponent(fileName))
                     } else {
@@ -109,6 +128,7 @@ public enum WallpaperEngineScene {
                 }
                 // A material names a texture without its ending.
                 textures[(key as NSString).deletingPathExtension] = entry
+                newCache[digest] = entry
             case "mdl":
                 // A picture that bends. One that cannot be read is shown as the plain picture.
                 guard let data = package.data(named: name), let puppet = WallpaperEnginePuppet(data: data) else { continue }
@@ -116,16 +136,18 @@ public enum WallpaperEngineScene {
             case "mp3", "wav", "ogg", "m4a", "aac", "flac":
                 guard let data = package.data(named: name) else { continue }
                 try files.createDirectory(at: sounds, withIntermediateDirectories: true)
-                number += 1
-                let fileName = "\(number).\(fileExtension)"
-                try data.write(to: sounds.appendingPathComponent(fileName))
+                let fileName = "\(Self.digest(data)).\(fileExtension)"
+                if !written(sounds.appendingPathComponent(fileName)) {
+                    try data.write(to: sounds.appendingPathComponent(fileName))
+                }
                 soundFiles[key] = "\(folderName)/sounds/\(fileName)"
             case "ttf", "otf", "ttc", "woff", "woff2":
                 guard let data = package.data(named: name) else { continue }
                 try files.createDirectory(at: fonts, withIntermediateDirectories: true)
-                number += 1
-                let fileName = "\(number).\(fileExtension)"
-                try data.write(to: fonts.appendingPathComponent(fileName))
+                let fileName = "\(Self.digest(data)).\(fileExtension)"
+                if !written(fonts.appendingPathComponent(fileName)) {
+                    try data.write(to: fonts.appendingPathComponent(fileName))
+                }
                 fontFiles[key] = "\(folderName)/fonts/\(fileName)"
             default:
                 continue
@@ -137,9 +159,10 @@ public enum WallpaperEngineScene {
         for font in fontNames(in: description) where fontFiles[key(font)] == nil {
             guard let stock = stockFont(named: font), let data = try? Data(contentsOf: stock) else { continue }
             try files.createDirectory(at: fonts, withIntermediateDirectories: true)
-            number += 1
-            let fileName = "\(number).\(stock.pathExtension.lowercased())"
-            try data.write(to: fonts.appendingPathComponent(fileName))
+            let fileName = "\(Self.digest(data)).\(stock.pathExtension.lowercased())"
+            if !written(fonts.appendingPathComponent(fileName)) {
+                try data.write(to: fonts.appendingPathComponent(fileName))
+            }
             fontFiles[key(font)] = "\(folderName)/fonts/\(fileName)"
         }
 
@@ -160,9 +183,43 @@ public enum WallpaperEngineScene {
         script.append(json)
         script.append(Data(";\n".utf8))
         try script.write(to: engine.appendingPathComponent(filesName), options: .atomic)
+        if let data = try? JSONSerialization.data(withJSONObject: newCache, options: [.sortedKeys]) {
+            try? data.write(to: cacheURL, options: .atomic)
+        }
+        // What the scene no longer has goes, and the original of a video turned into WebM with it.
+        let kept = Set(Self.filesNamed(in: table).map { (($0 as NSString).lastPathComponent) })
+        for directory in [pictures, sounds, fonts] {
+            for name in (try? files.contentsOfDirectory(atPath: directory.path)) ?? [] where !kept.contains(name) && !name.hasPrefix(".") {
+                try? files.removeItem(at: directory.appendingPathComponent(name))
+                let relative = "\(folderName)/\(directory.lastPathComponent)/\(name)"
+                try? files.removeItem(at: folder.appendingPathComponent(WebMediaConverter.originalsFolderName).appendingPathComponent(relative))
+            }
+        }
 
         let solids = Set(puppets.filter { ($0.value as? [String: Any])?["solid"] != nil }.keys)
         return leftOut(of: objects, in: package, puppets: Set(puppets.keys), solids: solids)
+    }
+
+    /// Where what textures were read as is kept, in the `engine` folder.
+    static let cacheName = "cache.json"
+
+    /// A short name for what is in a file.
+    static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).prefix(10).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The files of the folder a table names: every text in it that starts with the `engine` folder.
+    static func filesNamed(in value: Any) -> [String] {
+        if let text = value as? String {
+            return text.hasPrefix(folderName + "/") ? [text] : []
+        }
+        if let dictionary = value as? [String: Any] {
+            return dictionary.values.flatMap(filesNamed(in:))
+        }
+        if let array = value as? [Any] {
+            return array.flatMap(filesNamed(in:))
+        }
+        return []
     }
 
     /// A picture chosen for a setting of the scene, as a texture: a picture is written out as
