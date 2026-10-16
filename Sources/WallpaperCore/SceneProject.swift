@@ -412,6 +412,38 @@ public enum SceneProject {
         }
       }
 
+      // The scene's file as the editor has just written it: what can be shown at once is; the
+      // scene is played anew from it otherwise.
+      function setEngineScene(text) {
+        if (!window.wallaeroEngineScene || !enginePlayer) return;
+        window.wallaeroEngineScene.files['scene.json'] = text;
+        if (enginePlayer.setDescription && enginePlayer.setDescription(text)) return;
+        replayEngine();
+      }
+
+      function replayEngine() {
+        if (!enginePlayer || !enginePlayer.canvas) return;
+        var canvas = enginePlayer.canvas;
+        enginePlayer.stop(true);
+        enginePlayer = window.WallaeroEngine.play(canvas, window.wallaeroEngineScene, engineSettings(), engineChanges());
+      }
+
+      // Files of the scene as the editor has just written them — a material, particles — by
+      // the names the player knows them by: the scene is played anew with them.
+      function setEngineFiles(changed) {
+        if (!window.wallaeroEngineScene || !enginePlayer) return;
+        Object.keys(changed || {}).forEach(function (name) { window.wallaeroEngineScene.files[name] = changed[name]; });
+        replayEngine();
+      }
+
+      // The scene's files laid out anew — the editor brought in a picture, a sound, a puppet:
+      // they are read again and the scene is played anew.
+      function reloadEngine() {
+        var source = scene && scene.background && scene.background.source;
+        if (!source || !enginePlayer) return;
+        loadScript(source + '?' + Date.now(), replayEngine);
+      }
+
       // --- A page as the background -----------------------------------------
 
       // A variable that stands for a setting of the page, in the form Wallpaper Engine hands
@@ -641,6 +673,9 @@ public enum SceneProject {
         // For the editor, which changes the scene's `background.engine` in place while an
         // object of Wallpaper Engine's scene is dragged, and has it shown.
         updateEngine: tellEngine,
+        setEngineScene: setEngineScene,
+        setEngineFiles: setEngineFiles,
+        reloadEngine: reloadEngine,
         // A copy: the values are changed from the wallpaper's settings, not from here.
         get variables() { return Object.assign({}, variables); }
       };

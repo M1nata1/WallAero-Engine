@@ -53,8 +53,12 @@ struct WallpaperEnginePackage {
     private init?(looseFilesIn folder: URL) {
         let files = FileManager.default
         guard files.fileExists(atPath: folder.appendingPathComponent("scene.json").path) else { return nil }
+        // Paths compared as they really are: a folder may be reached through a link.
+        let root = folder.standardizedFileURL.resolvingSymlinksInPath().path
         names = (files.enumerator(at: folder, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? [])
-            .map { String($0.path.dropFirst(folder.path.count + 1)) }
+            .map { $0.standardizedFileURL.resolvingSymlinksInPath().path }
+            .filter { $0.hasPrefix(root + "/") }
+            .map { String($0.dropFirst(root.count + 1)) }
         read = { name in
             let name = name.replacingOccurrences(of: "\\", with: "/")
             // A name that leads out of the folder is not followed.

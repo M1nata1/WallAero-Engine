@@ -40,7 +40,7 @@ public enum Thumbnailer {
         }
     }
 
-    static func writeJPEG(_ image: CGImage, to url: URL, quality: Double = 0.85) throws {
+    public static func writeJPEG(_ image: CGImage, to url: URL, quality: Double = 0.85) throws {
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
             throw ImportError.conversionFailed("Cannot create \(url.lastPathComponent).")
         }

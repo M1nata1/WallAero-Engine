@@ -6,6 +6,8 @@ struct LibraryActions {
     var addFiles: () -> Void
     /// Opens a wallpaper in the scene editor; a video or a picture becomes a scene first.
     var edit: (Wallpaper) -> Void = { _ in }
+    /// Makes a new scene and opens it in the editor.
+    var newScene: () -> Void = {}
 }
 
 extension WallpaperLibrary {
@@ -202,6 +204,7 @@ struct LibraryView: View {
                     }
                     ToolbarItemGroup(placement: .primaryAction) {
                         pauseButton
+                        newSceneButton
                         addButton
                     }
                 }
@@ -250,6 +253,7 @@ struct LibraryView: View {
             }
             Spacer()
             pauseButton
+            newSceneButton
             addButton
             SettingsToggle(isOn: $state.showsSettings)
         }
@@ -279,6 +283,13 @@ struct LibraryView: View {
         .disabled(!manager.hasWallpaper)
         // In the toolbar the buttons are pictures only; their names show when the pointer rests.
         .help(title)
+    }
+
+    private var newSceneButton: some View {
+        Button(action: actions.newScene) {
+            Label("New Scene", systemImage: "square.and.pencil")
+        }
+        .help("New Scene")
     }
 
     private var addButton: some View {

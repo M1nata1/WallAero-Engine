@@ -105,6 +105,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.run()
             return
         }
+        if let request = ScreenshotMode.attachTest {
+            ScreenshotMode.runAttachTest(request)
+            app.run()
+            return
+        }
         if let request = ScreenshotMode.importTest {
             ScreenshotMode.runImportTest(request)
             app.run()
@@ -137,7 +142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AnyView(
                 MainView(actions: LibraryActions(
                     addFiles: { [unowned self] in addWallpapers(nil) },
-                    edit: { [unowned self] item in edit(item) }
+                    edit: { [unowned self] item in edit(item) },
+                    newScene: { [unowned self] in newScene(nil) }
                 ))
                 .environmentObject(library)
                 .environmentObject(manager)
@@ -286,21 +292,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             editScene(item)
             return
         }
-        do {
-            let name = String(format: NSLocalizedString("%@ (scene)", comment: "Name of a scene made from a wallpaper"), item.name)
-            let scene = try library.makeScene(from: item, named: name)
-            // Chromium plays the video once it is WebM.
-            MediaConversion.shared.convertSoon(library.projectURL(for: scene))
-            windows.state.selection = scene.id
-            editScene(scene)
-        } catch {
-            NSAlert(error: error).runModal()
+        let name = String(format: NSLocalizedString("%@ (scene)", comment: "Name of a scene made from a wallpaper"), item.name)
+        Task {
+            do {
+                let scene = try await library.makeEngineScene(from: item, named: name, size: Self.sceneSize)
+                // Chromium plays the video once it is WebM.
+                MediaConversion.shared.convertSoon(library.projectURL(for: scene))
+                windows.state.selection = scene.id
+                editScene(scene)
+            } catch {
+                NSAlert(error: error).runModal()
+            }
         }
+    }
+
+    /// A new, empty scene, made as Wallpaper Engine makes one, opened in the editor.
+    @objc func newScene(_ sender: Any?) {
+        Task {
+            do {
+                let scene = try await library.makeEngineScene(named: NSLocalizedString("New Scene", comment: "Name of a new scene"),
+                                                              size: Self.sceneSize)
+                windows.state.selection = scene.id
+                editScene(scene)
+            } catch {
+                NSAlert(error: error).runModal()
+            }
+        }
+    }
+
+    /// The size a new scene is made at: the main display's, in its pixels.
+    private static var sceneSize: CGSize {
+        guard let screen = NSScreen.main else { return CGSize(width: 1920, height: 1080) }
+        return CGSize(width: screen.frame.width * screen.backingScaleFactor, height: screen.frame.height * screen.backingScaleFactor)
     }
 
     /// Opens the editor for a scene of the library, or brings it forward if it is open.
     func editScene(_ item: Wallpaper) {
         guard !windows.showOpenEditor(for: item.id) else { return }
+        let folder = library.projectURL(for: item)
+        if WallpaperEngineProjectFolder.project(ofScene: folder) != nil {
+            editEngineScene(item)
+            return
+        }
+        // A scene of Wallpaper Engine's added before the editor could change one has no project
+        // of its own yet; it gets it back from the archive it came in.
+        if let scene = try? SceneProject.read(from: folder), scene.background.kind == .engine, !windows.showOpenEditor(for: item.id) {
+            let alert = NSAlert()
+            alert.messageText = NSLocalizedString("This scene was added before the new editor", comment: "Alert title")
+            alert.informativeText = NSLocalizedString("To change it in the new editor, choose the archive or folder it was added from. It stays the same wallpaper, with its settings and your changes.", comment: "Alert text")
+            alert.addButton(withTitle: NSLocalizedString("Choose Archive…", comment: "Alert button"))
+            alert.addButton(withTitle: NSLocalizedString("Open in the Earlier Editor", comment: "Alert button"))
+            alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "Alert button"))
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = true
+                panel.canChooseDirectories = true
+                panel.allowsMultipleSelection = false
+                panel.allowedContentTypes = MediaImporter.acceptedContentTypes
+                panel.message = String(format: NSLocalizedString("Choose the archive or folder “%@” was added from.", comment: "Open panel"), item.name)
+                panel.prompt = NSLocalizedString("Choose", comment: "Open panel button")
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                Task {
+                    do {
+                        try await library.attachEngineProject(from: url, to: item)
+                        MediaConversion.shared.convertSoon(folder)
+                        manager.webWallpaperDidChange(item)
+                        editEngineScene(item)
+                    } catch {
+                        let failed = NSAlert()
+                        failed.messageText = NSLocalizedString("This is not the scene's archive", comment: "Alert title")
+                        failed.informativeText = NSLocalizedString("No Wallpaper Engine scene of that name was found in it.", comment: "Alert text")
+                        failed.runModal()
+                    }
+                }
+                return
+            case .alertSecondButtonReturn:
+                break
+            default:
+                return
+            }
+        }
+        // A scene of the app's own format becomes one of Wallpaper Engine's, which the editor
+        // makes; one with a layer of code or a page behind it stays as it is.
+        if let scene = try? SceneProject.read(from: folder), WallpaperSceneConversion.canConvert(scene) {
+            Task {
+                do {
+                    try await WallpaperSceneConversion.convert(sceneIn: folder, size: Self.sceneSize, title: item.name)
+                    MediaConversion.shared.convertSoon(folder)
+                    manager.webWallpaperDidChange(item)
+                    editEngineScene(item)
+                } catch {
+                    NSAlert(error: error).runModal()
+                }
+            }
+            return
+        }
         do {
             let model = try SceneEditorModel(folder: library.projectURL(for: item), title: item.name)
             // The library thumbnail and the lock-screen still follow the edits.
@@ -308,6 +395,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let preview = SceneEditorPreviewController(model: model)
             windows.showEditor(for: item.id, title: item.name,
                                content: AnyView(SceneEditorView(model: model, preview: preview)),
+                               onClose: { model.saveNow() })
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    /// Opens the editor of a scene made as Wallpaper Engine makes one.
+    private func editEngineScene(_ item: Wallpaper) {
+        do {
+            let model = try EngineEditorModel(folder: library.projectURL(for: item), title: item.name)
+            model.onSave = { [weak self] in self?.manager.webWallpaperDidChange(item) }
+            let preview = EngineEditorPreviewController(model: model)
+            windows.showEditor(for: item.id, title: item.name,
+                               content: AnyView(EngineEditorView(model: model, preview: preview)),
                                onClose: { model.saveNow() })
         } catch {
             NSAlert(error: error).runModal()
@@ -424,6 +525,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: NSLocalizedString("Quit WallAero Engine", comment: "Menu item"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         let fileMenu = NSMenu(title: NSLocalizedString("File", comment: "Menu title"))
+        fileMenu.addItem(withTitle: NSLocalizedString("New Scene", comment: "Menu item"), action: #selector(newScene(_:)), keyEquivalent: "n")
         fileMenu.addItem(withTitle: NSLocalizedString("Add Wallpapers…", comment: "Menu item"), action: #selector(addWallpapers(_:)), keyEquivalent: "o")
             .setSymbol("plus")
         fileMenu.addItem(withTitle: NSLocalizedString("Open Library…", comment: "Menu item"), action: #selector(showLibrary(_:)), keyEquivalent: "l")

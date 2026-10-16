@@ -54,7 +54,7 @@ public enum Archive {
     }
 
     /// Whether a file named so in an archive lands inside the folder the archive is unpacked into.
-    static func staysInside(_ name: String) -> Bool {
+    public static func staysInside(_ name: String) -> Bool {
         !name.hasPrefix("/") && !name.split(separator: "/", omittingEmptySubsequences: false).contains("..")
     }
 

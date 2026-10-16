@@ -223,8 +223,14 @@ public final class WallpaperLibrary: ObservableObject {
             do {
                 // Unpacking the pictures takes a while; the app stays responsive meanwhile.
                 leftOut = try await Task.detached(priority: .userInitiated) {
-                    guard let package = WallpaperEnginePackage(folder: source) else { throw ImportError.unreadable }
+                    guard WallpaperEnginePackage(folder: source) != nil else { throw ImportError.unreadable }
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    // The project is kept as Wallpaper Engine's editor keeps one, for the app's
+                    // editor to change and to give back to Wallpaper Engine; the player plays
+                    // what is laid out of it.
+                    let project = folder.appendingPathComponent(WallpaperEngineProjectFolder.folderName, isDirectory: true)
+                    try WallpaperEngineProjectFolder.unpack(source, to: project)
+                    guard let package = WallpaperEnginePackage(folder: project) else { throw ImportError.unreadable }
                     let leftOut = try WallpaperEngineScene.export(package, into: folder, chosen: chosen)
                     let source = "\(WallpaperEngineScene.folderName)/\(WallpaperEngineScene.filesName)"
                     // Every wallpaper comes with a scheme color and may come with settings left
@@ -395,6 +401,54 @@ public final class WallpaperLibrary: ObservableObject {
         items.insert(item, at: 0)
         save()
         return item
+    }
+
+    /// Makes a new scene of Wallpaper Engine's, which the editor makes and which can be given to
+    /// Wallpaper Engine as it is: `build` puts what it starts with into its project.
+    /// - Parameters:
+    ///   - size: the size the scene is made at, in pixels: the display's.
+    @discardableResult
+    public func makeEngineScene(named name: String, size: CGSize,
+                                build: (_ project: URL, _ document: inout WallpaperEngineDocument) async throws -> Void = { _, _ in }) async throws -> Wallpaper {
+        let id = UUID()
+        let folder = webURL.appendingPathComponent(id.uuidString, isDirectory: true)
+        do {
+            let project = folder.appendingPathComponent(WallpaperEngineProjectFolder.folderName, isDirectory: true)
+            try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+            var document = WallpaperEngineDocument.empty(title: name, width: Int(size.width.rounded()), height: Int(size.height.rounded()))
+            try await build(project, &document)
+            try WallpaperEngineProjectFolder.write(document, previous: nil, to: project)
+            try await Task.detached(priority: .userInitiated) {
+                try WallpaperEngineProjectFolder.layOut(scene: folder)
+            }.value
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
+        }
+        return addScene(id, named: name, preview: nil)
+    }
+
+    /// Makes a scene of Wallpaper Engine's out of a video or picture of the library, with that
+    /// media as a layer that fills it. The original stays as it is.
+    @discardableResult
+    public func makeEngineScene(from original: Wallpaper, named name: String, size: CGSize) async throws -> Wallpaper {
+        guard original.kind != .web else { throw ImportError.unreadable }
+        let source = fileURL(for: original)
+        let isVideo = original.kind == .video
+        return try await makeEngineScene(named: name, size: size) { project, document in
+            let layer = NSLocalizedString("Background", comment: "Name of the layer a scene made from a wallpaper starts with")
+            if isVideo {
+                let video = try await WallpaperEngineVideo.prepare(source)
+                let texture = try WallpaperEngineProjectFolder.addVideo(video.file, width: video.width, height: video.height,
+                                                                         named: "background", to: project)
+                let id = document.addImage(texture: texture, width: video.width, height: video.height, name: layer)
+                document.cover(id, width: video.width, height: video.height)
+            } else {
+                let picture = try WallpaperEngineProjectFolder.addPicture(source, to: project)
+                let id = document.addImage(texture: picture.texture, width: picture.width, height: picture.height, name: layer)
+                document.cover(id, width: picture.width, height: picture.height)
+            }
+        }
     }
 
     /// Whether the wallpaper is a scene the editor can open.

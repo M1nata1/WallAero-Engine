@@ -54,11 +54,19 @@ public enum WebMediaConverter {
             do {
                 try await convert(file, to: temporary)
                 let files = FileManager.default
-                try files.createDirectory(at: original.deletingLastPathComponent(), withIntermediateDirectories: true)
-                if files.fileExists(atPath: original.path) {
-                    try files.removeItem(at: original)
+                // What is laid out of a scene's project for the player is in the project as it
+                // was; a second copy of it is not kept.
+                let isLaidOut = relative.hasPrefix(WallpaperEngineScene.folderName + "/")
+                    && files.fileExists(atPath: folder.appendingPathComponent(WallpaperEngineProjectFolder.folderName).path)
+                if isLaidOut {
+                    try files.removeItem(at: file)
+                } else {
+                    try files.createDirectory(at: original.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if files.fileExists(atPath: original.path) {
+                        try files.removeItem(at: original)
+                    }
+                    try files.moveItem(at: file, to: original)
                 }
-                try files.moveItem(at: file, to: original)
                 try files.moveItem(at: temporary, to: file)
                 converted.append(relative)
             } catch {
@@ -75,6 +83,13 @@ public enum WebMediaConverter {
                                             options: [.skipsHiddenFiles]) else { return [] }
         var found: [URL] = []
         while let file = walker.nextObject() as? URL {
+            // A scene's Wallpaper Engine project stays as Wallpaper Engine takes it; the player
+            // plays copies of its files made elsewhere in the folder.
+            if file.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL,
+               file.lastPathComponent == WallpaperEngineProjectFolder.folderName {
+                walker.skipDescendants()
+                continue
+            }
             guard candidateExtensions.contains(file.pathExtension.lowercased()),
                   (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
             else { continue }

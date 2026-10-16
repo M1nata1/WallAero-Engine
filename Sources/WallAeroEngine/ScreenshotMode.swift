@@ -385,6 +385,37 @@ enum ScreenshotMode {
         return (URL(fileURLWithPath: arguments[index + 1], isDirectory: true), sources)
     }
 
+    /// `--attach-test <library folder> <archive>`: gives the first scene of the library its
+    /// Wallpaper Engine project from the archive, as the editor offers for a scene added before
+    /// it could change one, and lists what the project then has.
+    static var attachTest: (library: URL, source: URL)? {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--attach-test"), index + 2 < arguments.count else { return nil }
+        return (URL(fileURLWithPath: arguments[index + 1], isDirectory: true), URL(fileURLWithPath: arguments[index + 2]))
+    }
+
+    static func runAttachTest(_ request: (library: URL, source: URL)) {
+        NSApp.setActivationPolicy(.accessory)
+        let library = WallpaperLibrary(rootURL: request.library)
+        Task {
+            guard let item = library.items.first(where: library.isScene) else {
+                print("no scene in the library")
+                exit(1)
+            }
+            do {
+                try await library.attachEngineProject(from: request.source, to: item)
+                let folder = library.projectURL(for: item)
+                let document = try WallpaperEngineProjectFolder.read(from: folder.appendingPathComponent(WallpaperEngineProjectFolder.folderName))
+                print("“\(item.name)”: \(document.objects.count) objects, \(document.files.count) files")
+                let scene = try SceneProject.read(from: folder)
+                print("  kept beside it: \(scene.background.engine.objects.count) changes; settings: \(scene.variables.count)")
+            } catch {
+                print("failed: \(error)")
+            }
+            exit(0)
+        }
+    }
+
     static func runImportTest(_ request: (library: URL, sources: [URL])) {
         NSApp.setActivationPolicy(.accessory)
         let library = WallpaperLibrary(rootURL: request.library)
@@ -662,6 +693,10 @@ enum ScreenshotMode {
         applyRequestedAppearance()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        if WallpaperEngineProjectFolder.project(ofScene: request.folder) != nil {
+            editEngineScene(request)
+            return
+        }
         guard let model = try? SceneEditorModel(folder: request.folder, title: request.folder.lastPathComponent) else {
             print("no scene in \(request.folder.path)")
             exit(1)
@@ -729,6 +764,74 @@ enum ScreenshotMode {
             for layer in model.layersFrontFirst {
                 print(String(format: "  %@ [%@] x %.2f y %.2f width %.2f height %.2f rotation %.2f size %.2f",
                              layer.name, layer.kind.rawValue, layer.x, layer.y, layer.width, layer.height, layer.rotation, layer.fontSize))
+            }
+            var image: CGImage?
+            if #available(macOS 14.4, *) {
+                image = try? await captureWithScreenCaptureKit(window)
+            }
+            if let image = image ?? drawViews(of: window) {
+                write(image, to: request.output)
+                print("wrote \(request.output.path) (\(image.width)×\(image.height))")
+            }
+            model.saveNow()
+            exit(0)
+        }
+    }
+
+    /// The editor of a scene made as Wallpaper Engine makes one, for `--edit-scene`. Options:
+    /// `--select-object <number>`, `--add-effect <name>` (on the selected object),
+    /// `--add-particles <name>`, `--add-text`, `--sheet effects|particles|puppet` (for the
+    /// selected object), `--set <key> <number>` on the selected object, `--undo <times>`.
+    private static func editEngineScene(_ request: (folder: URL, output: URL)) {
+        guard let model = try? EngineEditorModel(folder: request.folder, title: request.folder.lastPathComponent) else {
+            print("no project in \(request.folder.path)")
+            exit(1)
+        }
+        let preview = EngineEditorPreviewController(model: model)
+        let size = NSSize(width: 1360, height: 820)
+        let window = AppWindow.make(title: model.title, content: AnyView(EngineEditorView(model: model, preview: preview)), size: size)
+        centerOnSharpestScreen(window)
+        window.makeKeyAndOrderFront(nil)
+        Task {
+            await preview.view.waitUntilLoaded()
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if let number = values(of: "--select-object").last.flatMap(Int.init) {
+                model.selection = number
+            }
+            for name in values(of: "--add-particles") {
+                if let preset = WallpaperEngineParticlePreset.named(name) { model.addParticles(preset) }
+            }
+            if CommandLine.arguments.contains("--add-text") { model.addText() }
+            for name in values(of: "--add-effect") {
+                if let effect = WallpaperEngineEffect.named(name), let selection = model.selection { model.addEffect(effect, to: selection) }
+            }
+            let arguments = CommandLine.arguments
+            for index in arguments.indices where arguments[index] == "--set" && index + 2 < arguments.count {
+                if let selection = model.selection, let number = Double(arguments[index + 2]) {
+                    model.change { $0.update(selection) { $0[arguments[index + 1]] = .number(number) } }
+                }
+            }
+            for _ in 0..<(values(of: "--undo").last.flatMap(Int.init) ?? 0) { model.undo() }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            model.saveNow()
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if let sheet = values(of: "--sheet").last, let selection = model.selection {
+                switch sheet {
+                case "effects": model.sheet = .effects(object: selection)
+                case "particles": model.sheet = .particles(object: selection)
+                case "puppet": model.sheet = .puppet(object: selection)
+                default: break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            print("selection: \(model.selection.map(String.init) ?? "scene"); undo: \(model.canUndo)")
+            for row in model.rows {
+                print(String(repeating: "  ", count: row.depth + 1) + "#\(row.id) \(model.name(of: row.id)) [\(model.kind(of: row.id).rawValue)]")
+            }
+            if let description = model.description {
+                for object in description.objects where !object.effects.isEmpty {
+                    print("  effects of #\(object.id): " + object.effects.map { "\($0.title) (\($0.values.count))" }.joined(separator: ", "))
+                }
             }
             var image: CGImage?
             if #available(macOS 14.4, *) {
