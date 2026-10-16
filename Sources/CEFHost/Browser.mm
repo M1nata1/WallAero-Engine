@@ -306,7 +306,12 @@ class PageClient : public CefClient,
   settings.windowless_rendering_enabled = true;
   settings.command_line_args_disabled = true;
   settings.persist_session_cookies = false;
-  settings.log_severity = getenv("WALLAERO_CEF_LOG") ? LOGSEVERITY_INFO : LOGSEVERITY_DISABLE;
+  // WALLAERO_CEF_LOG=<file> writes Chromium's own log there, for a developer.
+  const char *logFile = getenv("WALLAERO_CEF_LOG");
+  settings.log_severity = logFile ? LOGSEVERITY_VERBOSE : LOGSEVERITY_DISABLE;
+  if (logFile && logFile[0] == '/') {
+    CefString(&settings.log_file) = logFile;
+  }
   settings.background_color = 0;
   settings.remote_debugging_port = debuggingPort;
   CefString(&settings.browser_subprocess_path) = helper.UTF8String;

@@ -77,6 +77,7 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
     /// Tells a late answer that it belongs to a page that has since been loaded anew.
     private var loadGeneration = 0
     private static let longestWaitForPage: TimeInterval = 3
+    private static let longestWaitForLoad: TimeInterval = 20
     private var isFrozen = false
     /// Tells a late snapshot or timer that the state it was made for is gone.
     private var freezeGeneration = 0
@@ -179,7 +180,8 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
         resumeLoadWaiters()
     }
 
-    /// Returns once the page has finished loading (or failed to).
+    /// Returns once the page has finished loading (or failed to), or after `longestWaitForLoad`
+    /// whatever became of it: whoever waits — an import drawing a thumbnail — goes on in the end.
     func waitUntilLoaded() async {
         guard webView != nil, !hasLoaded else { return }
         await withCheckedContinuation { loadWaiters.append($0) }
@@ -353,6 +355,11 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.longestWaitForPage) { [weak self] in
             guard let self, self.loadGeneration == generation else { return }
             self.pageIsReady()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.longestWaitForLoad) { [weak self] in
+            guard let self, self.loadGeneration == generation, !self.hasLoaded, !self.loadWaiters.isEmpty else { return }
+            Log.playback.error("The web wallpaper \(self.project?.folder.lastPathComponent ?? "?", privacy: .public) did not load in time")
+            self.resumeLoadWaiters()
         }
     }
 
