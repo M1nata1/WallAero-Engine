@@ -392,6 +392,11 @@ enum ScreenshotMode {
             for source in request.sources {
                 do {
                     let added = try await library.importItem(at: source, languages: Bundle.main.preferredLocalizations)
+                    for item in added where item.kind == .web {
+                        // As the app's own import does: videos turned into WebM for Chromium.
+                        let converted = await WebMediaConverter.convertFolder(library.projectURL(for: item))
+                        if !converted.isEmpty { print("  converted for Chromium: \(converted.joined(separator: ", "))") }
+                    }
                     for item in added {
                         print("\(source.lastPathComponent) → “\(item.name)” [\(item.sourceFormat)] \(item.fileName), thumbnail: \(item.thumbnailFileName != nil)")
                         if !item.tagList.isEmpty {

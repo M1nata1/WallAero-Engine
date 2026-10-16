@@ -1,4 +1,5 @@
 import AppKit
+import CEFHost
 import Combine
 import SwiftUI
 import WallpaperCore
@@ -22,7 +23,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The helpers a developer runs (all started with options) leave the music players
         // alone: macOS would ask the user's leave for a program they did not start themselves.
         NowPlaying.asksPlayers = !CommandLine.arguments.contains { $0.hasPrefix("--") } || CommandLine.arguments.contains("--ask-players")
-        let app = NSApplication.shared
+        // Chromium needs to know when the app hands on an event, so the app's object is its kind.
+        let app = CEFApplication.shared
+        Chromium.start()
+        Codecs.configure()
+        if let index = CommandLine.arguments.firstIndex(of: "--convert-media"), index + 2 < CommandLine.arguments.count {
+            // A developer's helper: turns one video or sound into WebM as the library would.
+            let source = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            let destination = URL(fileURLWithPath: CommandLine.arguments[index + 2])
+            Task {
+                let started = Date()
+                do {
+                    print("needs conversion: \(await WebMediaConverter.needsConversion(source))")
+                    try await WebMediaConverter.convert(source, to: destination)
+                    print(String(format: "converted in %.1f s", Date().timeIntervalSince(started)))
+                } catch {
+                    print("failed: \(error)")
+                }
+                exit(0)
+            }
+            app.run()
+            return
+        }
+        Codecs.configure()
+        if let index = CommandLine.arguments.firstIndex(of: "--convert-media"), index + 2 < CommandLine.arguments.count {
+            // A developer's helper: turns one video or sound into WebM as the library would.
+            let source = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            let destination = URL(fileURLWithPath: CommandLine.arguments[index + 2])
+            Task {
+                let started = Date()
+                do {
+                    print("needs conversion: \(await WebMediaConverter.needsConversion(source))")
+                    try await WebMediaConverter.convert(source, to: destination)
+                    print(String(format: "converted in %.1f s", Date().timeIntervalSince(started)))
+                } catch {
+                    print("failed: \(error)")
+                }
+                exit(0)
+            }
+            app.run()
+            return
+        }
         if let request = ScreenshotMode.renderRequest {
             // A developer's helper that needs neither the library nor the rest of the app.
             ScreenshotMode.renderWeb(request)
@@ -131,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = makeMainMenu()
         watchDeleteKey()
         manager.start()
+        MediaConversion.shared.convertLibrary(library)
         cursorSettings.reapplyIfNeeded()
         statusMenu = StatusMenuController(library: library, manager: manager, actions: .init(
             openLibrary: { [unowned self] in showLibrary(nil) },
@@ -179,6 +221,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Chromium.stop()
     }
 
     // MARK: - Actions
@@ -243,6 +289,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let name = String(format: NSLocalizedString("%@ (scene)", comment: "Name of a scene made from a wallpaper"), item.name)
             let scene = try library.makeScene(from: item, named: name)
+            // Chromium plays the video once it is WebM.
+            MediaConversion.shared.convertSoon(library.projectURL(for: scene))
             windows.state.selection = scene.id
             editScene(scene)
         } catch {

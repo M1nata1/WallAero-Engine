@@ -4,7 +4,10 @@
 #   scripts/build.sh            universal app: Apple Silicon and Intel
 #   scripts/build.sh --native   only for this Mac's processor; twice as fast, for development
 #   scripts/build.sh --install  also copy the app to /Applications
-#   scripts/build.sh --dist     also pack the app into dist/WallAeroEngine.zip, the download in the README
+#   scripts/build.sh --dist     also pack the app into dist/WallAeroEngine.zip, for a release on GitHub
+#
+# Chromium, which draws the web wallpapers, and the video encoders come from scripts/cef.sh and
+# scripts/codecs.sh, run from here; they download what they need once.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,9 +33,19 @@ if [ "$DIST" -eq 1 ] && [ "$NATIVE" -eq 1 ]; then
     exit 1
 fi
 
+# CEF's C++ code names its own source files in its messages; they are named from the package,
+# so that the app carries no path of the Mac it was built on.
+PREFIX_MAP="-fmacro-prefix-map=$PWD/="
+ARCH_FLAGS+=(-Xcc "$PREFIX_MAP" -Xcxx "$PREFIX_MAP")
+
 echo "→ Compiling…"
 swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
 BIN_DIR="$(swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
+
+NATIVE_FLAG=()
+if [ "$NATIVE" -eq 1 ]; then NATIVE_FLAG=(--native); fi
+scripts/cef.sh ${NATIVE_FLAG[@]+"${NATIVE_FLAG[@]}"} "$BIN_DIR/WallAeroHelper"
+scripts/codecs.sh ${NATIVE_FLAG[@]+"${NATIVE_FLAG[@]}"}
 
 if [ ! -f Resources/AppIcon.icns ]; then
     echo "→ Drawing the icon…"
@@ -48,6 +61,16 @@ cp "$BIN_DIR/$EXECUTABLE" "$APP/Contents/MacOS/"
 cp Resources/Info.plist "$APP/Contents/"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp -R Resources/*.lproj "$APP/Contents/Resources/"
+mkdir -p "$APP/Contents/Frameworks"
+cp -R build/cef/. "$APP/Contents/Frameworks/"
+cp build/codecs/libWallAeroCodecs.dylib "$APP/Contents/Frameworks/"
+# The licenses of what the app is made with besides its own code.
+LICENSES="$APP/Contents/Resources/Licenses"
+mkdir -p "$LICENSES"
+cp build/licenses/* "$LICENSES/"
+cp Sources/CCodecs/vpx/LICENSE "$LICENSES/libvpx LICENSE.txt"
+cp Sources/CCodecs/vpx/PATENTS "$LICENSES/libvpx PATENTS.txt"
+cp Sources/CCodecs/opus/COPYING "$LICENSES/Opus COPYING.txt"
 
 # macOS goes by the SDK version stamped into the app: on macOS 26 an app stamped with an earlier
 # SDK is drawn in the look of the earlier systems, whatever its code says. Some tools do not
@@ -69,7 +92,15 @@ if [ -n "$BUILT_WITH_SDK" ] && [ -n "$STAMPED_SDK" ] && [ "$STAMPED_SDK" = "$OLD
 fi
 
 echo "→ Signing (ad hoc)…"
-codesign --force --sign - --timestamp=none "$APP"
+sign() { codesign --force --sign - --timestamp=none "$1"; }
+# From the inside out: each part is signed before what holds it.
+FRAMEWORKS="$APP/Contents/Frameworks"
+while IFS= read -r -d '' library; do sign "$library"; done \
+    < <(find "$FRAMEWORKS/Chromium Embedded Framework.framework/Libraries" -name "*.dylib" -print0)
+sign "$FRAMEWORKS/Chromium Embedded Framework.framework"
+sign "$FRAMEWORKS/libWallAeroCodecs.dylib"
+for helper in "$FRAMEWORKS/"*Helper*.app; do sign "$helper"; done
+sign "$APP"
 
 if [ "$DIST" -eq 1 ]; then
     echo "→ Packing dist/$EXECUTABLE.zip…"

@@ -73,6 +73,10 @@ final class ImportCoordinator: ObservableObject {
                     // language the app is shown in.
                     let languages = Bundle.main.preferredLocalizations
                     let added = try await library.importItem(at: job.url, languages: languages, progress: report)
+                    for item in added where item.kind == .web {
+                        // Its videos as Chromium plays them, before anything is drawn of it.
+                        await MediaConversion.shared.convert(library.projectURL(for: item))
+                    }
                     for item in added where item.kind == .web && item.thumbnailFileName == nil {
                         // No preview came with the page; draw one.
                         await manager.refreshPictures(of: item)

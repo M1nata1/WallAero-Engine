@@ -10,30 +10,10 @@ enum WebSnapshotter {
     ///     on a Retina Mac.
     ///   - forStill: render the picture for the lock screen, without the layers hidden from it.
     static func render(_ project: WebProject, size: NSSize, forStill: Bool = false) async -> CGImage? {
+        // Chromium draws the page off screen: no window is needed, and nothing appears.
         let view = WebWallpaperView(frame: NSRect(origin: .zero, size: size))
         view.rendersStill = forStill
-        // A web view draws only inside a window that is ordered in, and a page runs its
-        // animation frames only while its window is on a display: one lying outside every
-        // display stays as it loaded, which for a page that draws itself frame by frame is
-        // blank. So the window is on the main display, and see-through: nothing appears, and
-        // the mouse goes through it.
-        let origin = NSScreen.main?.frame.origin ?? .zero
-        let window = NSWindow(contentRect: NSRect(origin: origin, size: size),
-                              styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.alphaValue = 0
-        window.hasShadow = false
-        window.ignoresMouseEvents = true
-        window.collectionBehavior = [.transient, .ignoresCycle]
-        window.contentView = view
-        window.orderFrontRegardless()
-        defer {
-            view.unload()
-            window.orderOut(nil)
-            window.close()
-        }
+        defer { view.unload() }
 
         view.setPlaying(true, rate: 1)
         view.show(project, watchingForChanges: false)
