@@ -2,7 +2,7 @@
 # Prepares Chromium (Chromium Embedded Framework) for the app in build/cef:
 #
 #   build/cef/Chromium Embedded Framework.framework   for Apple Silicon and Intel in one
-#   build/cef/WallAero Engine Helper.app               the helper Chromium starts its processes with
+#   build/cef/WallAero Engine Helper*.app              the helpers Chromium starts its processes with
 #   build/licenses                                     CEF's license and the credits of Chromium's parts
 #
 # The same folder becomes the app's Contents/Frameworks (scripts/build.sh), and a binary started
@@ -91,9 +91,10 @@ for arch in "${ARCHS[@]:1}"; do
     done
 done
 
-echo "→ Making the helper app…"
-# Chromium starts its processes of every kind (pages, graphics, sound, the network) from it.
-for kind in ""; do
+echo "→ Making the helper apps…"
+# Chromium starts each kind of process from a helper of its own name: inside an app it looks
+# for "<app> Helper (Renderer)" to draw pages, and draws none without it.
+for kind in "" " (GPU)" " (Renderer)" " (Plugin)" " (Alerts)"; do
     name="$APP_NAME Helper$kind"
     suffix="$(echo "$kind" | tr -d ' ()' | tr '[:upper:]' '[:lower:]')"
     identifier="$BUNDLE_ID.helper${suffix:+.$suffix}"
