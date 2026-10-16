@@ -90,6 +90,7 @@ struct LibraryView: View {
     /// How wide a wallpaper's picture is. It is the same at any width of the library: showing
     /// and hiding the settings changes how many fit in a row, never their size.
     static let tileWidth: CGFloat = 216
+    static let tileSpacing: CGFloat = 16
 
     @EnvironmentObject private var library: WallpaperLibrary
     @EnvironmentObject private var manager: WallpaperManager
@@ -105,6 +106,8 @@ struct LibraryView: View {
     @State private var deletingIDs: [UUID] = []
     /// How high the part of the window is that shows the wallpapers, between its bars.
     @State private var gridRoom: CGFloat = 0
+    /// How wide the room for the wallpapers is.
+    @State private var gridWidth: CGFloat = 0
     @State private var taggingItem: Wallpaper?
     @State private var newTag = ""
 
@@ -309,7 +312,7 @@ struct LibraryView: View {
             NothingFoundView(searchText: state.searchText)
         } else {
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: Self.tileWidth, maximum: Self.tileWidth), spacing: 16)],
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(Self.tileWidth), spacing: Self.tileSpacing), count: columnCount),
                           alignment: .leading, spacing: 20) {
                     ForEach(shownItems) { item in
                         WallpaperTile(
@@ -323,21 +326,35 @@ struct LibraryView: View {
                         .contextMenu { contextMenu(for: item) }
                     }
                 }
+                // Only as wide as its rows, so that it can stand in the middle.
+                .frame(width: CGFloat(columnCount) * (Self.tileWidth + Self.tileSpacing) - Self.tileSpacing)
                 .padding(16)
                 // As high as the room there is at least, so that a click below the last row
-                // is a click beside the wallpapers too.
-                .frame(maxWidth: .infinity, minHeight: max(0, gridRoom - 1), alignment: .topLeading)
+                // is a click beside the wallpapers too. The rows in the middle, so that the room
+                // left over is shared by both sides.
+                .frame(maxWidth: .infinity, minHeight: max(0, gridRoom - 1), alignment: .top)
                 .background { deselecting }
             }
             .background {
                 GeometryReader { area in
                     let room = area.size.height - area.safeAreaInsets.top - area.safeAreaInsets.bottom
                     Color.clear
-                        .onAppear { gridRoom = room }
+                        .onAppear {
+                            gridRoom = room
+                            gridWidth = area.size.width
+                        }
                         .onChange(of: room) { gridRoom = $0 }
+                        .onChange(of: area.size.width) { gridWidth = $0 }
                 }
             }
         }
+    }
+
+    /// How many wallpapers fit in a row, with the margins at the sides. The row is in the middle,
+    /// so that what is left over is shared by both sides.
+    private var columnCount: Int {
+        let usable = gridWidth - 32 + Self.tileSpacing
+        return max(1, Int(usable / (Self.tileWidth + Self.tileSpacing)))
     }
 
     /// What lies behind the wallpapers: a click beside them, between them or below, selects
