@@ -390,7 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.alertStyle = .informational
         let explanation = NSLocalizedString(
-            "3D models and lights of a Wallpaper Engine scene are not played and are left out, and a picture whose bones cannot be read stands still.",
+            "A 3D model of a Wallpaper Engine scene whose shape cannot be read is left out, and a picture whose bones cannot be read stands still.",
             comment: "Import notice"
         )
         if notices.count == 1 {

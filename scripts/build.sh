@@ -61,6 +61,8 @@ cp "$BIN_DIR/$EXECUTABLE" "$APP/Contents/MacOS/"
 cp Resources/Info.plist "$APP/Contents/"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp -R Resources/*.lproj "$APP/Contents/Resources/"
+# Fonts Wallpaper Engine's scenes may name without bringing them, those under an open license.
+cp -R Resources/Fonts "$APP/Contents/Resources/"
 mkdir -p "$APP/Contents/Frameworks"
 cp -R build/cef/. "$APP/Contents/Frameworks/"
 cp build/codecs/libWallAeroCodecs.dylib "$APP/Contents/Frameworks/"
@@ -71,6 +73,7 @@ cp build/licenses/* "$LICENSES/"
 cp Sources/CCodecs/vpx/LICENSE "$LICENSES/libvpx LICENSE.txt"
 cp Sources/CCodecs/vpx/PATENTS "$LICENSES/libvpx PATENTS.txt"
 cp Sources/CCodecs/opus/COPYING "$LICENSES/Opus COPYING.txt"
+cp Resources/Fonts/*.txt "$LICENSES/"
 
 # macOS goes by the SDK version stamped into the app: on macOS 26 an app stamped with an earlier
 # SDK is drawn in the look of the earlier systems, whatever its code says. Some tools do not

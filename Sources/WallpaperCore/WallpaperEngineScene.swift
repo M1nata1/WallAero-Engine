@@ -26,7 +26,7 @@ public enum WallpaperEngineScene {
     public struct LeftOut: Equatable, Sendable {
         /// Pictures bent by bones whose bones could not be read; they are shown still.
         public var animations = 0
-        /// Objects of kinds that are not drawn: three-dimensional models, lights.
+        /// Objects that are not drawn: three-dimensional models whose shape could not be read.
         public var objects = 0
 
         public var isEmpty: Bool { animations + objects == 0 }
@@ -132,6 +132,17 @@ public enum WallpaperEngineScene {
             }
         }
 
+        // A text may be written in a font Wallpaper Engine itself comes with rather than one of
+        // the scene's; of those, the app brings the ones under an open license.
+        for font in fontNames(in: description) where fontFiles[key(font)] == nil {
+            guard let stock = stockFont(named: font), let data = try? Data(contentsOf: stock) else { continue }
+            try files.createDirectory(at: fonts, withIntermediateDirectories: true)
+            number += 1
+            let fileName = "\(number).\(stock.pathExtension.lowercased())"
+            try data.write(to: fonts.appendingPathComponent(fileName))
+            fontFiles[key(font)] = "\(folderName)/fonts/\(fileName)"
+        }
+
         // A picture chosen for a setting is a texture like the scene's own, named after the setting.
         for (setting, file) in chosen.sorted(by: { $0.key < $1.key }) {
             number += 1
@@ -150,7 +161,8 @@ public enum WallpaperEngineScene {
         script.append(Data(";\n".utf8))
         try script.write(to: engine.appendingPathComponent(filesName), options: .atomic)
 
-        return leftOut(of: objects, in: package, puppets: Set(puppets.keys))
+        let solids = Set(puppets.filter { ($0.value as? [String: Any])?["solid"] != nil }.keys)
+        return leftOut(of: objects, in: package, puppets: Set(puppets.keys), solids: solids)
     }
 
     /// A picture chosen for a setting of the scene, as a texture: a picture is written out as
@@ -183,6 +195,44 @@ public enum WallpaperEngineScene {
         guard (try? Thumbnailer.writePNG(image, to: pictures.appendingPathComponent(fileName))) != nil else { return nil }
         return ["pictures": [["file": "\(folderName)/tex/\(fileName)", "width": image.width, "height": image.height]],
                 "channels": WallpaperEngineTexture.Channels.color.rawValue, "clamp": true, "smooth": true]
+    }
+
+    // MARK: - Fonts
+
+    /// The folder of the fonts the app brings: in the app, or, for a build run from the
+    /// sources, in the sources' resources.
+    public static var stockFontsFolder: URL? = {
+        let candidates = [Bundle.main.resourceURL?.appendingPathComponent("Fonts", isDirectory: true),
+                          URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Resources/Fonts", isDirectory: true)]
+        return candidates.compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.path) }
+    }()
+
+    /// One of the fonts the app brings, by the name a scene gives it; nil if it has none such.
+    static func stockFont(named name: String) -> URL? {
+        guard let folder = stockFontsFolder,
+              let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path)
+        else {
+            return nil
+        }
+        let wanted = (key(name) as NSString).lastPathComponent
+        return names.first { $0.lowercased() == wanted }.map { folder.appendingPathComponent($0) }
+    }
+
+    /// The fonts the texts of a scene are written in, as the scene names them.
+    static func fontNames(in description: [String: Any]) -> Set<String> {
+        var names: Set<String> = []
+        func look(_ value: Any) {
+            if let dictionary = value as? [String: Any] {
+                if let font = dictionary["font"] as? String, !font.isEmpty {
+                    names.insert(font)
+                }
+                dictionary.values.forEach(look)
+            } else if let array = value as? [Any] {
+                array.forEach(look)
+            }
+        }
+        look(description)
+        return names
     }
 
     /// Whether an object of a scene has something under a name. Scenes saved by early versions
@@ -232,15 +282,21 @@ public enum WallpaperEngineScene {
 
     // MARK: - What is not played
 
-    private static func leftOut(of objects: [[String: Any]], in package: WallpaperEnginePackage, puppets: Set<String>) -> LeftOut {
+    private static func leftOut(of objects: [[String: Any]], in package: WallpaperEnginePackage, puppets: Set<String>, solids: Set<String>) -> LeftOut {
         var leftOut = LeftOut()
         for object in objects {
             // What the scene itself keeps out of sight is not missed.
             if (object["visible"] as? Bool) == false || ((object["visible"] as? [String: Any])?["value"] as? Bool) == false {
                 continue
             }
-            if has(object["model"]) || has(object["light"]) {
-                leftOut.objects += 1
+            // A light is played; a model is when its shape could be read.
+            if has(object["light"]) {
+                continue
+            }
+            if has(object["model"]) {
+                if !((object["model"] as? String).map({ solids.contains(key($0)) }) ?? false) {
+                    leftOut.objects += 1
+                }
                 continue
             }
             // A picture bent by bones names them in its model; the bones are played when they

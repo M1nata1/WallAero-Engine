@@ -1398,7 +1398,7 @@ final class WallpaperEngineSceneTests: XCTestCase {
         let files = [("scene.json", Data(json.utf8)), ("particles/snow.json", Data(#"{"maxcount": 10}"#.utf8))]
             + picture("Sky", texture: texture(width: 2, height: 2, canvas: 2, color: [0, 0, 255, 255]))
         let leftOut = try WallpaperEngineScene.export(try XCTUnwrap(WallpaperEnginePackage(data: package(files))), into: root.appendingPathComponent("Scene"))
-        XCTAssertEqual(leftOut, .init(animations: 0, objects: 1), "only the light is left out")
+        XCTAssertEqual(leftOut, .init(animations: 0, objects: 0), "the light is played")
 
         // A scene of nothing but empty names has nothing to draw.
         let empty = [("scene.json", Data(#"{"objects": [{"name": "Nothing", "image": null, "particle": null, "text": null}]}"#.utf8))]
@@ -1503,7 +1503,8 @@ final class WallpaperEngineSceneTests: XCTestCase {
        {"id": 6, "name": "Clock", "visible": false, "text": {"value": "12:00"}},
        {"id": 7, "name": "Veil", "image": "models/Veil.json", "animationlayers": [{"animation": 51, "rate": 1}]},
        {"id": 8, "name": "Lamp", "light": "point"},
-       {"id": 9, "name": "Hidden lamp", "light": "point", "visible": false}
+       {"id": 9, "name": "Hidden lamp", "light": "point", "visible": false},
+       {"id": 10, "name": "Teapot", "model": "models/teapot.mdl"}
      ]}
     """#
 
@@ -1513,7 +1514,7 @@ final class WallpaperEngineSceneTests: XCTestCase {
     /// faces and lies, more after the triangles, the bones and each animation, and a second
     /// animation.
     private func puppet(triangle: [UInt16] = [0, 1, 2], bones: [UInt32] = [0, 1, 1], newer: Bool = false,
-                        attachedTo attachmentBone: UInt16? = nil, clipped: Bool = false) -> Data {
+                        attachedTo attachmentBone: UInt16? = nil, clipped: Bool = false, sway: String = "") -> Data {
         func float(_ value: Float) -> Data { withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) } }
         var file = Data("MDLV00\(newer ? 23 : 13)\0".utf8)
         let head: [Data] = [number(0x0180_0009), number(1), number(1), Data("materials/Sky.json\0".utf8), number(0)]
@@ -1558,7 +1559,7 @@ final class WallpaperEngineSceneTests: XCTestCase {
             for value in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, 0, 0, 1] as [Float] {
                 skeleton += float(value)
             }
-            skeleton += Data([0])
+            skeleton += Data("\(name == "hair" ? sway : "")\0".utf8)
         }
         if newer {
             // What makes the bones sway, for each of them.
@@ -1627,6 +1628,17 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertNil(WallpaperEnginePuppet(data: Data("MDLV0013".utf8)))
         // Cut short in its animations, it still has its shape and bones.
         XCTAssertEqual(WallpaperEnginePuppet(data: puppet().dropLast(40))?.animations.count, 0)
+    }
+
+    func testABoneSaysHowItSwaysByItself() throws {
+        let sway = #"{"re":true,"ge":true,"gd":"0 -1 0","rf":5,"tp":"40 0 0"}"#
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true, sway: sway)))
+        XCTAssertEqual(read.bones.map(\.physics), [nil, sway])
+        let bones = try XCTUnwrap(read.table["bones"] as? [[String: Any]])
+        XCTAssertNil(bones[0]["physics"])
+        XCTAssertEqual(bones[1]["physics"] as? String, sway)
+        XCTAssertEqual(read.animations.map(\.id), [51, 52], "what follows is read as before")
+        XCTAssertNil(read.solid, "corners on bones are no shape in three dimensions")
     }
 
     func testAPuppetOfALaterVersionIsRead() throws {
@@ -1706,6 +1718,13 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertEqual(read.bones.count, 1)
         XCTAssertEqual(read.bones.first?.parent, -1)
         XCTAssertTrue(read.animations.isEmpty)
+        // Read as a shape in three dimensions too: each corner's place, the way it faces, and
+        // where in the picture it is; and the material it is drawn with.
+        XCTAssertEqual(read.solid.map { Array($0[0..<8]) }, [-10, 5, 0, 0, 0, 1, 0, 0])
+        XCTAssertEqual(read.solid?.count, 3 * 8)
+        XCTAssertEqual(read.material, "materials/Sky.json")
+        XCTAssertEqual(Data(base64Encoded: try XCTUnwrap(read.table["solid"] as? String))?.count, 3 * 8 * 4)
+        XCTAssertEqual(read.table["material"] as? String, "materials/Sky.json")
         // A corner the triangles name that is not there.
         var broken = file
         broken[broken.count - 9] = 9
@@ -1783,8 +1802,9 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertEqual(Array(puppets.keys), ["models/veil_puppet.mdl"])
         XCTAssertEqual((puppets["models/veil_puppet.mdl"]?["bones"] as? [[String: Any]])?.count, 2)
 
-        // What will not play: the doll's bones, which could not be read, and the lamp. The
-        // veil, the text and the script play, and what is hidden is not missed.
+        // What will not play: the doll's bones, which could not be read, and the teapot, whose
+        // shape is not in the scene. The veil, the text, the script and the lamp play, and what
+        // is hidden is not missed.
         XCTAssertEqual(leftOut, .init(animations: 1, objects: 1))
     }
 
