@@ -1867,23 +1867,73 @@ public enum WallpaperEngineRuntime {
           context.fillRect(0, 0, size, size);
         }
         if (/shaft|godray|sunbeam|sunray|light_ray/.test(name)) {
-          // Light falling through: soft rays from the middle outward, of many widths, fading as
-          // they go, with nothing bright where they meet. Such a picture is made large and turned.
-          for (var ray = 0; ray < 18; ray++) {
-            var toward = hash(ray, 4, 7) * Math.PI * 2;
-            var wide = (0.01 + hash(ray, 5, 7) * 0.05) * Math.PI;
-            var strong = 0.12 + hash(ray, 6, 7) * 0.25;
-            var shaft = context.createRadialGradient(half, half, 0, half, half, half);
-            shaft.addColorStop(0, 'rgba(255,255,255,0)');
-            shaft.addColorStop(0.08, 'rgba(255,255,255,' + strong + ')');
-            shaft.addColorStop(0.55, 'rgba(255,255,255,' + strong * 0.45 + ')');
-            shaft.addColorStop(1, 'rgba(255,255,255,0)');
-            context.fillStyle = shaft;
-            context.beginPath();
-            context.moveTo(half, half);
-            context.arc(half, half, half, toward - wide / 2, toward + wide / 2);
-            context.closePath();
-            context.fill();
+          // Light falling through. Wallpaper Engine's own pictures of it are of a few kinds, told
+          // by their number: a soft column of light falling from the top edge (0, and the plainest
+          // one, 6), thin rays from a point at the top (1, 3), a wide fan from the top (4) and a
+          // burst from the middle (2, 5). Each is drawn here in its shape: rays from where the
+          // light comes in, fading as they go. Such a picture is made large and turned.
+          var kind = Number((/(\d+)\D*$/.exec(name) || [])[1]);
+          // `spread`: how far to either side the rays go, as an angle; `from`: where they start,
+          // as a share of the height above the top; `count`, `widths` and `strength` of the rays.
+          // Their light dies away downward as Wallpaper Engine's does — most of it in the upper half,
+          // next to none at the bottom — and they are as bright, against one another, as its are.
+          // How bright they are on a scene was set against Wallpaper Engine's own picture of one
+          // ("Frieren with music"): there the light adds about a quarter to the brightness where it
+          // falls, warm and in streaks.
+          var fan = { 0: { spread: 0.16, from: 0.25, count: 22, widths: [0.05, 0.16], strength: 0.022 },
+                      6: { spread: 0.05, from: 0.6, count: 10, widths: [0.12, 0.3], strength: 0.009 },
+                      1: { spread: 0.3, from: 0, count: 9, widths: [0.004, 0.02], strength: 0.024 },
+                      3: { spread: 0.12, from: 0, count: 6, widths: [0.004, 0.015], strength: 0.028 },
+                      4: { spread: 0.95, from: 0, count: 30, widths: [0.01, 0.06], strength: 0.038 } }[kind];
+          if (fan) {
+            var topX = half, topY = -fan.from * size;
+            var reach = size - topY;
+            for (var ray = 0; ray < fan.count; ray++) {
+              var turn = (hash(ray, 4, 7) * 2 - 1) * fan.spread;
+              var wide = (fan.widths[0] + hash(ray, 5, 7) * (fan.widths[1] - fan.widths[0])) * Math.PI;
+              var strong = fan.strength * (0.5 + hash(ray, 6, 7));
+              // Faded toward where it ends, and where it starts, as light comes in through leaves.
+              var fade = context.createRadialGradient(topX, topY, 0, topX, topY, reach);
+              // Stops by how far down the picture they are.
+              var down = function (share) { return Math.min(1, (fan.from + share) / (1 + fan.from)); };
+              fade.addColorStop(0, 'rgba(255,255,255,0)');
+              if (down(0) > 0) fade.addColorStop(down(0) * 0.9, 'rgba(255,255,255,0)');
+              fade.addColorStop(down(0.12), 'rgba(255,255,255,' + strong + ')');
+              fade.addColorStop(down(0.3), 'rgba(255,255,255,' + strong * 0.75 + ')');
+              fade.addColorStop(down(0.5), 'rgba(255,255,255,' + strong * 0.3 + ')');
+              fade.addColorStop(down(0.75), 'rgba(255,255,255,' + strong * 0.07 + ')');
+              fade.addColorStop(1, 'rgba(255,255,255,0)');
+              context.fillStyle = fade;
+              context.beginPath();
+              context.moveTo(topX, topY);
+              context.arc(topX, topY, reach, Math.PI / 2 + turn - wide / 2, Math.PI / 2 + turn + wide / 2);
+              context.closePath();
+              context.fill();
+            }
+            // Brightest where it comes in.
+            var inlet = context.createRadialGradient(half, size * 0.12, 0, half, size * 0.12, size * 0.3);
+            inlet.addColorStop(0, 'rgba(255,255,255,' + Math.min(1, fan.strength * 2) + ')');
+            inlet.addColorStop(1, 'rgba(255,255,255,0)');
+            context.fillStyle = inlet;
+            context.fillRect(0, 0, size, size * 0.4);
+          } else {
+            // A burst: soft rays from the middle outward, of many widths, fading as they go.
+            for (var spike = 0; spike < 18; spike++) {
+              var toward = hash(spike, 4, 7) * Math.PI * 2;
+              var narrow = (0.01 + hash(spike, 5, 7) * 0.05) * Math.PI;
+              var bright = 0.12 + hash(spike, 6, 7) * 0.25;
+              var burst = context.createRadialGradient(half, half, 0, half, half, half);
+              burst.addColorStop(0, 'rgba(255,255,255,0)');
+              burst.addColorStop(0.08, 'rgba(255,255,255,' + bright + ')');
+              burst.addColorStop(0.55, 'rgba(255,255,255,' + bright * 0.45 + ')');
+              burst.addColorStop(1, 'rgba(255,255,255,0)');
+              context.fillStyle = burst;
+              context.beginPath();
+              context.moveTo(half, half);
+              context.arc(half, half, half, toward - narrow / 2, toward + narrow / 2);
+              context.closePath();
+              context.fill();
+            }
           }
         } else if (/fog|smoke|cloud|mist|steam|dust|haze/.test(name)) {
           // A puff: many soft blots, more of them toward the middle.
