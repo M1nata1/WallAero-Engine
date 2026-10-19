@@ -416,16 +416,37 @@ enum ScreenshotMode {
         }
     }
 
+    /// Prints how far an import has come, a line at each tenth, for `--import-test`.
+    final class ProgressShown: @unchecked Sendable {
+        private var last: [String: Int] = [:]
+        private let lock = NSLock()
+
+        func show(_ part: Double, since start: Date, label: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            let tenth = Int(part * 10)
+            guard tenth > (last[label] ?? -1) else { return }
+            last[label] = tenth
+            print(String(format: "  %@ %3d%% at %.1f s", label, tenth * 10, Date().timeIntervalSince(start)))
+        }
+    }
+
     static func runImportTest(_ request: (library: URL, sources: [URL])) {
         NSApp.setActivationPolicy(.accessory)
         let library = WallpaperLibrary(rootURL: request.library)
         Task {
             for source in request.sources {
                 do {
-                    let added = try await library.importItem(at: source, languages: Bundle.main.preferredLocalizations)
+                    let shown = ProgressShown()
+                    let started = Date()
+                    let added = try await library.importItem(at: source, languages: Bundle.main.preferredLocalizations) { part in
+                        shown.show(part, since: started, label: "adding")
+                    }
                     for item in added where item.kind == .web {
                         // As the app's own import does: videos turned into WebM for Chromium.
-                        let converted = await WebMediaConverter.convertFolder(library.projectURL(for: item))
+                        let converted = await WebMediaConverter.convertFolder(library.projectURL(for: item)) { part in
+                            shown.show(part, since: started, label: "converting")
+                        }
                         if !converted.isEmpty { print("  converted for Chromium: \(converted.joined(separator: ", "))") }
                     }
                     for item in added {
@@ -472,7 +493,8 @@ enum ScreenshotMode {
         guard let window = windows.libraryWindow else { return }
         try? await Task.sleep(nanoseconds: 800_000_000)
         var frame = window.frame
-        frame.size.width = 700
+        // `--toggle-width <points>`: a wide window, which the settings do not widen.
+        frame.size.width = values(of: "--toggle-width").last.flatMap(Double.init).map { CGFloat($0) } ?? 700
         window.setFrame(frame, display: true)
         for (step, shown) in [false, true, false, true].enumerated() {
             state.showsSettings = shown

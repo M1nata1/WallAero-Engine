@@ -43,7 +43,8 @@ public enum WallpaperEngineScene {
     ///   picture, by the settings' names.
     /// - Parameter allowEmpty: whether a scene with nothing to draw yet is laid out too: one
     ///   being made in the editor.
-    static func export(_ package: WallpaperEnginePackage, into folder: URL, chosen: [String: URL] = [:], allowEmpty: Bool = false) throws -> LeftOut {
+    static func export(_ package: WallpaperEnginePackage, into folder: URL, chosen: [String: URL] = [:], allowEmpty: Bool = false,
+                       progress: (Double) -> Void = { _ in }) throws -> LeftOut {
         guard let description = package.json(named: "scene.json") else { throw ImportError.unreadable }
         let objects = (description["objects"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
         guard allowEmpty || objects.contains(where: { has($0["image"]) || has($0["particle"]) || has($0["text"]) }) else {
@@ -70,7 +71,8 @@ public enum WallpaperEngineScene {
         let cache = ((try? Data(contentsOf: cacheURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
         var newCache: [String: Any] = [:]
         func written(_ url: URL) -> Bool { files.fileExists(atPath: url.path) }
-        for name in package.names {
+        for (index, name) in package.names.enumerated() {
+            progress(Double(index) / Double(max(package.names.count, 1)))
             let key = Self.key(name)
             let fileExtension = (key as NSString).pathExtension
             switch fileExtension {

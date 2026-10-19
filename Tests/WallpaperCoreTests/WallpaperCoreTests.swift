@@ -1514,7 +1514,8 @@ final class WallpaperEngineSceneTests: XCTestCase {
     /// faces and lies, more after the triangles, the bones and each animation, and a second
     /// animation.
     private func puppet(triangle: [UInt16] = [0, 1, 2], bones: [UInt32] = [0, 1, 1], newer: Bool = false,
-                        attachedTo attachmentBone: UInt16? = nil, clipped: Bool = false, sway: String = "") -> Data {
+                        attachedTo attachmentBone: UInt16? = nil, clipped: Bool = false, sway: String = "",
+                        deep: Bool = false) -> Data {
         func float(_ value: Float) -> Data { withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) } }
         var file = Data("MDLV00\(newer ? 23 : 13)\0".utf8)
         let head: [Data] = [number(0x0180_0009), number(1), number(1), Data("materials/Sky.json\0".utf8), number(0)]
@@ -1528,6 +1529,10 @@ final class WallpaperEngineSceneTests: XCTestCase {
             let u: Float = place.0 / 20 + 0.5
             let v: Float = 0.5 - place.1 / 10
             var corner: [Data] = [float(place.0), float(place.1), float(0)]
+            if deep {
+                // Some files keep one more number after the place: 84 bytes a corner.
+                corner.append(float(0))
+            }
             if newer {
                 corner += [float(0), float(0), float(1), float(1), float(0), float(0), float(1)]
             }
@@ -1639,6 +1644,14 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertEqual(bones[1]["physics"] as? String, sway)
         XCTAssertEqual(read.animations.map(\.id), [51, 52], "what follows is read as before")
         XCTAssertNil(read.solid, "corners on bones are no shape in three dimensions")
+    }
+
+    func testAPuppetWithLongerCornersIsRead() throws {
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true, deep: true)))
+        let older = try XCTUnwrap(WallpaperEnginePuppet(data: puppet()))
+        XCTAssertEqual(read.corners, older.corners)
+        XCTAssertEqual(read.triangles, [0, 1, 2])
+        XCTAssertEqual(read.animations.map(\.id), [51, 52])
     }
 
     func testAPuppetOfALaterVersionIsRead() throws {

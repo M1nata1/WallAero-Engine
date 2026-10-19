@@ -12,11 +12,11 @@ final class MediaConversion {
     private var last: Task<Void, Never>?
 
     /// Converts what the folder needs and returns when that is done.
-    func convert(_ folder: URL) async {
+    func convert(_ folder: URL, progress: @escaping @Sendable (Double) -> Void = { _ in }) async {
         let before = last
         let task = Task.detached(priority: .userInitiated) {
             await before?.value
-            let converted = await WebMediaConverter.convertFolder(folder)
+            let converted = await WebMediaConverter.convertFolder(folder, progress: progress)
             if !converted.isEmpty {
                 Log.playback.info("Converted for Chromium in \(folder.lastPathComponent, privacy: .public): \(converted.joined(separator: ", "), privacy: .public)")
             }
@@ -33,6 +33,25 @@ final class MediaConversion {
     /// Goes through every web wallpaper and scene of the library: those added by an earlier
     /// version of the app have their videos as they came, mostly in H.264. What is done already
     /// is only looked at.
+    /// Lays out anew the scenes an earlier version of the app laid out, so that what it now
+    /// reads of them — a puppet of a newer kind, say — plays; then has the wallpapers shown anew.
+    func layOutLibrary(_ library: WallpaperLibrary, then done: @escaping @MainActor ([Wallpaper]) -> Void) {
+        let stale = library.items.filter { $0.kind == .web }
+            .filter { WallpaperEngineProjectFolder.isLaidOutByEarlierVersion(scene: library.projectURL(for: $0)) }
+        guard !stale.isEmpty else { return }
+        let folders = stale.map { ($0, library.projectURL(for: $0)) }
+        Task {
+            var redone: [Wallpaper] = []
+            for (item, folder) in folders {
+                let laidOut = await Task.detached(priority: .utility) {
+                    (try? WallpaperEngineProjectFolder.layOut(scene: folder)) != nil
+                }.value
+                if laidOut { redone.append(item) }
+            }
+            done(redone)
+        }
+    }
+
     func convertLibrary(_ library: WallpaperLibrary) {
         guard WebMediaConverter.encodersAvailable else {
             Log.playback.error("The video encoders are missing; videos of web wallpapers stay as they are")

@@ -1833,26 +1833,6 @@ public enum WallpaperEngineRuntime {
 
       // The shapes of particles, drawn white on nothing; a particle's own color tints them.
       // A drop on glass, as clear as the glass: a darker rim, a glint where the light falls on it.
-      function beadPixels(size) {
-        var canvas = document.createElement('canvas');
-        canvas.width = canvas.height = size;
-        var context = canvas.getContext('2d');
-        var half = size / 2;
-        var body = context.createRadialGradient(half * 1.08, half * 1.1, 0, half, half, half * 0.9);
-        body.addColorStop(0, 'rgba(255,255,255,0.10)');
-        body.addColorStop(0.7, 'rgba(255,255,255,0.04)');
-        body.addColorStop(0.86, 'rgba(0,0,0,0.28)');
-        body.addColorStop(1, 'rgba(0,0,0,0)');
-        context.fillStyle = body;
-        context.fillRect(0, 0, size, size);
-        var glint = context.createRadialGradient(half * 0.68, half * 0.62, 0, half * 0.68, half * 0.62, half * 0.22);
-        glint.addColorStop(0, 'rgba(255,255,255,0.85)');
-        glint.addColorStop(1, 'rgba(255,255,255,0)');
-        context.fillStyle = glint;
-        context.fillRect(0, 0, size, size);
-        return context.getImageData(0, 0, size, size).data;
-      }
-
       function spritePixels(name, size) {
         var canvas = document.createElement('canvas');
         canvas.width = canvas.height = size;
@@ -4532,47 +4512,59 @@ public enum WallpaperEngineRuntime {
             note('“' + thing.name + '”: its model, ' + name + ', ' + (mesh ? 'has no faces to light' : 'is not in the scene') + '; it is left out');
             return null;
           }
-          var corners = numbersOf(mesh.solid, Float32Array);
-          var triangles = numbersOf(mesh.triangles, Uint16Array);
-          var count = Math.floor(corners.length / 8);
-          if (!count || !triangles.length) return null;
-          // How large it is, for what is said to bounce off it.
+          // A model may be made of several parts, each drawn with a material of its own: a body,
+          // a face, hair. The first is the file's own; the scene may name another material for it.
+          var given = [{ solid: mesh.solid, triangles: mesh.triangles, material: object.material || mesh.material }]
+            .concat((mesh.pieces || []).map(function (piece) { return { solid: piece.solid, triangles: piece.triangles, material: piece.material }; }));
           var low = [Infinity, Infinity, Infinity], high = [-Infinity, -Infinity, -Infinity];
-          for (var corner = 0; corner < count; corner++) {
-            for (var axis = 0; axis < 3; axis++) {
-              low[axis] = Math.min(low[axis], corners[corner * 8 + axis]);
-              high[axis] = Math.max(high[axis], corners[corner * 8 + axis]);
+          var parts = given.map(function (piece) {
+            var corners = numbersOf(piece.solid, Float32Array);
+            var triangles = numbersOf(piece.triangles, Uint16Array);
+            var count = Math.floor(corners.length / 8);
+            if (!count || !triangles.length) return null;
+            for (var corner = 0; corner < count; corner++) {
+              for (var axis = 0; axis < 3; axis++) {
+                low[axis] = Math.min(low[axis], corners[corner * 8 + axis]);
+                high[axis] = Math.max(high[axis], corners[corner * 8 + axis]);
+              }
             }
-          }
+            var material = json(String(piece.material || '')) || {};
+            var pass = (material.passes || [])[0] || {};
+            var constants = {};
+            Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
+            var shape = gl.createVertexArray();
+            gl.bindVertexArray(shape);
+            gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+            gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(0);
+            gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 32, 0);
+            gl.enableVertexAttribArray(8);
+            gl.vertexAttribPointer(8, 3, gl.FLOAT, false, 32, 12);
+            gl.enableVertexAttribArray(1);
+            gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 32, 24);
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
+            gl.bindVertexArray(null);
+            return {
+              corners: corners, count: count, shape: shape, length: triangles.length,
+              picture: (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null,
+              culls: key(String(pass.cullmode || 'normal')) !== 'nocull',
+              tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
+              writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
+              blending: key(String(pass.blending || 'normal')),
+              metallic: number(plain(constants.metallic), 0), roughness: number(plain(constants.roughness), 0.5)
+            };
+          }).filter(Boolean);
+          if (!parts.length) return null;
+          // How large it is, for what is said to bounce off it.
           var middle = [(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, (low[2] + high[2]) / 2];
           var radius = 0;
-          for (corner = 0; corner < count; corner++) {
-            radius = Math.max(radius, Math.hypot(corners[corner * 8] - middle[0], corners[corner * 8 + 1] - middle[1], corners[corner * 8 + 2] - middle[2]));
-          }
+          parts.forEach(function (part) {
+            for (var corner = 0; corner < part.count; corner++) {
+              radius = Math.max(radius, Math.hypot(part.corners[corner * 8] - middle[0], part.corners[corner * 8 + 1] - middle[1], part.corners[corner * 8 + 2] - middle[2]));
+            }
+          });
           thing.bounds = { middle: middle, radius: radius };
-          var material = json(String(object.material || mesh.material || '')) || {};
-          var pass = (material.passes || [])[0] || {};
-          var constants = {};
-          Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
-          var picture = (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null;
-          var shape = gl.createVertexArray();
-          gl.bindVertexArray(shape);
-          gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
-          gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
-          gl.enableVertexAttribArray(0);
-          gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 32, 0);
-          gl.enableVertexAttribArray(8);
-          gl.vertexAttribPointer(8, 3, gl.FLOAT, false, 32, 12);
-          gl.enableVertexAttribArray(1);
-          gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 32, 24);
-          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
-          gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
-          gl.bindVertexArray(null);
-          var culls = key(String(pass.cullmode || 'normal')) !== 'nocull';
-          var tests = key(String(pass.depthtest || 'enabled')) !== 'disabled';
-          var writes = key(String(pass.depthwrite || 'enabled')) !== 'disabled';
-          var blending = key(String(pass.blending || 'normal'));
-          var metallic = number(plain(constants.metallic), 0), roughness = number(plain(constants.roughness), 0.5);
           var white = null;
           thing.draw = function () {
             var stands = standing(thing);
@@ -4595,8 +4587,6 @@ public enum WallpaperEngineRuntime {
             gl.uniform3f(at('u_Ambient'), ambient[0], ambient[1], ambient[2]);
             gl.uniform3f(at('u_Sky'), sky[0], sky[1], sky[2]);
             gl.uniform3f(at('u_Eye'), sceneWidth / 2, sceneHeight / 2, Math.max(sceneWidth, sceneHeight) * 4);
-            gl.uniform1f(at('u_Metallic'), metallic);
-            gl.uniform1f(at('u_Roughness'), roughness);
             var lights = sceneLights();
             gl.uniform1i(at('u_LightCount'), lights.length);
             if (lights.length) {
@@ -4606,23 +4596,27 @@ public enum WallpaperEngineRuntime {
               gl.uniform4fv(at('u_LightColor'), new Float32Array(shades));
               gl.uniform4fv(at('u_LightAim'), new Float32Array(aims));
             }
-            var layer = picture && picture.ready !== false ? picture.layers[0] : null;
-            if (!layer) white = white || flat(255, 255, 255, 255);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, (layer || white.layers[0]).texture);
-            gl.uniform1i(at('u_Texture'), 0);
-            gl.uniform1i(at('u_Channels'), layer ? (CHANNELS[picture.channels] || 0) : 0);
-            if (tests) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
             gl.depthFunc(gl.LEQUAL);
-            gl.depthMask(writes);
-            if (culls) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);
             // Turned over, the faces that look this way go round the other way.
             gl.frontFace(gl.CW);
             gl.enable(gl.BLEND);
-            if (blending === 'additive') gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
-            else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-            gl.bindVertexArray(shape);
-            gl.drawElements(gl.TRIANGLES, triangles.length, gl.UNSIGNED_SHORT, 0);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.uniform1i(at('u_Texture'), 0);
+            parts.forEach(function (part) {
+              gl.uniform1f(at('u_Metallic'), part.metallic);
+              gl.uniform1f(at('u_Roughness'), part.roughness);
+              var layer = part.picture && part.picture.ready !== false ? part.picture.layers[0] : null;
+              if (!layer) white = white || flat(255, 255, 255, 255);
+              gl.bindTexture(gl.TEXTURE_2D, (layer || white.layers[0]).texture);
+              gl.uniform1i(at('u_Channels'), layer ? (CHANNELS[part.picture.channels] || 0) : 0);
+              if (part.tests) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
+              gl.depthMask(part.writes);
+              if (part.culls) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);
+              if (part.blending === 'additive') gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
+              else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+              gl.bindVertexArray(part.shape);
+              gl.drawElements(gl.TRIANGLES, part.length, gl.UNSIGNED_SHORT, 0);
+            });
             gl.bindVertexArray(null);
             gl.disable(gl.DEPTH_TEST);
             gl.disable(gl.CULL_FACE);
@@ -4738,7 +4732,18 @@ public enum WallpaperEngineRuntime {
             if (point) matrix = times([point[0], point[1], 0, 0, point[2], point[3], 0, 0, 0, 0, 1, 0, point[4], point[5], 0, 1], matrix);
             // Drawn into the layer that holds it, an object is placed in that layer's own
             // coordinates; the layer's place is added when the layer is drawn.
-            if (!parent.holds || whole) matrix = times(up.matrix, matrix);
+            if (!parent.holds || whole) {
+              // An object the scene gives no place stands, for what hangs on it, where Wallpaper
+              // Engine puts it: at the scene's corner, not in its middle, where it is drawn — a
+              // layer over the whole screen, say, whose pictures are placed by the scene's pixels.
+              var base = up.matrix;
+              if (parent.parent === undefined && !isSet(parent.said && parent.said.origin)) {
+                base = base.slice();
+                base[12] -= sceneWidth / 2;
+                base[13] -= sceneHeight / 2;
+              }
+              matrix = times(base, matrix);
+            }
           } else {
             if ((eye && eye.on) || (shake && shake.on)) {
               // What hangs together moves with the pointer together, and shakes with the camera.
@@ -5437,6 +5442,63 @@ public enum WallpaperEngineRuntime {
           '  if (u_Channels == 1) c = vec4(1.0, 1.0, 1.0, c.r);',
           '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
           '  color = vec4(c.rgb * v_Color.rgb * u_Bright, c.a * v_Color.a);',
+          '}'
+        ].join('\n'), 'the player\'s own shader');
+        // Particles that bend what is behind them — drops on glass, bubbles — rather than show a
+        // picture: each is a clear lens over a copy of what is under it, which it takes from
+        // nearer its middle the nearer its edge, as a drop does. Its picture only says its shape.
+        var refractProgram = link([
+          '#version 300 es',
+          'in vec2 a_TexCoord;',
+          'in vec4 a_Place;',
+          'in vec4 a_Color;',
+          'in vec4 a_Frame;',
+          'in vec4 a_More;',
+          'uniform mat2 u_Linear;',
+          'uniform vec2 u_Scene;',
+          'out vec2 v_Uv;',
+          'out vec2 v_Local;',
+          'out vec4 v_Color;',
+          'out float v_Size;',
+          'void main() {',
+          '  vec2 corner = vec2(a_TexCoord.x - 0.5, (0.5 - a_TexCoord.y) * a_More.x);',
+          '  float c = cos(a_Place.w);',
+          '  float s = sin(a_Place.w);',
+          '  vec2 at = a_Place.xy + u_Linear * (vec2(corner.x * c - corner.y * s, corner.x * s + corner.y * c) * a_Place.z);',
+          '  gl_Position = vec4(2.0 * at.x / u_Scene.x - 1.0, 1.0 - 2.0 * at.y / u_Scene.y, 0.0, 1.0);',
+          '  v_Uv = a_Frame.xy + a_TexCoord * a_Frame.zw;',
+          '  v_Local = vec2(a_TexCoord.x * 2.0 - 1.0, 1.0 - a_TexCoord.y * 2.0);',
+          '  v_Color = a_Color;',
+          '  v_Size = a_Place.z;',
+          '}'
+        ].join('\n'), [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'in vec2 v_Local;',
+          'in vec4 v_Color;',
+          'in float v_Size;',
+          'uniform sampler2D u_Texture;',
+          'uniform sampler2D u_Behind;',
+          'uniform vec2 u_BehindSize;',
+          'uniform int u_Channels;',
+          'uniform float u_Bright;',
+          'uniform float u_Amount;',
+          'out vec4 color;',
+          'void main() {',
+          '  vec4 c = texture(u_Texture, v_Uv);',
+          '  if (u_Channels == 1) c = vec4(1.0, 1.0, 1.0, c.r);',
+          '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
+          '  vec4 base = c * v_Color;',
+          // The way a clear drop faces where it bends what is behind it: as a dome does, its
+          // slope growing toward its rim, where it ends.
+          '  float r = length(v_Local);',
+          '  vec2 slope = r < 1.0 ? v_Local * (1.0 - smoothstep(0.85, 1.0, r)) : vec2(0.0);',
+          // As Wallpaper Engine bends it: by so much of the screen as the material says, for a
+          // particle as far as it shows.
+          '  vec2 at = gl_FragCoord.xy / u_BehindSize + slope * u_Amount * v_Color.a;',
+          '  vec3 behind = texture(u_Behind, at).rgb;',
+          '  color = vec4(base.rgb * behind * u_Bright, base.a);',
           '}'
         ].join('\n'), 'the player\'s own shader');
         var FLOATS = 16; // to a particle, for the shader
@@ -6185,9 +6247,9 @@ public enum WallpaperEngineRuntime {
           // A particle that bends what is behind it, a drop on glass, has for its pictures how it
           // bends it rather than what it looks like. The bending is not drawn here; such a drop
           // shows as a clear bead.
-          var refracts = number(plain((material.combos || {}).REFRACT), 0) === 1;
-          system.picture = refracts ? (textureCache['(bead)'] || (textureCache['(bead)'] = fromPixels(beadPixels(128), 128, true)))
-                                    : texture('materials/' + ((material.textures || [])[0] || 'particle/dot'));
+          system.refracts = number(plain((material.combos || {}).REFRACT), 0) === 1 && !!refractProgram;
+          system.refractAmount = number(plain((material.constantshadervalues || {}).ui_editor_properties_refract_amount), 0.05);
+          system.picture = texture('materials/' + ((material.textures || [])[0] || 'particle/dot'));
           system.additive = key(material.blending || 'translucent') === 'additive';
           system.bright = number((material.constantshadervalues || {}).ui_editor_properties_overbright, 1);
           // Further away is smaller: the particles have depth, and are drawn as seen by an eye.
@@ -6586,17 +6648,37 @@ public enum WallpaperEngineRuntime {
               data[at + 11] = 1;
               data[at + 12] = long;
             }
-            gl.useProgram(particleProgram.program);
+            var program = system.refracts ? refractProgram : particleProgram;
+            // A uniform the compiler left out has no place; setting it at none does nothing.
+            function slot(name) { var uniform = program.uniforms[name]; return uniform ? uniform.location : null; }
+            if (system.refracts) {
+              // What is under the drops, as it is before they are drawn.
+              var onto = surface.target;
+              if (!surface.copy) surface.copy = acquire(onto.width, onto.height);
+              gl.bindFramebuffer(gl.READ_FRAMEBUFFER, onto.framebuffer);
+              gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, surface.copy.framebuffer);
+              gl.blitFramebuffer(0, 0, onto.width, onto.height, 0, 0, onto.width, onto.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+              gl.bindFramebuffer(gl.FRAMEBUFFER, onto.framebuffer);
+            }
+            gl.useProgram(program.program);
             gl.enable(gl.BLEND);
             if (system.additive) gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
             else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, layer.texture);
-            gl.uniform1i(particleProgram.uniforms.u_Texture.location, 0);
-            gl.uniform1i(particleProgram.uniforms.u_Channels.location, CHANNELS[system.picture.channels] || 0);
-            gl.uniform1f(particleProgram.uniforms.u_Bright.location, system.bright);
-            gl.uniformMatrix2fv(particleProgram.uniforms.u_Linear.location, false, new Float32Array(linear));
-            gl.uniform2f(particleProgram.uniforms.u_Scene.location, surface.width, surface.height);
+            gl.uniform1i(slot('u_Texture'), 0);
+            gl.uniform1i(slot('u_Channels'), CHANNELS[system.picture.channels] || 0);
+            gl.uniform1f(slot('u_Bright'), system.bright);
+            gl.uniformMatrix2fv(slot('u_Linear'), false, new Float32Array(linear));
+            gl.uniform2f(slot('u_Scene'), surface.width, surface.height);
+            if (system.refracts) {
+              gl.activeTexture(gl.TEXTURE1);
+              gl.bindTexture(gl.TEXTURE_2D, surface.copy.texture);
+              gl.uniform1i(slot('u_Behind'), 1);
+              gl.uniform2f(slot('u_BehindSize'), surface.target.width, surface.target.height);
+              gl.uniform1f(slot('u_Amount'), system.refractAmount);
+              gl.activeTexture(gl.TEXTURE0);
+            }
             gl.bindVertexArray(system.shape);
             gl.bindBuffer(gl.ARRAY_BUFFER, system.buffer);
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, count * FLOATS));

@@ -41,18 +41,28 @@ public enum WebMediaConverter {
     /// originals. Returns the files converted, relative to the folder. A file that cannot be
     /// converted is left as it was.
     @discardableResult
-    public static func convertFolder(_ folder: URL) async -> [String] {
+    public static func convertFolder(_ folder: URL, progress: @escaping @Sendable (Double) -> Void = { _ in }) async -> [String] {
         var converted: [String] = []
         // Paths compared as they really are: a folder may be reached through a link.
         let root = folder.resolvingSymlinksInPath().path
-        for file in await filesNeedingConversion(in: folder) {
+        let needing = await filesNeedingConversion(in: folder)
+        // How far it has come, by the size of the files: a large video takes the longest.
+        let sizes = needing.map { Double((try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 1) }
+        let total = max(sizes.reduce(0, +), 1)
+        var done = 0.0
+        for (index, file) in needing.enumerated() {
+            let before = done, share = sizes[index]
+            defer {
+                done += share
+                progress(done / total)
+            }
             let path = file.resolvingSymlinksInPath().path
             guard path.hasPrefix(root + "/") else { continue }
             let relative = String(path.dropFirst(root.count + 1))
             let original = folder.appendingPathComponent(originalsFolderName).appendingPathComponent(relative)
             let temporary = file.deletingLastPathComponent().appendingPathComponent(".\(file.lastPathComponent).webm-\(UUID().uuidString)")
             do {
-                try await convert(file, to: temporary)
+                try await convert(file, to: temporary) { part in progress((before + part * share) / total) }
                 let files = FileManager.default
                 // What is laid out of a scene's project for the player is in the project as it
                 // was; a second copy of it is not kept.
@@ -122,7 +132,8 @@ public enum WebMediaConverter {
     // MARK: - One file
 
     /// Writes `source` to `destination` as WebM.
-    public static func convert(_ source: URL, to destination: URL) async throws {
+    /// - Parameter progress: how far it has come, from 0 to 1, by the time of the video.
+    public static func convert(_ source: URL, to destination: URL, progress: (Double) -> Void = { _ in }) async throws {
         guard encodersAvailable else { throw ConversionError.encodersMissing }
         let asset = AVURLAsset(url: source)
         guard let duration = try? await asset.load(.duration) else { throw ConversionError.unreadable }
@@ -202,6 +213,8 @@ public enum WebMediaConverter {
         var sound = SoundEncoder(encoder: audio, writer: writer, channels: channels)
         var videoDone = videoOutput == nil
         var audioDone = audioOutput == nil
+        let length = max((duration.seconds.isFinite ? duration.seconds : 0) * 1000, 1)
+        var told = -1.0
         // Read the two tracks side by side, as AVAssetReader wants: sound up to the picture's time.
         while !videoDone || !audioDone {
             try Task.checkCancellation()
@@ -220,6 +233,11 @@ public enum WebMediaConverter {
                         audioDone = true
                     }
                 }
+            }
+            let share = min(1, Double(max(pictures.time, sound.time)) / length)
+            if share - told >= 0.01 {
+                told = share
+                progress(share)
             }
         }
         if reader.status == .failed {

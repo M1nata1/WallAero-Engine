@@ -363,3 +363,37 @@ final class WallpaperSceneConversionDemo: XCTestCase {
         try WallpaperEngineProjectFolder.layOut(scene: folder)
     }
 }
+
+final class WallpaperEngineModelPartsTests: XCTestCase {
+    /// A model in three dimensions of two parts, as Wallpaper Engine writes one: the number of
+    /// parts in the head, then each part with its material, its bounds and its corners.
+    private func model() -> Data {
+        func int(_ value: UInt32) -> Data { withUnsafeBytes(of: value.littleEndian) { Data($0) } }
+        func float(_ value: Float) -> Data { withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) } }
+        var file = Data("MDLV0023\0".utf8) + int(0xF) + int(1) + int(2)
+        for (index, material) in ["materials/models/doll/body.json", "materials/models/doll/hair.json"].enumerated() {
+            if index > 0 { file += Data(count: 6) }
+            file += Data("\(material)\0".utf8) + int(0)
+            for value in [-1, -1, -1, 1, 1, 1] as [Float] { file += float(value) }
+            file += int(0xF)
+            var corners = Data()
+            for place in [(Float(0), Float(0)), (1, 0), (0, 1)] {
+                let corner: [Float] = [place.0 + Float(index), place.1, 0, 0, 0, 1, 1, 0, 0, 1, place.0, place.1]
+                corner.forEach { corners += float($0) }
+            }
+            file += int(UInt32(corners.count)) + corners + int(6)
+            for corner in [0, 1, 2] as [UInt16] { file += withUnsafeBytes(of: corner.littleEndian) { Data($0) } }
+        }
+        return file + Data(count: 7)
+    }
+
+    func testEveryPartOfAModelIsRead() throws {
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: model()))
+        XCTAssertEqual(read.material, "materials/models/doll/body.json")
+        XCTAssertEqual(read.solid?.count, 3 * 8)
+        XCTAssertEqual(read.pieces.map(\.material), ["materials/models/doll/hair.json"])
+        XCTAssertEqual(read.pieces.first?.solid.first, 1)
+        XCTAssertEqual(read.pieces.first?.triangles, [0, 1, 2])
+        XCTAssertEqual((read.table["pieces"] as? [[String: Any]])?.count, 1)
+    }
+}
