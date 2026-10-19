@@ -104,10 +104,6 @@ struct LibraryView: View {
     @State private var newName = ""
     /// The wallpapers the user is being asked about deleting.
     @State private var deletingIDs: [UUID] = []
-    /// How high the part of the window is that shows the wallpapers, between its bars.
-    @State private var gridRoom: CGFloat = 0
-    /// How wide the room for the wallpapers is.
-    @State private var gridWidth: CGFloat = 0
     @State private var taggingItem: Wallpaper?
     @State private var newTag = ""
 
@@ -311,40 +307,34 @@ struct LibraryView: View {
         } else if shownItems.isEmpty {
             NothingFoundView(searchText: state.searchText)
         } else {
-            ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(Self.tileWidth), spacing: Self.tileSpacing), count: columnCount),
-                          alignment: .leading, spacing: 20) {
-                    ForEach(shownItems) { item in
-                        WallpaperTile(
-                            item: item,
-                            thumbnailURL: library.thumbnailURL(for: item),
-                            isSelected: state.picked.ids.contains(item.id),
-                            isCurrent: currentID == item.id
-                        )
-                        .onTapGesture(count: 2) { apply(item) }
-                        .simultaneousGesture(TapGesture().onEnded { click(item) })
-                        .contextMenu { contextMenu(for: item) }
-                    }
-                }
-                // Only as wide as its rows, so that it can stand in the middle.
-                .frame(width: CGFloat(columnCount) * (Self.tileWidth + Self.tileSpacing) - Self.tileSpacing)
-                .padding(16)
-                // As high as the room there is at least, so that a click below the last row
-                // is a click beside the wallpapers too. The rows in the middle, so that the room
-                // left over is shared by both sides.
-                .frame(maxWidth: .infinity, minHeight: max(0, gridRoom - 1), alignment: .top)
-                .background { deselecting }
-            }
-            .background {
-                GeometryReader { area in
-                    let room = area.size.height - area.safeAreaInsets.top - area.safeAreaInsets.bottom
-                    Color.clear
-                        .onAppear {
-                            gridRoom = room
-                            gridWidth = area.size.width
+            // The room is measured outside what scrolls, so the wallpapers never widen it: the
+            // rows follow the window and the settings opening and closing at its side.
+            GeometryReader { area in
+                let columns = Self.columnCount(forWidth: area.size.width)
+                let room = area.size.height - area.safeAreaInsets.top - area.safeAreaInsets.bottom
+                ScrollView {
+                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(Self.tileWidth), spacing: Self.tileSpacing), count: columns),
+                              alignment: .leading, spacing: 20) {
+                        ForEach(shownItems) { item in
+                            WallpaperTile(
+                                item: item,
+                                thumbnailURL: library.thumbnailURL(for: item),
+                                isSelected: state.picked.ids.contains(item.id),
+                                isCurrent: currentID == item.id
+                            )
+                            .onTapGesture(count: 2) { apply(item) }
+                            .simultaneousGesture(TapGesture().onEnded { click(item) })
+                            .contextMenu { contextMenu(for: item) }
                         }
-                        .onChange(of: room) { gridRoom = $0 }
-                        .onChange(of: area.size.width) { gridWidth = $0 }
+                    }
+                    // Only as wide as its rows, so that it can stand in the middle.
+                    .frame(width: CGFloat(columns) * (Self.tileWidth + Self.tileSpacing) - Self.tileSpacing)
+                    .padding(16)
+                    // As high as the room there is at least, so that a click below the last row
+                    // is a click beside the wallpapers too. The rows in the middle, so that the
+                    // room left over is shared by both sides.
+                    .frame(maxWidth: .infinity, minHeight: max(0, room - 1), alignment: .top)
+                    .background { deselecting }
                 }
             }
         }
@@ -352,9 +342,9 @@ struct LibraryView: View {
 
     /// How many wallpapers fit in a row, with the margins at the sides. The row is in the middle,
     /// so that what is left over is shared by both sides.
-    private var columnCount: Int {
-        let usable = gridWidth - 32 + Self.tileSpacing
-        return max(1, Int(usable / (Self.tileWidth + Self.tileSpacing)))
+    static func columnCount(forWidth width: CGFloat) -> Int {
+        let usable = width - 32 + tileSpacing
+        return max(1, Int(usable / (tileWidth + tileSpacing)))
     }
 
     /// What lies behind the wallpapers: a click beside them, between them or below, selects
@@ -473,10 +463,14 @@ struct LibraryView: View {
     private func importStatus(for job: ImportCoordinator.Job) -> String {
         let name = job.url.lastPathComponent
         let remaining = importer.jobs.count - 1
+        let percent = Int((job.progress * 100).rounded(.down))
+        var status = job.isConverting
+            ? String(format: NSLocalizedString("Preparing the video of “%@”… %d%%", comment: "Import progress"), name, percent)
+            : String(format: NSLocalizedString("Adding “%@”… %d%%", comment: "Import progress"), name, percent)
         if remaining > 0 {
-            return String(format: NSLocalizedString("Adding “%@”… (%d more in queue)", comment: "Import progress"), name, remaining)
+            status += " " + String(format: NSLocalizedString("(%d more in queue)", comment: "Import progress"), remaining)
         }
-        return String(format: NSLocalizedString("Adding “%@”…", comment: "Import progress"), name)
+        return status
     }
 
     // MARK: - Actions

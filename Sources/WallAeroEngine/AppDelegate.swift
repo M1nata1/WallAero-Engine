@@ -178,6 +178,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = makeMainMenu()
         watchDeleteKey()
         manager.start()
+        MediaConversion.shared.layOutLibrary(library) { [weak self] redone in
+            for item in redone { self?.manager.webWallpaperDidChange(item) }
+        }
         MediaConversion.shared.convertLibrary(library)
         cursorSettings.reapplyIfNeeded()
         statusMenu = StatusMenuController(library: library, manager: manager, actions: .init(

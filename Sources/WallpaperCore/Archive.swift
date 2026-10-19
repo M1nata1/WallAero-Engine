@@ -15,7 +15,8 @@ public enum Archive {
     /// Unpacks the archive into `folder`, which is created. What an archive from the web may
     /// carry besides files is left out: nothing is written outside the folder, and links to
     /// other places are removed.
-    public static func unpack(_ archive: URL, into folder: URL) throws {
+    /// - Parameter progress: how far it has come, from 0 to 1, by the bytes unpacked so far.
+    public static func unpack(_ archive: URL, into folder: URL, progress: @escaping (Double) -> Void = { _ in }) throws {
         let isZip = archive.pathExtension.lowercased() == "zip"
         let names = try (isZip ? run("/usr/bin/zipinfo", ["-1", archive.path]) : run("/usr/bin/bsdtar", ["-tf", archive.path]))
             .split(separator: "\n").map(String.init)
@@ -40,17 +41,42 @@ public enum Archive {
 
         let files = FileManager.default
         try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        let process = Process()
         if isZip {
-            _ = try run("/usr/bin/ditto", ["-x", "-k", archive.path, folder.path])
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            process.arguments = ["-x", "-k", archive.path, folder.path]
         } else {
-            _ = try run("/usr/bin/bsdtar", ["-xf", archive.path, "-C", folder.path, "--no-same-owner", "--no-same-permissions"])
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/bsdtar")
+            process.arguments = ["-xf", archive.path, "-C", folder.path, "--no-same-owner", "--no-same-permissions"]
         }
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        // How much is out of the archive, looked at now and then while it is unpacked.
+        while process.isRunning {
+            Thread.sleep(forTimeInterval: 0.25)
+            if let size, size > 0 {
+                progress(min(1, Double(Self.size(of: folder)) / Double(size)))
+            }
+        }
+        guard process.terminationStatus == 0 else { throw ImportError.unreadableArchive }
+        progress(1)
         let links = files.enumerator(at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey])?
             .compactMap { $0 as? URL }
             .filter { (try? $0.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true } ?? []
         for link in links {
             try? files.removeItem(at: link)
         }
+    }
+
+    /// How many bytes the files of a folder hold.
+    static func size(of folder: URL) -> Int64 {
+        let walker = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.fileSizeKey])
+        var total: Int64 = 0
+        while let url = walker?.nextObject() as? URL {
+            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
     }
 
     /// Whether a file named so in an archive lands inside the folder the archive is unpacked into.

@@ -88,7 +88,7 @@ public enum WallpaperEngineProjectFolder {
     /// Lays a Wallpaper Engine project out in `destination` as loose files, the way its own
     /// editor keeps one: the project's files as they are, and those of its `scene.pkg` taken
     /// out of it. Names that would lead out of the folder are passed over.
-    public static func unpack(_ source: URL, to destination: URL) throws {
+    public static func unpack(_ source: URL, to destination: URL, progress: (Double) -> Void = { _ in }) throws {
         let files = FileManager.default
         try files.createDirectory(at: destination, withIntermediateDirectories: true)
         let root = source.standardizedFileURL.resolvingSymlinksInPath().path
@@ -106,7 +106,8 @@ public enum WallpaperEngineProjectFolder {
         }
         let packed = source.appendingPathComponent(WallpaperEnginePackage.fileName)
         guard let data = try? Data(contentsOf: packed, options: .mappedIfSafe), let package = WallpaperEnginePackage(data: data) else { return }
-        for name in package.names {
+        for (index, name) in package.names.enumerated() {
+            progress(Double(index) / Double(max(package.names.count, 1)))
             let clean = name.replacingOccurrences(of: "\\", with: "/")
             guard Archive.staysInside(clean), let file = package.data(named: name) else { continue }
             let target = destination.appendingPathComponent(clean)
@@ -207,14 +208,28 @@ extension WallpaperEngineProjectFolder {
         return FileManager.default.fileExists(atPath: project.appendingPathComponent(WallpaperEngineDocument.sceneFileName).path) ? project : nil
     }
 
+    /// What the layout is made by: raised when the app reads more of a project than before, so
+    /// that a scene laid out by an earlier version is laid out again.
+    public static let layoutVersion = 3
+    static let versionFileName = "layout-version"
+
+    /// Whether the scene's project was laid out by an earlier version of the app.
+    public static func isLaidOutByEarlierVersion(scene folder: URL) -> Bool {
+        guard project(ofScene: folder) != nil else { return false }
+        let file = folder.appendingPathComponent(WallpaperEngineScene.folderName).appendingPathComponent(versionFileName)
+        let written = (try? String(contentsOf: file, encoding: .utf8)).flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+        return written < layoutVersion
+    }
+
     /// Lays a scene's project out for the player and brings the scene's settings up to the
     /// project's. A setting the scene had already keeps the value the user gave it.
     @discardableResult
-    public static func layOut(scene folder: URL, languages: [String] = Locale.preferredLanguages) throws -> WallpaperEngineScene.LeftOut {
+    public static func layOut(scene folder: URL, languages: [String] = Locale.preferredLanguages,
+                              progress: (Double) -> Void = { _ in }) throws -> WallpaperEngineScene.LeftOut {
         guard let projectFolder = project(ofScene: folder), let package = WallpaperEnginePackage(folder: projectFolder) else {
             throw Problem.noScene
         }
-        let leftOut = try WallpaperEngineScene.export(package, into: folder, allowEmpty: true)
+        let leftOut = try WallpaperEngineScene.export(package, into: folder, allowEmpty: true, progress: progress)
         let found = WallpaperEngineProject(folder: projectFolder, languages: languages)?.variables ?? []
         let used = WallpaperEngineScene.settingNames(in: package, among: found.compactMap(\.property))
         let offered = found.filter { $0.property.map(used.contains) == true }
@@ -238,6 +253,8 @@ extension WallpaperEngineProjectFolder {
         } else {
             try SceneProject.create(at: folder, scene: scene)
         }
+        try? String(layoutVersion).write(to: folder.appendingPathComponent(WallpaperEngineScene.folderName)
+            .appendingPathComponent(versionFileName), atomically: true, encoding: .utf8)
         return leftOut
     }
 }

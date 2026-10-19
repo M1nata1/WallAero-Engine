@@ -173,9 +173,10 @@ public final class WallpaperLibrary: ObservableObject {
     /// `leftOutOnImport`. A video is taken as any video is. Whatever its kind, the wallpaper
     /// gets the tags its project comes with.
     @discardableResult
-    public func importWallpaperEngineProject(_ project: WallpaperEngineProject, fallbackName: String? = nil) async throws -> Wallpaper {
+    public func importWallpaperEngineProject(_ project: WallpaperEngineProject, fallbackName: String? = nil,
+                                             progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Wallpaper {
         let inUse = Set(allTags.map { $0.lowercased() })
-        let added = try await addWallpaperEngineProject(project, fallbackName: fallbackName)
+        let added = try await addWallpaperEngineProject(project, fallbackName: fallbackName, progress: progress)
         guard !project.tags.isEmpty else { return added }
         setTags(added.tagList + project.tags.map(\.name), for: added.id)
         // Only a tag that is new here is put into its category: one the library has already
@@ -186,7 +187,8 @@ public final class WallpaperLibrary: ObservableObject {
         return item(withID: added.id) ?? added
     }
 
-    private func addWallpaperEngineProject(_ project: WallpaperEngineProject, fallbackName: String?) async throws -> Wallpaper {
+    private func addWallpaperEngineProject(_ project: WallpaperEngineProject, fallbackName: String?,
+                                           progress: @escaping @Sendable (Double) -> Void) async throws -> Wallpaper {
         let name = project.title ?? fallbackName ?? project.folder.lastPathComponent
         switch project.kind {
         case .other(let kind):
@@ -195,7 +197,7 @@ public final class WallpaperLibrary: ObservableObject {
             throw ImportError.settingsWithoutWallpaper
         case .video:
             guard let file = project.file else { throw ImportError.unreadable }
-            let item = try await importFile(at: project.folder.appendingPathComponent(file))
+            let item = try await importFile(at: project.folder.appendingPathComponent(file), progress: progress)
             rename(item.id, to: name)
             return self.item(withID: item.id) ?? item
         case .web:
@@ -229,9 +231,11 @@ public final class WallpaperLibrary: ObservableObject {
                     // editor to change and to give back to Wallpaper Engine; the player plays
                     // what is laid out of it.
                     let project = folder.appendingPathComponent(WallpaperEngineProjectFolder.folderName, isDirectory: true)
-                    try WallpaperEngineProjectFolder.unpack(source, to: project)
+                    // Taking the project out of its package is a third of the work; laying it
+                    // out for the player — reading every picture — the rest.
+                    try WallpaperEngineProjectFolder.unpack(source, to: project) { progress($0 / 3) }
                     guard let package = WallpaperEnginePackage(folder: project) else { throw ImportError.unreadable }
-                    let leftOut = try WallpaperEngineScene.export(package, into: folder, chosen: chosen)
+                    let leftOut = try WallpaperEngineScene.export(package, into: folder, chosen: chosen) { progress(1 / 3 + $0 * 2 / 3) }
                     let source = "\(WallpaperEngineScene.folderName)/\(WallpaperEngineScene.filesName)"
                     // Every wallpaper comes with a scheme color and may come with settings left
                     // from an older version of itself; only what the scene uses is offered.
@@ -284,15 +288,18 @@ public final class WallpaperLibrary: ObservableObject {
     /// Brings in every wallpaper of an archive or a folder that holds several. Those that
     /// cannot be brought in are passed over as long as one can; if none can, the first one's
     /// reason is thrown.
-    private func importWallpaperEngineProjects(_ found: [WallpaperEngineProject], fallbackName: String) async throws -> [Wallpaper] {
+    private func importWallpaperEngineProjects(_ found: [WallpaperEngineProject], fallbackName: String,
+                                               progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> [Wallpaper] {
         let projects = WallpaperEngineProject.settled(found)
         var added: [Wallpaper] = []
         var firstError: Error?
-        for project in projects {
+        for (index, project) in projects.enumerated() {
             do {
                 // One wallpaper alone is named after the archive when it has no title of its own;
                 // each of several after its own folder.
-                added.append(try await importWallpaperEngineProject(project, fallbackName: projects.count == 1 ? fallbackName : nil))
+                let done = Double(index), count = Double(projects.count)
+                added.append(try await importWallpaperEngineProject(project, fallbackName: projects.count == 1 ? fallbackName : nil,
+                                                                    progress: { progress((done + $0) / count) }))
             } catch {
                 firstError = firstError ?? error
             }
@@ -316,7 +323,7 @@ public final class WallpaperLibrary: ObservableObject {
             // The wallpaper's own folder, or the one an archive of it was unpacked into.
             let projects = WallpaperEngineProject.all(in: url, languages: languages)
             if !projects.isEmpty {
-                return try await importWallpaperEngineProjects(projects, fallbackName: url.lastPathComponent)
+                return try await importWallpaperEngineProjects(projects, fallbackName: url.lastPathComponent, progress: progress)
             }
             return [try importWebProject(at: url)]
         }
@@ -331,15 +338,17 @@ public final class WallpaperLibrary: ObservableObject {
         let files = FileManager.default
         let unpacked = files.temporaryDirectory.appendingPathComponent("WallAeroEngine-\(UUID().uuidString)", isDirectory: true)
         defer { try? files.removeItem(at: unpacked) }
+        // Unpacking is the first fifth of the work.
         try await Task.detached(priority: .userInitiated) {
-            try Archive.unpack(archive, into: unpacked)
+            try Archive.unpack(archive, into: unpacked) { progress($0 / 5) }
         }.value
+        let rest: @Sendable (Double) -> Void = { progress(0.2 + $0 * 0.8) }
         // The archive's own name is the wallpaper's when nothing inside names it.
         let name = archive.deletingPathExtension().lastPathComponent
 
         let projects = WallpaperEngineProject.all(in: unpacked, languages: languages)
         if !projects.isEmpty {
-            return try await importWallpaperEngineProjects(projects, fallbackName: name)
+            return try await importWallpaperEngineProjects(projects, fallbackName: name, progress: rest)
         }
         let inside = (try? files.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         if let page = ([unpacked] + inside).first(where: { WebProject(folder: $0) != nil }) {
@@ -357,7 +366,7 @@ public final class WallpaperLibrary: ObservableObject {
         var added: [Wallpaper] = []
         for (index, file) in media.enumerated() {
             let done = Double(index), count = Double(media.count)
-            added.append(try await importFile(at: file) { progress((done + $0) / count) })
+            added.append(try await importFile(at: file) { rest((done + $0) / count) })
         }
         return added
     }

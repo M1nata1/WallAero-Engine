@@ -715,3 +715,6 @@
 "Choose the archive or folder “%@” was added from." = "Укажите архив или папку, из которых добавляли «%@».";
 "This is not the scene's archive" = "Это не архив этой сцены";
 "No Wallpaper Engine scene of that name was found in it." = "В нём не нашлось сцены Wallpaper Engine с таким названием.";
+"Preparing the video of “%@”… %d%%" = "Готовится видео «%@»… %d %%";
+"Adding “%@”… %d%%" = "Добавляется «%@»… %d %%";
+"(%d more in queue)" = "(в очереди ещё %d)";

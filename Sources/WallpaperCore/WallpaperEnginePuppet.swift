@@ -85,6 +85,15 @@ struct WallpaperEnginePuppet {
     var solid: [Float]?
     /// The material the file names, as the scene's files have it.
     var material: String?
+    /// A model in three dimensions made of several parts, each drawn with a material of its
+    /// own — a body, a face, hair: every part after the first, which is `solid`.
+    var pieces: [Piece] = []
+
+    struct Piece: Equatable {
+        var material: String
+        var solid: [Float]
+        var triangles: [UInt16]
+    }
     var triangles: [UInt16]
     var bones: [Bone]
     /// In the order they are drawn; empty when the file does not say, and the triangles are
@@ -98,14 +107,14 @@ struct WallpaperEnginePuppet {
     /// How long a corner may be: with its place alone, or also with the way it faces, the way
     /// it lies, or both. Its bones, their weights and its place in the picture are always
     /// its last forty bytes; in a file without bones only the place in the picture ends it.
-    private static let cornerSizes = [52, 64, 68, 80]
+    private static let cornerSizes = [52, 64, 68, 80, 84]
     private static let bonesAndWeights = 32
     private static let frameSize = 36
 
     init?(data: Data) {
         var reader = BinaryReader(data)
         guard reader.textToZero()?.hasPrefix("MDLV") == true,
-              reader.uint32() != nil, reader.uint32() != nil, reader.uint32() != nil,
+              reader.uint32() != nil, reader.uint32() != nil, let meshCount = reader.uint32(),
               let material = reader.textToZero(atMost: 1024)
         else {
             return nil
@@ -118,6 +127,16 @@ struct WallpaperEnginePuppet {
             triangles = mesh.triangles
             solid = mesh.solid
             bones = [Bone(parent: -1, matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])]
+            // A model of several parts: each after the one before, with the material it is
+            // drawn with first. The head of the file says how many there are.
+            var at = mesh.end
+            if mesh.solid != nil, meshCount > 1, meshCount <= 256 {
+                for _ in 1..<Int(meshCount) {
+                    guard let piece = Self.piece(in: data, after: at) else { break }
+                    pieces.append(piece.piece)
+                    at = piece.end
+                }
+            }
             (parts, clips) = Self.layout(in: data, from: mesh.end, before: data.count, indexCount: mesh.triangles.count)
             attachments = []
             animations = []
@@ -293,6 +312,19 @@ struct WallpaperEnginePuppet {
         return nil
     }
 
+    /// The next part of a model in three dimensions, which begins a few bytes after `start` with
+    /// the name of its material.
+    private static func piece(in data: Data, after start: Int) -> (piece: Piece, end: Int)? {
+        guard let name = place(of: "materials/", in: data, from: start), name - start <= 64 else { return nil }
+        var reader = BinaryReader(data)
+        guard reader.seek(to: name), let material = reader.textToZero(atMost: 1024),
+              let mesh = mesh(in: data, from: reader.offset, before: data.count, onBones: false), let solid = mesh.solid
+        else {
+            return nil
+        }
+        return (Piece(material: material, solid: solid, triangles: mesh.triangles), mesh.end)
+    }
+
     /// The corners of a model in three dimensions: place, the way it faces, place in the picture.
     private static func solid(in packed: Data, each size: Int) -> [Float]? {
         let count = packed.count / size
@@ -451,6 +483,15 @@ struct WallpaperEnginePuppet {
         // A model in three dimensions, and the material its file names.
         if let solid { table["solid"] = packed(solid) }
         if let material { table["material"] = material }
+        if !pieces.isEmpty {
+            table["pieces"] = pieces.map { piece -> [String: Any] in
+                var triangleData = Data(capacity: piece.triangles.count * 2)
+                for corner in piece.triangles {
+                    withUnsafeBytes(of: corner.littleEndian) { triangleData.append(contentsOf: $0) }
+                }
+                return ["material": piece.material, "solid": packed(piece.solid), "triangles": triangleData.base64EncodedString()]
+            }
+        }
         return table
     }
 }

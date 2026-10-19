@@ -9,6 +9,8 @@ final class ImportCoordinator: ObservableObject {
         let url: URL
         let appliesWhenDone: Bool
         var progress: Double = 0
+        /// Whether its videos are being made into WebM: the long part.
+        var isConverting = false
     }
 
     struct Failure: Identifiable {
@@ -69,14 +71,29 @@ final class ImportCoordinator: ObservableObject {
                     let report: @Sendable (Double) -> Void = { [weak self] progress in
                         Task { @MainActor in self?.setProgress(progress, for: jobID) }
                     }
+                    // A wallpaper of an archive or a folder may have videos to turn into WebM
+                    // after it is added. That is by far the longest part of the work — a minute
+                    // and a half against seconds — so it has the most of the bar.
+                    let mayConvert = Archive.isArchive(job.url)
+                        || (try? job.url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                    let addingShare = 0.25
+                    let adding: @Sendable (Double) -> Void = { report(mayConvert ? $0 * addingShare : $0) }
                     // The settings of a wallpaper made for Wallpaper Engine are named in the
                     // language the app is shown in.
                     let languages = Bundle.main.preferredLocalizations
-                    let added = try await library.importItem(at: job.url, languages: languages, progress: report)
-                    for item in added where item.kind == .web {
-                        // Its videos as Chromium plays them, before anything is drawn of it.
-                        await MediaConversion.shared.convert(library.projectURL(for: item))
+                    let added = try await library.importItem(at: job.url, languages: languages, progress: adding)
+                    let pages = added.filter { $0.kind == .web }
+                    if !pages.isEmpty, let index = jobs.firstIndex(where: { $0.id == jobID }) {
+                        jobs[index].isConverting = true
                     }
+                    for (index, item) in pages.enumerated() {
+                        // Its videos as Chromium plays them, before anything is drawn of it.
+                        let done = Double(index), count = Double(pages.count)
+                        await MediaConversion.shared.convert(library.projectURL(for: item)) { part in
+                            report(addingShare + (done + part) / count * (1 - addingShare))
+                        }
+                    }
+                    report(1)
                     for item in added where item.kind == .web && item.thumbnailFileName == nil {
                         // No preview came with the page; draw one.
                         await manager.refreshPictures(of: item)
@@ -107,7 +124,8 @@ final class ImportCoordinator: ObservableObject {
 
     private func setProgress(_ progress: Double, for jobID: UUID) {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
-        jobs[index].progress = progress
+        // Reports come from several tasks; the bar never goes back.
+        jobs[index].progress = max(jobs[index].progress, min(1, progress))
     }
 
     /// A folder becomes the importable files inside it; a file is kept as is, so that
