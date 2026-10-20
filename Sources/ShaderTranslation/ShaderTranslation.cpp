@@ -138,6 +138,9 @@ extern "C" char *shader_translate(const char *vertexSource, const char *fragment
       msl.set_msl_options(mslOptions);
       auto common = msl.get_common_options();
       common.vertex.flip_vert_y = true;
+      // GL's depth goes from -1 to 1, Metal's from 0 to 1: what lies nearer than the middle
+      // would be cut away.
+      common.vertex.fixup_clipspace = true;
       msl.set_common_options(common);
       msls[i] = msl.compile();
       uniforms[i] = uniformsOf(msl, buffers[i]);

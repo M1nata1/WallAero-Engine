@@ -2,7 +2,7 @@ import AppKit
 import MetalScene
 import WallpaperCore
 
-/// `--native-test <scene folder> <picture.png> [--after <seconds>] [--size <w> <h>]`: plays a
+/// `--native-test <scene folder> <picture.png> [--after <seconds>] [--size <w> <h>] [--pointer-at <s> <x> <y>]`: plays a
 /// scene of Wallpaper Engine's with the app's own Metal renderer (`MetalScenePlayer`) in a window
 /// nothing covers, then takes a picture of a frame and prints what the player and the renderer
 /// have to say — as `--engine-test` does with Chromium, to be compared with it.
@@ -50,6 +50,11 @@ enum NativeSceneTest {
         player.start(settings: settings.settings, changes: settings.changes, fit: settings.fit, position: settings.position)
         print("started in \(String(format: "%.2f", Date().timeIntervalSince(started))) s")
         fflush(stdout)
+        // `--pointer-at <seconds> <x> <y>`: the pointer moves there then, in points from the top left.
+        for (index, argument) in arguments.enumerated() where argument == "--pointer-at" && index + 3 < arguments.count {
+            guard let moment = Double(arguments[index + 1]), let x = Double(arguments[index + 2]), let y = Double(arguments[index + 3]) else { continue }
+            DispatchQueue.main.asyncAfter(deadline: .now() + moment) { player.pointer("move", x: x, y: y) }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
             if let image = player.snapshot() {
                 let bitmap = NSBitmapImageRep(cgImage: image)

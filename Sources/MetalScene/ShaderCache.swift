@@ -5,7 +5,7 @@ import Foundation
 /// a scene asks the same of them every time it starts, and working it out is most of starting.
 enum ShaderCache {
     /// Changed whenever what is kept would come out differently.
-    private static let version = "1"
+    private static let version = "2"
 
     private static let folder: URL? = {
         guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
