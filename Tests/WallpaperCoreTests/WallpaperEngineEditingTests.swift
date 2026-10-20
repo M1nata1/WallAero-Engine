@@ -509,3 +509,28 @@ final class WallpaperEngineChosenPictureDemo: XCTestCase {
         try WallpaperEngineProjectFolder.layOut(scene: scene)
     }
 }
+
+final class NativeSceneChoiceTests: XCTestCase {
+    /// Only a scene of Wallpaper Engine's with nothing of the app's own on it is drawn natively.
+    func testOnlyABareEngineSceneIsPlayedNatively() throws {
+        let folder = try TestMedia.directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var scene = WallpaperScene(background: .init(kind: .engine, source: nil))
+        try SceneProject.create(at: folder, scene: scene)
+        // Not laid out yet: there is nothing to play.
+        XCTAssertFalse(SceneProject.isNativelyPlayable(folder))
+        let engine = folder.appendingPathComponent(WallpaperEngineScene.folderName)
+        try FileManager.default.createDirectory(at: engine, withIntermediateDirectories: true)
+        try "window.wallaeroEngineScene = {};".write(to: engine.appendingPathComponent("files.js"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(SceneProject.isNativelyPlayable(folder))
+
+        var dimmed = scene
+        dimmed.background.brightness = 80
+        XCTAssertFalse(SceneProject.isNativelyPlayable(dimmed, in: folder))
+        scene.layers = [WallpaperScene.Layer(kind: .text, name: "Clock")]
+        XCTAssertFalse(SceneProject.isNativelyPlayable(scene, in: folder))
+
+        try "document.body.style.filter = 'blur(2px)';".write(to: folder.appendingPathComponent("custom.js"), atomically: true, encoding: .utf8)
+        XCTAssertFalse(SceneProject.isNativelyPlayable(folder))
+    }
+}

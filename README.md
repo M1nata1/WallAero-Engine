@@ -5,7 +5,7 @@ Live wallpapers for macOS: videos, GIFs and pictures on your desktop — beneath
 
 ## Installation
 
-Build the app on your Mac. You need Xcode or its Command Line Tools (`xcode-select --install`) and macOS 13 Ventura or later. The first build downloads Chromium, which draws web wallpapers and scenes (about 130 MB for each processor), and builds the video encoders; later builds reuse them.
+Build the app on your Mac. You need Xcode or its Command Line Tools (`xcode-select --install`) and macOS 13 Ventura or later. The first build downloads Chromium, which draws web wallpapers, the app's own scenes and the editor's preview (about 130 MB for each processor), and builds the video encoders; later builds reuse them.
 
 ```bash
 git clone https://github.com/M1nata1/WallAero-Engine.git
@@ -46,7 +46,7 @@ xattr -dr com.apple.quarantine "/Applications/WallAero Engine.app"
 - **Multiple displays:** one wallpaper on every screen or a different one on each; you can also turn it off on a single display.
 - **Energy saving:** playback pauses when windows cover the desktop — one window that fills the screen is enough — or a full-screen app does, while displays sleep and while the screen is locked. Optionally also on battery power and in Low Power Mode. Scenes and web wallpapers are held to 30 frames a second, or to the rate you choose. Video never keeps the display awake.
 - **Scenes and an editor:** make scenes the way Wallpaper Engine makes them — pictures, texts, effects, particles, bones and animation — in an editor like its own, and export them for Wallpaper Engine. See [Scenes](#scenes).
-- **Wallpaper Engine wallpapers:** add a wallpaper made for Wallpaper Engine as the archive it was downloaded in (`.zip`, `.rar` or `.7z`) — a web page, a scene or a video. A scene plays with its effects, particles, texts, scripts and sound. The genre, kind and age rating the wallpaper names become its tags. The wallpaper's own settings show in its settings here, and pages and scenes open in the editor like any scene, where a scene's own objects and effects can be changed too. See [Web wallpapers](#web-wallpapers).
+- **Wallpaper Engine wallpapers:** add a wallpaper made for Wallpaper Engine as the archive it was downloaded in (`.zip`, `.rar` or `.7z`) — a web page, a scene or a video. A scene plays with its effects, particles, texts, scripts and sound, drawn by the app itself with Metal, without Chromium: two to three times less power. The genre, kind and age rating the wallpaper names become its tags. The wallpaper's own settings show in its settings here, and pages and scenes open in the editor like any scene, where a scene's own objects and effects can be changed too. See [Web wallpapers](#web-wallpapers).
 - **Web wallpapers:** a folder with an `index.html` is shown as a wallpaper.
 - **Reacting to sound:** an equalizer in a scene moves to whatever your Mac is playing: a song in any app, a video in the browser. See [Reacting to sound](#reacting-to-sound).
 - **Your own music:** every wallpaper can have music of its own, played in place of its sound. Pick a folder in the wallpaper's settings: its subfolders and `.m3u` files become playlists. With no folder chosen, the sound comes from the video. See [Music](#music).
