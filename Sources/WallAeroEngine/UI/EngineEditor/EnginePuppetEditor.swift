@@ -306,6 +306,14 @@ struct EnginePuppetEditor: View {
                         get: { currentKey(of: bone).angle * 180 / .pi },
                         set: { var key = currentKey(of: bone); key.angle = $0 * .pi / 180; setKey(key, bone: bone) }
                     ), in: -180...180, suffix: "°")
+                    NumberRow("Tilt X", value: Binding(
+                        get: { currentKey(of: bone).tiltX * 180 / .pi },
+                        set: { var key = currentKey(of: bone); key.tiltX = $0 * .pi / 180; setKey(key, bone: bone) }
+                    ), in: -180...180, suffix: "°")
+                    NumberRow("Tilt Y", value: Binding(
+                        get: { currentKey(of: bone).tiltY * 180 / .pi },
+                        set: { var key = currentKey(of: bone); key.tiltY = $0 * .pi / 180; setKey(key, bone: bone) }
+                    ), in: -180...180, suffix: "°")
                     NumberRow("Move X", value: Binding(
                         get: { currentKey(of: bone).dx },
                         set: { var key = currentKey(of: bone); key.dx = $0; setKey(key, bone: bone) }

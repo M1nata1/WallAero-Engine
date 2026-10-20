@@ -264,6 +264,31 @@ final class WallpaperEnginePuppetRigTests: XCTestCase {
         let moved = zip(at30, rest).contains { abs($0.x - $1.x) + abs($0.y - $1.y) > 1 }
         XCTAssertTrue(moved)
     }
+
+    func testABoneTiltedAboutXIsSqueezedAndWrittenWhereWallpaperEngineKeepsIt() throws {
+        var rig = WallpaperEnginePuppetRig(width: 200, height: 100)
+        rig.makeMesh(from: picture(width: 200, height: 100), spacing: 25)
+        let root = rig.addBone(at: .init(x: -50, y: 0), parent: nil)
+        var animation = WallpaperEnginePuppetRig.Animation(id: 1, name: "Blink")
+        animation.length = 10
+        rig.animations = [animation]
+        rig.setKey(.init(frame: 0), bone: root, animation: 0)
+        rig.setKey(.init(frame: 10, tiltX: .pi / 2), bone: root, animation: 0)
+
+        // A quarter turn about x: every corner seen on the bone's line.
+        let posed = rig.posedPoints(animation: 0, frame: 10)
+        XCTAssertTrue(posed.allSatisfy { abs($0.y) < 1e-6 })
+        XCTAssertFalse(rig.points.allSatisfy { abs($0.y) < 1e-6 })
+
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: rig.mdl(material: "materials/eye.json")))
+        let last = 10 * 9
+        XCTAssertEqual(Double(read.animations[0].frames[last + 3]), .pi / 2, accuracy: 1e-6)
+        XCTAssertEqual(Double(read.animations[0].frames[last + 4]), 0, accuracy: 1e-6)
+
+        // Keys saved before there were tilts have none.
+        let old = try JSONDecoder().decode(WallpaperEnginePuppetRig.Key.self, from: Data(#"{"frame":3,"angle":1,"dx":2,"dy":4}"#.utf8))
+        XCTAssertEqual(old, .init(frame: 3, angle: 1, dx: 2, dy: 4))
+    }
 }
 
 /// Not a test: with WALLAERO_PUPPET_DEMO set to a folder, lays out there a scene with a picture

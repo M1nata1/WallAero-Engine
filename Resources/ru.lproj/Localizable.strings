@@ -771,3 +771,7 @@
 "Zoom Level" = "Приближение";
 "Field of View" = "Угол обзора";
 "X and Y move the view from the middle of the scene. Of the cameras that show, the scene is seen through the topmost in the list of layers; hide a camera to use another." = "X и Y сдвигают вид от центра сцены. Если видимых камер несколько, сцена показывается через верхнюю в списке слоёв; чтобы переключиться на другую, скройте её.";
+
+/* Engine editor: puppet tilts */
+"Tilt X" = "Наклон по X";
+"Tilt Y" = "Наклон по Y";

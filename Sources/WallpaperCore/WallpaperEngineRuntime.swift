@@ -4008,9 +4008,10 @@ public enum WallpaperEngineRuntime {
           bones.forEach(function (bone) {
             var rest = bone.rest;
             bone.still = [rest[4], rest[5], Math.atan2(rest[1], rest[0]), Math.sqrt(rest[0] * rest[0] + rest[1] * rest[1]),
-                          Math.sqrt(rest[2] * rest[2] + rest[3] * rest[3])];
+                          Math.sqrt(rest[2] * rest[2] + rest[3] * rest[3]), 0, 0];
           });
-          // Where an animation has a bone on the frame its layer is on: place, turn, scale.
+          // Where an animation has a bone on the frame its layer is on: place, turn in the
+          // picture's plane, scale, and turn about the picture's x and y axes.
           function sample(layer, index) {
             var at = layer.frame;
             if (layer.mode === 'mirror') {
@@ -4026,7 +4027,7 @@ public enum WallpaperEngineRuntime {
             var share = at - before;
             var one = (index * layer.frameCount + before) * 9, two = (index * layer.frameCount + after) * 9;
             function value(part) { return layer.frames[one + part] + (layer.frames[two + part] - layer.frames[one + part]) * share; }
-            return [value(0), value(1), value(5), value(6), value(7)];
+            return [value(0), value(1), value(5), value(6), value(7), value(3), value(4)];
           }
 
           var places = new Float32Array(count * 2);
@@ -4349,13 +4350,15 @@ public enum WallpaperEngineRuntime {
             bones.forEach(function (bone, index) {
               var pose = base ? sample(base, index) : bone.still.slice();
               if (base && base.blend < 1) {
-                for (var part = 0; part < 5; part++) pose[part] = bone.still[part] + (pose[part] - bone.still[part]) * base.blend;
+                for (var part = 0; part < 7; part++) pose[part] = bone.still[part] + (pose[part] - bone.still[part]) * base.blend;
               }
               adding.forEach(function (layer) {
                 var more = sample(layer, index);
                 pose[0] += (more[0] - bone.still[0]) * layer.blend;
                 pose[1] += (more[1] - bone.still[1]) * layer.blend;
                 pose[2] += (more[2] - bone.still[2]) * layer.blend;
+                pose[5] += (more[5] - bone.still[5]) * layer.blend;
+                pose[6] += (more[6] - bone.still[6]) * layer.blend;
                 if (bone.still[3] > 1e-6) pose[3] *= 1 + (more[3] / bone.still[3] - 1) * layer.blend;
                 if (bone.still[4] > 1e-6) pose[4] *= 1 + (more[4] / bone.still[4] - 1) * layer.blend;
               });
@@ -4371,8 +4374,13 @@ public enum WallpaperEngineRuntime {
                   pose[4] = override.scale[1];
                 }
               }
+              // Turned about x, then y, then the picture's own axis, and seen straight on: a turn
+              // about x squeezes the bone's part up and down, one about y from side to side, and
+              // past a quarter turn it is seen from behind.
               var cos = Math.cos(pose[2]), sin = Math.sin(pose[2]);
-              bone.now = [cos * pose[3], sin * pose[3], -sin * pose[4], cos * pose[4], pose[0], pose[1]];
+              var cx = Math.cos(pose[5]), sx = Math.sin(pose[5]), cy = Math.cos(pose[6]), sy = Math.sin(pose[6]);
+              bone.now = [cos * cy * pose[3], sin * cy * pose[3],
+                          (cos * sy * sx - sin * cx) * pose[4], (sin * sy * sx + cos * cx) * pose[4], pose[0], pose[1]];
               bone.done = false;
             });
             function whole(index, depth) {
