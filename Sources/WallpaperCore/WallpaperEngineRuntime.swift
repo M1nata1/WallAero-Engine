@@ -4478,23 +4478,41 @@ public enum WallpaperEngineRuntime {
           'uniform vec3 u_Eye;',
           'uniform float u_Metallic;',
           'uniform float u_Roughness;',
+          'uniform int u_Lit;',             // 0: the material takes no light, and shows its own colors
           'uniform int u_LightCount;',
           'uniform vec4 u_LightPlace[' + MAX_LIGHTS + '];', // where (w 1), or which way it shines (w 0)
           'uniform vec4 u_LightColor[' + MAX_LIGHTS + '];', // color times strength, and how far it reaches
           'uniform vec4 u_LightAim[' + MAX_LIGHTS + '];',   // which way a spot points, and how fast it fades
           'out vec4 color;',
+          'const float PI = 3.14159265;',
+          // Light from one direction, as Wallpaper Engine lights a model: a diffuse part and a
+          // specular one by the GGX distribution, Smith geometry and Schlick's Fresnel.
+          'vec3 shade(vec3 n, vec3 v, vec3 l, vec3 albedo, vec3 radiance, vec3 f0, float rough, float metal) {',
+          '  vec3 h = normalize(v + l);',
+          '  float a = rough * rough;',
+          '  float a2 = a * a;',
+          '  float nh = max(dot(n, h), 0.0);',
+          '  float spread = nh * nh * (a2 - 1.0) + 1.0;',
+          '  float d = a2 / (PI * spread * spread);',
+          '  float k = (rough + 1.0) * (rough + 1.0) / 8.0;',
+          '  float nv = max(dot(n, v), 0.001);',
+          '  float nl = max(dot(n, l), 0.0);',
+          '  float g = nv / (nv * (1.0 - k) + k) * max(nl, 0.001) / (max(nl, 0.001) * (1.0 - k) + k);',
+          '  vec3 f = f0 + (1.0 - f0) * pow(max(1.0 - max(dot(h, v), 0.0), 0.001), 5.0);',
+          '  vec3 specular = d * g * f / max(4.0 * nv * nl, 0.001);',
+          '  return ((1.0 - metal) * (1.0 - f) * albedo / PI + specular) * radiance * nl;',
+          '}',
           'void main() {',
           '  vec4 base = texture(u_Texture, v_Uv);',
           '  if (u_Channels == 1) base = vec4(1.0, 1.0, 1.0, base.r);',
           '  if (u_Channels == 2) base = vec4(base.rrr, base.g);',
           '  base *= u_Tint;',
+          '  if (u_Lit == 0) { color = base; return; }',
           '  vec3 n = normalize(v_Normal);',
           '  if (!gl_FrontFacing) n = -n;',
           '  vec3 toEye = normalize(u_Eye - v_World);',
-          '  vec3 diffuse = base.rgb * (1.0 - u_Metallic);',
-          '  vec3 shineColor = mix(vec3(0.04), base.rgb, u_Metallic);',
+          '  vec3 f0 = mix(vec3(0.04), base.rgb, u_Metallic);',
           '  float rough = clamp(u_Roughness, 0.03, 1.0);',
-          '  float sharp = max(1.0, 2.0 / (rough * rough * rough * rough) - 2.0);',
           '  vec3 lit = u_Ambient * base.rgb + u_Sky * base.rgb * (0.5 + 0.5 * n.y);',
           '  for (int i = 0; i < ' + MAX_LIGHTS + '; i++) {',
           '    if (i >= u_LightCount) break;',
@@ -4510,10 +4528,7 @@ public enum WallpaperEngineRuntime {
           '    } else {',
           '      toLight = normalize(-u_LightPlace[i].xyz);',
           '    }',
-          '    float facing = max(dot(n, toLight), 0.0);',
-          '    vec3 halfway = normalize(toLight + toEye);',
-          '    float shine = pow(max(dot(n, halfway), 0.0), sharp) * (sharp + 8.0) / 25.0;',
-          '    lit += u_LightColor[i].rgb * left * facing * (diffuse + shineColor * shine);',
+          '    lit += shade(n, toEye, toLight, base.rgb, u_LightColor[i].rgb * left * PI, f0, rough, u_Metallic);',
           '  }',
           '  color = vec4(lit, base.a);',
           '}'
@@ -4612,7 +4627,9 @@ public enum WallpaperEngineRuntime {
               tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
               writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
               blending: key(String(pass.blending || 'normal')),
-              metallic: number(plain(constants.metallic), 0), roughness: number(plain(constants.roughness), 0.5)
+              metallic: number(plain(constants.metallic), 0), roughness: number(plain(constants.roughness), 0.5),
+              // Lit unless the material says not: a model's material is, in Wallpaper Engine.
+              lit: number((pass.combos || {}).LIGHTING, 1) !== 0
             };
           }).filter(Boolean);
           if (!parts.length) return null;
@@ -4664,6 +4681,7 @@ public enum WallpaperEngineRuntime {
             gl.uniform1i(at('u_Texture'), 0);
             parts.forEach(function (part) {
               gl.uniform1f(at('u_Metallic'), part.metallic);
+              gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
               gl.uniform1f(at('u_Roughness'), part.roughness);
               var layer = part.picture && part.picture.ready !== false ? part.picture.layers[0] : null;
               if (!layer) white = white || flat(255, 255, 255, 255);
