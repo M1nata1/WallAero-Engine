@@ -227,7 +227,7 @@ public struct WallpaperEngineDocument: Equatable, Sendable {
 extension WallpaperEngineDocument {
     /// What an object of a scene is.
     public enum ObjectKind: String, Sendable {
-        case image, text, particles, sound, model, light, solid, composition, fullscreen, group
+        case image, text, particles, sound, model, light, camera, solid, composition, fullscreen, group
     }
 
     public static func kind(of object: JSONValue) -> ObjectKind {
@@ -243,6 +243,7 @@ extension WallpaperEngineDocument {
         if let sound = object["sound"], !sound.isNull { return .sound }
         if let model = object["model"], !model.isNull { return .model }
         if let light = object["light"], !light.isNull { return .light }
+        if let camera = object["camera"], !camera.isNull { return .camera }
         return .group
     }
 }

@@ -2874,7 +2874,11 @@ public enum WallpaperEngineRuntime {
         };
 
         var inputObject = {
-          get cursorWorldPosition() { return new Vec3(pointer[0] * sceneWidth, (1 - pointer[1]) * sceneHeight, 0); },
+          // Where the pointer is in the scene, as the camera sees it.
+          get cursorWorldPosition() {
+            var seen = view(), cx = sceneWidth / 2, cy = sceneHeight / 2;
+            return new Vec3(cx + seen.x + (pointer[0] * sceneWidth - cx) / seen.zoom, cy + seen.y + ((1 - pointer[1]) * sceneHeight - cy) / seen.zoom, 0);
+          },
           get cursorScreenPosition() { return new Vec2(pointer[0] * canvas.width, pointer[1] * canvas.height); },
           get cursorLeftDown() { return pressed; }
         };
@@ -3369,6 +3373,11 @@ public enum WallpaperEngineRuntime {
             if (typeof said.zoom === 'number' && said.zoom > 0) camera.zoom = said.zoom;
             dirty = true;
           },
+          get camerafade() { return flag(general.camerafade, true); },
+          set camerafade(value) { general.camerafade = !!value; },
+          // How wide a scene in three dimensions is seen.
+          get fov() { return number(general.perspectiveoverridefov, number(general.fov, 50)); },
+          set fov(value) { if (Number(value) > 0) { general.perspectiveoverridefov = Number(value); dirty = true; } },
           get bloom() { return flag(general.bloom, false); },
           set bloom(value) { general.bloom = !!value; dirty = true; },
           get bloomstrength() { return number(general.bloomstrength, 2); },
@@ -4537,7 +4546,8 @@ public enum WallpaperEngineRuntime {
             return [2 / w, 0, 0, 0, 0, -2 / h, 0, 0, 0, 0, -1 / far, 0,
                     -1 - 2 * surface.left / w, 1 + 2 * surface.bottom / h, 0, 1];
           }
-          var fov = number(general.perspectiveoverridefov, number(general.fov, 50)) * Math.PI / 180;
+          // Through a camera of the scene, as wide as it sees.
+          var fov = (view().fov || number(general.perspectiveoverridefov, number(general.fov, 50))) * Math.PI / 180;
           var away = (sceneHeight / 2) / Math.tan(fov / 2);
           var near = Math.max(0.01, number(general.nearz, 0.01)), f = 1 / Math.tan(fov / 2), aspect = w / h;
           var lens = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
@@ -4728,6 +4738,11 @@ public enum WallpaperEngineRuntime {
           thing.lives.color = live(object.color, 3, 1, thing);
           thing.lives.visible = live(object.visible, 0, true, thing, 'flag');
           thing.state.parallax = numbers(object.parallaxDepth, 2, 1);
+          // A camera: where it looks from, against the middle of the scene, and how near.
+          if (object.camera !== undefined && object.camera !== null) {
+            thing.isCamera = true;
+            thing.lives.zoom = live(object.zoom === undefined ? 1 : object.zoom, 1, 1, thing);
+          }
           // Whatever else of it has a script behind it: the script is run for what it does.
           Object.keys(object).forEach(function (name) {
             var value = object[name];
@@ -4744,6 +4759,37 @@ public enum WallpaperEngineRuntime {
           if (object.id !== undefined) byId[String(object.id)] = thing;
           things.push(thing);
           return thing;
+        }
+
+        // Where the scene is seen from this frame, against its middle, and how near: the camera
+        // of the scene that shows — of several, the last in the scene's list, as in Wallpaper
+        // Engine — moved and zoomed further by a script and by the scene's own zoom.
+        var viewOnce = { frame: -1 };
+        function view() {
+          if (viewOnce.frame === frames) return viewOnce;
+          // While the scene is being made, before scripts can move the camera, there is no frame yet.
+          var moved = camera || { x: 0, y: 0, zoom: 1 };
+          var x = moved.x, y = moved.y, zoom = moved.zoom * Math.max(0.01, number(general.zoom, 1)), fov = 0;
+          for (var index = things.length - 1; index >= 0; index--) {
+            var shot = things[index];
+            if (!shot.isCamera || !showsAll(shot)) continue;
+            var at = shot.state.origin || [0, 0, 0];
+            x += at[0];
+            y += at[1];
+            zoom *= Math.max(0.01, number((shot.state.zoom || [1])[0], 1));
+            fov = number(plain(shot.said.fov), 0);
+            break;
+          }
+          viewOnce = { frame: frames, x: x, y: y, zoom: zoom, fov: fov };
+          return viewOnce;
+        }
+        // Whether an object and all it hangs on are shown, without working out where they are.
+        function showsAll(thing) {
+          for (var depth = 0; thing && depth < 64; depth++) {
+            if (thing.state.visible === false) return false;
+            thing = thing.parent !== undefined ? byId[String(thing.parent)] : null;
+          }
+          return true;
         }
 
         // One more value of an object that may change.
@@ -4801,12 +4847,13 @@ public enum WallpaperEngineRuntime {
               matrix[12] += moved[0] + (shake ? shake.x : 0);
               matrix[13] += moved[1] + (shake ? shake.y : 0);
             }
-            if (camera && (camera.x || camera.y || camera.zoom !== 1)) {
-              // Where a script has put the camera: the scene seen from there, nearer or further.
+            var seen = view();
+            if (seen.x || seen.y || seen.zoom !== 1) {
+              // Where the camera is: the scene seen from there, nearer or further.
               var cx = sceneWidth / 2, cy = sceneHeight / 2;
-              [0, 1, 4, 5].forEach(function (index) { matrix[index] *= camera.zoom; });
-              matrix[12] = cx + (matrix[12] - cx - camera.x) * camera.zoom;
-              matrix[13] = cy + (matrix[13] - cy - camera.y) * camera.zoom;
+              [0, 1, 4, 5].forEach(function (index) { matrix[index] *= seen.zoom; });
+              matrix[12] = cx + (matrix[12] - cx - seen.x) * seen.zoom;
+              matrix[13] = cy + (matrix[13] - cy - seen.y) * seen.zoom;
             }
           }
           return { matrix: matrix, alpha: alpha, above: above, visible: above && state.visible !== false };
@@ -7588,10 +7635,8 @@ public enum WallpaperEngineRuntime {
             return thing;
           }
           if (!make) {
-            // Something with only a place holds the objects that hang on it together.
-            if (!hidden && object.camera) {
-              note('“' + thing.name + '” is a camera, which is not played');
-            }
+            // Something with only a place holds the objects that hang on it together; a camera
+            // says where the scene is seen from.
             return thing;
           }
           function finish() {

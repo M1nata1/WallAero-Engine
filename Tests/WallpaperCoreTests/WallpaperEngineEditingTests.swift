@@ -158,6 +158,16 @@ final class WallpaperEngineEditingTests: XCTestCase {
         document.countLights()
         XCTAssertEqual(document[general: "lightconfig"], .object(["point": .number(1), "spot": .number(1)]))
     }
+
+    func testACameraIsMadeWithItsPathsFile() throws {
+        var document = WallpaperEngineDocument.empty(title: "", width: 1920, height: 1080)
+        let id = document.addCamera(name: "Camera")
+        let camera = try XCTUnwrap(document.object(id))
+        XCTAssertEqual(WallpaperEngineDocument.kind(of: camera), .camera)
+        XCTAssertEqual(camera["origin"]?.vector, [0, 0, 500])
+        let paths = try XCTUnwrap(camera["path"]?.stringValue)
+        XCTAssertEqual(document.file(paths), .object(["paths": .array([])]))
+    }
 }
 
 /// Not a test: with WALLAERO_EFFECT_DEMO set to a folder, lays out there a scene with each of

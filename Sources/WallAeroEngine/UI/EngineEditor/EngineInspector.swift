@@ -33,14 +33,15 @@ private struct EngineObjectProperties: View {
             LabeledContent("Kind") { Text(EngineEditorModel.kindTitle(kind)) }
             Toggle("Visible", isOn: model.flag(id, "visible", default: true))
                 .disabled(model.isScripted(id, "visible"))
-            if kind != .sound && kind != .light {
+            if ![.sound, .light, .camera].contains(kind) {
                 Toggle("Show on Lock Screen", isOn: model.showsOnLockScreen(id))
             }
         }
         if kind != .sound {
             Section("Position") {
                 let size = model.document.size
-                let hangs = model.document.parent(of: id) != nil
+                // What hangs on another, and a camera, are placed from a middle.
+                let hangs = model.document.parent(of: id) != nil || kind == .camera
                 NumberRow("X", value: model.part(id, "origin", 0, default: [0, 0, 0]),
                           in: hangs ? -size.width...size.width : -size.width / 2...size.width * 1.5)
                     .disabled(model.isScripted(id, "origin"))
@@ -235,6 +236,16 @@ private struct EngineObjectProperties: View {
                 NumberRow("Reach", value: model.number(id, "radius", default: 500), in: 0...max(model.document.size.width * 2, 1000))
                 NumberRow("Falloff", value: model.number(id, "exponent", default: 1), in: 0.01...10, step: 0.01)
                 NumberRow("Height", value: model.part(id, "origin", 2, default: [0, 0, 200]), in: -500...2000)
+            }
+        case .camera:
+            Section {
+                NumberRow("Zoom Level", value: model.number(id, "zoom", default: 1), in: 0.1...10, step: 0.01)
+                    .disabled(model.isScripted(id, "zoom"))
+                NumberRow("Field of View", value: model.number(id, "fov", default: 50), in: 10...120, suffix: "°")
+            } header: {
+                Text("Camera")
+            } footer: {
+                Text("X and Y move the view from the middle of the scene. Of the cameras that show, the scene is seen through the topmost in the list of layers; hide a camera to use another.")
             }
         case .model, .group, .fullscreen:
             EmptyView()
