@@ -127,10 +127,59 @@ private struct EngineObjectProperties: View {
                     Text("Center").tag("center")
                     Text("Right").tag("right")
                 }
-                NumberRow("Padding", value: model.number(id, "padding", default: 32), in: 0...200)
+                Picker("Vertical Alignment", selection: model.text(id, "verticalalign", default: "center")) {
+                    Text("Top").tag("top")
+                    Text("Center").tag("center")
+                    Text("Bottom").tag("bottom")
+                }
+                NumberRow("Padding", value: model.part(id, "padding", 0, default: [32, 32]), in: 0...200)
+                NumberRow("Letter Spacing", value: model.part(id, "spacing", 0, default: [0, 0]), in: -50...100, step: 0.1)
+                NumberRow("Line Spacing", value: model.part(id, "spacing", 1, default: [0, 0]), in: -100...200, step: 0.1)
                 Toggle("Background", isOn: model.flag(id, "opaquebackground", default: false))
                 if model.value(id, "opaquebackground")?.boolValue == true {
                     ColorRow("Background Color", hex: model.color(id, "backgroundcolor", default: [0, 0, 0]))
+                }
+            }
+            Section("Text Box") {
+                Toggle("Limit Width", isOn: model.flag(id, "limitwidth", default: false))
+                if model.value(id, "limitwidth")?.boolValue == true {
+                    NumberRow("Width", value: model.number(id, "maxwidth", default: 500), in: 10...4000)
+                }
+                Toggle("Limit Lines", isOn: model.flag(id, "limitrows", default: false))
+                if model.value(id, "limitrows")?.boolValue == true {
+                    NumberRow("Lines", value: model.number(id, "maxrows", default: 1), in: 1...50)
+                }
+                Toggle("Ellipsis Where Cut", isOn: model.flag(id, "limituseellipsis", default: false))
+                Picker("Keep to Screen Edge", selection: model.text(id, "anchor", default: "none")) {
+                    Text("No").tag("none")
+                    Text("Center").tag("center")
+                    Text("Left").tag("left")
+                    Text("Right").tag("right")
+                    Text("Top").tag("top")
+                    Text("Bottom").tag("bottom")
+                    Text("Top Left").tag("topleft")
+                    Text("Top Right").tag("topright")
+                    Text("Bottom Left").tag("bottomleft")
+                    Text("Bottom Right").tag("bottomright")
+                }
+            }
+            Section("Outline and Shadow") {
+                Toggle("Outline", isOn: model.flag(id, "outline", default: false))
+                if model.value(id, "outline")?.boolValue == true {
+                    ColorRow("Outline Color", hex: model.color(id, "outlinecolor", default: [0, 0, 0]))
+                    NumberRow("Outline Thickness", value: model.number(id, "outlinethickness", default: 1), in: 0...30, step: 0.1)
+                }
+                Toggle("Shadow", isOn: model.flag(id, "dropshadow", default: false))
+                if model.value(id, "dropshadow")?.boolValue == true {
+                    ColorRow("Shadow Color", hex: model.color(id, "dropshadowcolor", default: [0, 0, 0]))
+                    NumberRow("Shadow X", value: model.part(id, "dropshadowoffset", 0, default: [4, 4]), in: -100...100)
+                    NumberRow("Shadow Y", value: model.part(id, "dropshadowoffset", 1, default: [4, 4]), in: -100...100)
+                    NumberRow("Shadow Softness", value: model.number(id, "dropshadowsize", default: 4), in: 0...50, step: 0.1)
+                    NumberRow("Shadow Opacity", value: model.number(id, "dropshadowopacity", default: 1), in: 0...3, step: 0.01)
+                }
+                Toggle("Blur", isOn: model.flag(id, "blur", default: false))
+                if model.value(id, "blur")?.boolValue == true {
+                    NumberRow("Blur Amount", value: model.number(id, "blursize", default: 2), in: 0...50, step: 0.1)
                 }
             }
         case .particles:
@@ -377,6 +426,14 @@ private struct EngineSceneProperties: View {
             if model.document[general: "bloom"]?.plain.boolValue == true {
                 NumberRow("Strength", value: model.general("bloomstrength", default: 2), in: 0...5, step: 0.01)
                 NumberRow("Threshold", value: model.general("bloomthreshold", default: 0.65), in: 0...1, step: 0.01)
+            }
+        }
+        Section("Physics") {
+            NumberRow("Gravity", value: model.general("gravitystrength", default: 1), in: 0...5, step: 0.01)
+            Toggle("Wind", isOn: model.generalFlag("windenabled", default: false))
+            if model.document[general: "windenabled"]?.plain.boolValue == true {
+                NumberRow("Wind Strength", value: model.general("windstrength", default: 1), in: 0...5, step: 0.01)
+                NumberRow("Wind Direction", value: model.windDirection(), in: -180...180, suffix: "°")
             }
         }
         Section("Scene Light") {

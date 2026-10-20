@@ -213,6 +213,24 @@ extension EngineEditorModel {
         )
     }
 
+    /// Where the scene's wind blows, as an angle in degrees from blowing to the right, up
+    /// counting positive: the scene keeps it as a direction, "0.707 0.707 0".
+    func windDirection() -> Binding<Double> {
+        Binding(
+            get: { [weak self] in
+                let direction = self?.document[general: "winddirection"]?.vector ?? [0.707, 0.707, 0]
+                let degrees = atan2(direction.count > 1 ? direction[1] : 0, direction.first ?? 1) * 180 / .pi
+                return degrees.rounded()
+            },
+            set: { [weak self] degrees in
+                guard let self else { return }
+                let radians = degrees * .pi / 180
+                let direction = [(cos(radians) * 1000).rounded() / 1000, (sin(radians) * 1000).rounded() / 1000, 0]
+                self.document[general: "winddirection"] = (self.document[general: "winddirection"] ?? .null).replacingPlain(with: .vector(direction))
+            }
+        )
+    }
+
     func generalColor(_ key: String, default fallback: [Double]) -> Binding<String> {
         Binding(
             get: { [weak self] in Self.hex(self?.document[general: key]?.vector ?? fallback) },

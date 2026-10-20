@@ -718,3 +718,33 @@
 "Preparing the video of “%@”… %d%%" = "Готовится видео «%@»… %d %%";
 "Adding “%@”… %d%%" = "Добавляется «%@»… %d %%";
 "(%d more in queue)" = "(в очереди ещё %d)";
+
+/* Engine editor: text and scene physics */
+"Vertical Alignment" = "По вертикали";
+"Top" = "Сверху";
+"Bottom" = "Снизу";
+"Line Spacing" = "Межстрочный интервал";
+"Text Box" = "Рамка текста";
+"Limit Width" = "Ограничить ширину";
+"Limit Lines" = "Ограничить число строк";
+"Lines" = "Строк";
+"Ellipsis Where Cut" = "Многоточие при обрезке";
+"Keep to Screen Edge" = "Прижать к краю экрана";
+"Top Left" = "Слева сверху";
+"Top Right" = "Справа сверху";
+"Bottom Left" = "Слева снизу";
+"Bottom Right" = "Справа снизу";
+"Outline and Shadow" = "Обводка и тень";
+"Outline" = "Обводка";
+"Outline Color" = "Цвет обводки";
+"Outline Thickness" = "Толщина обводки";
+"Shadow Color" = "Цвет тени";
+"Shadow X" = "Сдвиг тени по X";
+"Shadow Y" = "Сдвиг тени по Y";
+"Shadow Softness" = "Мягкость тени";
+"Shadow Opacity" = "Плотность тени";
+"Blur Amount" = "Сила размытия";
+"Physics" = "Физика";
+"Wind" = "Ветер";
+"Wind Strength" = "Сила ветра";
+"Wind Direction" = "Направление ветра";
