@@ -442,6 +442,12 @@ final class EngineEditorModel: ObservableObject {
         }
     }
 
+    func addCamera() {
+        var made = 0
+        change { made = $0.addCamera(name: Self.kindTitle(.camera)) }
+        selection = made
+    }
+
     func addGroup() {
         var made = 0
         change { made = $0.addGroup(name: Self.kindTitle(.group), under: newParent) }
@@ -558,6 +564,7 @@ final class EngineEditorModel: ObservableObject {
         case .sound: return NSLocalizedString("Sound", comment: "Kind of an object of a Wallpaper Engine scene")
         case .model: return NSLocalizedString("3D Model", comment: "Kind of an object of a Wallpaper Engine scene")
         case .light: return NSLocalizedString("Light Source", comment: "Kind of an object of a Wallpaper Engine scene")
+        case .camera: return NSLocalizedString("Camera", comment: "Kind of an object of a Wallpaper Engine scene")
         case .solid: return NSLocalizedString("Solid Color", comment: "Kind of an object of a Wallpaper Engine scene")
         case .composition: return NSLocalizedString("Composition Layer", comment: "Kind of an object of a Wallpaper Engine scene")
         case .fullscreen: return NSLocalizedString("Fullscreen Layer", comment: "Kind of an object of a Wallpaper Engine scene")
@@ -573,6 +580,7 @@ final class EngineEditorModel: ObservableObject {
         case .sound: return "speaker.wave.2"
         case .model: return "cube"
         case .light: return "lightbulb"
+        case .camera: return "video"
         case .solid: return "square.fill"
         case .composition: return "square.stack.3d.up"
         case .fullscreen: return "rectangle.inset.filled"

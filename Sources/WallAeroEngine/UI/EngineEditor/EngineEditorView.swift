@@ -108,6 +108,7 @@ struct EngineEditorView: View {
             } label: {
                 Label("Light Source", systemImage: "lightbulb")
             }
+            Button { model.addCamera() } label: { Label("Camera", systemImage: "video") }
             Divider()
             Button { model.addComposition() } label: { Label("Composition Layer", systemImage: "square.stack.3d.up") }
             Button { model.addGroup() } label: { Label("Group", systemImage: "square.dashed") }

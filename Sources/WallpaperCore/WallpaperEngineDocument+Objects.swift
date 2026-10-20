@@ -185,6 +185,25 @@ extension WallpaperEngineDocument {
         self[general: "lightconfig"] = counts.isEmpty ? nil : .object(counts)
     }
 
+    /// A camera: where the scene is seen from, against its middle, and how near. Of the
+    /// cameras that show, Wallpaper Engine uses the last in the list. Its paths are kept in a
+    /// file of its own, as Wallpaper Engine keeps them.
+    @discardableResult
+    public mutating func addCamera(name: String) -> Int {
+        let id = newID()
+        var object = base(id: id, name: name)
+        object["camera"] = .string("default")
+        object["origin"] = .vector([0, 0, 500])
+        object["fov"] = .number(50)
+        object["zoom"] = .number(1)
+        object["parallaxDepth"] = .vector([0, 0])
+        let paths = "scripts/camera_paths_\(id).json"
+        setFile(paths, .object(["paths": .array([])]))
+        object["path"] = .string(paths)
+        object["queuemode"] = .string("random")
+        return append(object, under: nil)
+    }
+
     /// A system of particles, described by `file` in the project.
     @discardableResult
     public mutating func addParticles(file: String, name: String, under parent: Int? = nil) -> Int {
