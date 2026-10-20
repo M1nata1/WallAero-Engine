@@ -223,13 +223,46 @@ extension WallpaperEngineProjectFolder {
 
     /// Lays a scene's project out for the player and brings the scene's settings up to the
     /// project's. A setting the scene had already keeps the value the user gave it.
+    // MARK: - Pictures chosen for settings
+
+    /// The folder of a scene that keeps the pictures chosen for the settings that take one,
+    /// each named after its setting, so that every laying out of the scene shows them.
+    public static let chosenFolderName = "chosen"
+
+    /// The pictures chosen for a scene's settings, by the settings' names.
+    public static func chosenPictures(scene folder: URL) -> [String: URL] {
+        let chosen = folder.appendingPathComponent(chosenFolderName, isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: chosen.path)) ?? []
+        var result: [String: URL] = [:]
+        for name in names where !name.hasPrefix(".") {
+            result[(name as NSString).deletingPathExtension] = chosen.appendingPathComponent(name)
+        }
+        return result
+    }
+
+    /// Keeps `picture` as the one chosen for `setting` — or none, given none — in place of
+    /// what was chosen before. The scene is to be laid out again to show it.
+    public static func keep(_ picture: URL?, for setting: String, scene folder: URL) throws {
+        guard !setting.isEmpty, Archive.staysInside(setting), !setting.contains("/") else { return }
+        let files = FileManager.default
+        let chosen = folder.appendingPathComponent(chosenFolderName, isDirectory: true)
+        try files.createDirectory(at: chosen, withIntermediateDirectories: true)
+        for (name, file) in chosenPictures(scene: folder) where name == setting {
+            try files.removeItem(at: file)
+        }
+        guard let picture else { return }
+        let ending = picture.pathExtension.lowercased()
+        try files.copyItem(at: picture, to: chosen.appendingPathComponent(ending.isEmpty ? setting : "\(setting).\(ending)"))
+    }
+
     @discardableResult
     public static func layOut(scene folder: URL, languages: [String] = Locale.preferredLanguages,
                               progress: (Double) -> Void = { _ in }) throws -> WallpaperEngineScene.LeftOut {
         guard let projectFolder = project(ofScene: folder), let package = WallpaperEnginePackage(folder: projectFolder) else {
             throw Problem.noScene
         }
-        let leftOut = try WallpaperEngineScene.export(package, into: folder, allowEmpty: true, progress: progress)
+        let leftOut = try WallpaperEngineScene.export(package, into: folder, chosen: chosenPictures(scene: folder),
+                                                      allowEmpty: true, progress: progress)
         let found = WallpaperEngineProject(folder: projectFolder, languages: languages)?.variables ?? []
         let used = WallpaperEngineScene.settingNames(in: package, among: found.compactMap(\.property))
         let offered = found.filter { $0.property.map(used.contains) == true }

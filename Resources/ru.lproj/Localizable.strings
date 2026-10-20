@@ -775,3 +775,8 @@
 /* Engine editor: puppet tilts */
 "Tilt X" = "Наклон по X";
 "Tilt Y" = "Наклон по Y";
+
+/* Wallpaper settings: pictures chosen for a scene's settings */
+"Pictures" = "Картинки";
+"The scene's own" = "Из сцены";
+"Chosen" = "Выбрана";

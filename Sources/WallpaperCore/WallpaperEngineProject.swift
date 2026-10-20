@@ -37,6 +37,15 @@ public struct WallpaperEngineProject: Equatable, Sendable {
     public private(set) var tags: [Tag]
     /// The pictures chosen for the settings of a scene that take a picture, by the settings' names.
     public private(set) var chosenPictures: [String: URL]
+    /// The settings of a scene that take a picture, in the order the wallpaper lists them: each
+    /// by its name and by what it is called in the wallpaper's settings.
+    public private(set) var pictureSettingTitles: [PictureSetting] = []
+
+    /// A setting of a scene that takes a picture.
+    public struct PictureSetting: Equatable, Sendable {
+        public let name: String
+        public let title: String
+    }
     /// The number the Workshop knows the wallpaper by, when the project says it.
     public let workshopID: String?
     /// For settings made for another wallpaper: the Workshop's number of that wallpaper.
@@ -128,6 +137,20 @@ public struct WallpaperEngineProject: Equatable, Sendable {
         }
         self.pictureSettings = pictureSettings.sorted()
         self.chosenPictures = chosenPictures
+        let translations = Self.texts(in: general["localization"] as? [String: Any] ?? [:], for: languages)
+        pictureSettingTitles = pictureSettings
+            .sorted { name, other in
+                func order(_ name: String) -> Double {
+                    let property = properties[name] as? [String: Any] ?? [:]
+                    return Self.number(property["order"]) ?? Self.number(property["index"]) ?? .infinity
+                }
+                return order(name) != order(other) ? order(name) < order(other) : name < other
+            }
+            .map { name in
+                let raw = (properties[name] as? [String: Any])?["text"] as? String ?? ""
+                let title = Self.plainText(translations[raw] ?? raw)
+                return PictureSetting(name: name, title: title.isEmpty ? name : title)
+            }
         genres = (project["tags"] as? [Any])?.compactMap { $0 as? String } ?? (project["tags"] as? String).map { [$0] } ?? []
         rating = project["contentrating"] as? String
         tags = Self.tags(genres: genres, kind: kind, rating: rating)

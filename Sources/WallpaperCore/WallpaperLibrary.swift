@@ -236,6 +236,10 @@ public final class WallpaperLibrary: ObservableObject {
                     try WallpaperEngineProjectFolder.unpack(source, to: project) { progress($0 / 3) }
                     guard let package = WallpaperEnginePackage(folder: project) else { throw ImportError.unreadable }
                     let leftOut = try WallpaperEngineScene.export(package, into: folder, chosen: chosen) { progress(1 / 3 + $0 * 2 / 3) }
+                    // Kept with the scene, so that laying it out again shows them still.
+                    for (setting, picture) in chosen {
+                        try? WallpaperEngineProjectFolder.keep(picture, for: setting, scene: folder)
+                    }
                     let source = "\(WallpaperEngineScene.folderName)/\(WallpaperEngineScene.filesName)"
                     // Every wallpaper comes with a scheme color and may come with settings left
                     // from an older version of itself; only what the scene uses is offered.
