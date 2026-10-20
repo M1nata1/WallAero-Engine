@@ -803,14 +803,19 @@ enum ScreenshotMode {
     /// The editor of a scene made as Wallpaper Engine makes one, for `--edit-scene`. Options:
     /// `--select-object <number>`, `--add-effect <name>` (on the selected object),
     /// `--add-particles <name>`, `--add-text`, `--sheet effects|particles|puppet` (for the
-    /// selected object), `--set <key> <number>` on the selected object, `--undo <times>`.
+    /// selected object), `--set <key> <number>` on the selected object, `--undo <times>`,
+    /// `--size <width> <height>` of the window, to see more of the inspector.
     private static func editEngineScene(_ request: (folder: URL, output: URL)) {
         guard let model = try? EngineEditorModel(folder: request.folder, title: request.folder.lastPathComponent) else {
             print("no project in \(request.folder.path)")
             exit(1)
         }
         let preview = EngineEditorPreviewController(model: model)
-        let size = NSSize(width: 1360, height: 820)
+        var size = NSSize(width: 1360, height: 820)
+        if let index = CommandLine.arguments.firstIndex(of: "--size"), index + 2 < CommandLine.arguments.count,
+           let width = Double(CommandLine.arguments[index + 1]), let height = Double(CommandLine.arguments[index + 2]) {
+            size = NSSize(width: width, height: height)
+        }
         let window = AppWindow.make(title: model.title, content: AnyView(EngineEditorView(model: model, preview: preview)), size: size)
         centerOnSharpestScreen(window)
         window.makeKeyAndOrderFront(nil)

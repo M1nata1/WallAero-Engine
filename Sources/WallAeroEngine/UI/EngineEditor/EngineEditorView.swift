@@ -101,6 +101,13 @@ struct EngineEditorView: View {
                 Label("Particles", systemImage: "sparkles")
             }
             Button { model.addSound() } label: { Label("Sound…", systemImage: "speaker.wave.2") }
+            Menu {
+                ForEach(WallpaperEngineDocument.LightKind.allCases, id: \.self) { kind in
+                    Button(EngineEditorModel.lightTitle(kind)) { model.addLight(kind) }
+                }
+            } label: {
+                Label("Light Source", systemImage: "lightbulb")
+            }
             Divider()
             Button { model.addComposition() } label: { Label("Composition Layer", systemImage: "square.stack.3d.up") }
             Button { model.addGroup() } label: { Label("Group", systemImage: "square.dashed") }

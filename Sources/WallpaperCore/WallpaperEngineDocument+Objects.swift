@@ -146,6 +146,45 @@ extension WallpaperEngineDocument {
         return append(base(id: id, name: name), under: parent)
     }
 
+    /// The kinds of light Wallpaper Engine has, by the names its scenes give them.
+    public enum LightKind: String, CaseIterable, Sendable {
+        case point = "lpoint", spot = "lspot", directional = "ldirectional", tube = "ltube"
+
+        /// How the scene counts the lights of this kind, in `general.lightconfig`.
+        var counted: String { String(rawValue.dropFirst()) }
+    }
+
+    /// A light, over the middle of the scene: it lights pictures whose material is lit, and
+    /// models.
+    @discardableResult
+    public mutating func addLight(_ kind: LightKind = .point, name: String, under parent: Int? = nil) -> Int {
+        let id = newID()
+        var object = base(id: id, name: name)
+        object["light"] = .string(kind.rawValue)
+        // Above the pictures, which lie at no height.
+        object["origin"] = .vector([Double(size.width) / 2, Double(size.height) / 2, 200])
+        object["color"] = .vector([1, 1, 1])
+        object["intensity"] = .number(1)
+        object["radius"] = .number(Double(max(size.width, size.height)) / 2)
+        object["exponent"] = .number(1)
+        object["parallaxDepth"] = .vector([0, 0])
+        let made = append(object, under: parent)
+        if parent != nil { update(made) { $0["origin"] = .vector([0, 0, 200]) } }
+        countLights()
+        return made
+    }
+
+    /// Counts the scene's lights by kind into `general.lightconfig`, as Wallpaper Engine keeps
+    /// them; a scene without lights says nothing.
+    public mutating func countLights() {
+        var counts: [String: JSONValue] = [:]
+        for object in objects {
+            guard let name = object["light"]?.plain.stringValue, let kind = LightKind(rawValue: name) else { continue }
+            counts[kind.counted] = .number((counts[kind.counted]?.numberValue ?? 0) + 1)
+        }
+        self[general: "lightconfig"] = counts.isEmpty ? nil : .object(counts)
+    }
+
     /// A system of particles, described by `file` in the project.
     @discardableResult
     public mutating func addParticles(file: String, name: String, under parent: Int? = nil) -> Int {

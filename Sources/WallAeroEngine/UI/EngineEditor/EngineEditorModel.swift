@@ -281,12 +281,18 @@ final class EngineEditorModel: ObservableObject {
     }
 
     func delete(_ id: Int) {
-        change { $0.remove(id) }
+        change {
+            $0.remove(id)
+            $0.countLights()
+        }
     }
 
     func duplicate(_ id: Int) {
         var made: Int?
-        change { made = $0.duplicate(id) }
+        change {
+            made = $0.duplicate(id)
+            $0.countLights()
+        }
         selection = made
     }
 
@@ -421,6 +427,21 @@ final class EngineEditorModel: ObservableObject {
         selection = made
     }
 
+    func addLight(_ kind: WallpaperEngineDocument.LightKind) {
+        var made = 0
+        change { made = $0.addLight(kind, name: Self.lightTitle(kind), under: newParent) }
+        selection = made
+    }
+
+    static func lightTitle(_ kind: WallpaperEngineDocument.LightKind) -> String {
+        switch kind {
+        case .point: return NSLocalizedString("Point Light", comment: "Kind of a light of a Wallpaper Engine scene")
+        case .spot: return NSLocalizedString("Spotlight", comment: "Kind of a light of a Wallpaper Engine scene")
+        case .directional: return NSLocalizedString("Directional Light", comment: "Kind of a light of a Wallpaper Engine scene")
+        case .tube: return NSLocalizedString("Tube Light", comment: "Kind of a light of a Wallpaper Engine scene")
+        }
+    }
+
     func addGroup() {
         var made = 0
         change { made = $0.addGroup(name: Self.kindTitle(.group), under: newParent) }
@@ -460,12 +481,29 @@ final class EngineEditorModel: ObservableObject {
             change { document in
                 var value = material.value
                 if var passes = value["passes"]?.arrayValue, !passes.isEmpty {
-                    passes[0]["textures"] = .array([.string(picture.texture)])
+                    // Only the picture: its normal map and masks stay.
+                    var textures = passes[0]["textures"]?.arrayValue ?? []
+                    if textures.isEmpty { textures.append(.null) }
+                    textures[0] = .string(picture.texture)
+                    passes[0]["textures"] = .array(textures)
                     value["passes"] = .array(passes)
                 }
                 document.setFile(material.name, value)
                 document.update(id) { $0["size"] = .vector([Double(picture.width), Double(picture.height)]) }
             }
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    /// A picture brought into the project as the normal map of a picture: which way each of
+    /// its points faces, for the lights to light it by.
+    func chooseNormalMap(of id: Int) {
+        guard let url = choose([.image]) else { return }
+        do {
+            let picture = try WallpaperEngineProjectFolder.addPicture(url, to: projectFolder)
+            hasNewFiles = true
+            setMaterialTexture(id, slot: 1, to: picture.texture)
         } catch {
             NSAlert(error: error).runModal()
         }
