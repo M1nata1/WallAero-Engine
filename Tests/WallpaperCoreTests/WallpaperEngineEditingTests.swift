@@ -127,6 +127,55 @@ final class WallpaperEngineEditingTests: XCTestCase {
         XCTAssertEqual(before[kept.key], kept.value)
     }
 
+    func testAPictureChosenForASettingIsLaidOutAndKept() throws {
+        let scene = root.appendingPathComponent("scene")
+        let folder = scene.appendingPathComponent(WallpaperEngineProjectFolder.folderName)
+        var document = WallpaperEngineDocument.empty(title: "Test", width: 1920, height: 1080)
+        try WallpaperEngineProjectFolder.write(document, previous: nil, to: folder)
+        let source = root.appendingPathComponent("sky.png")
+        try pngFile(width: 64, height: 32).write(to: source)
+        let picture = try WallpaperEngineProjectFolder.addPicture(source, to: folder)
+        let image = document.addImage(texture: picture.texture, width: picture.width, height: picture.height, name: "Sky")
+        // The picture's material takes the one chosen for the setting "custombg", as Wallpaper
+        // Engine's editor writes it.
+        let material = try XCTUnwrap(document.material(ofObject: image))
+        var value = material.value
+        var passes = try XCTUnwrap(value["passes"]?.arrayValue)
+        passes[0]["usertextures"] = .array([.string("custombg")])
+        value["passes"] = .array(passes)
+        document.setFile(material.name, value)
+        var general = document.project["general"] ?? .object([:])
+        general["properties"] = .object(["custombg": .object(["type": .string("scenetexture"), "text": .string("Custom <b>background</b>"),
+                                                               "value": .string(""), "order": .number(100)])])
+        document.project["general"] = general
+        try WallpaperEngineProjectFolder.write(document, previous: nil, to: folder)
+
+        let project = try XCTUnwrap(WallpaperEngineProject(folder: folder))
+        XCTAssertEqual(project.pictureSettingTitles, [.init(name: "custombg", title: "Custom background")])
+
+        func laidOutTextures() throws -> [String] {
+            let script = try String(contentsOf: scene.appendingPathComponent("engine/files.js"), encoding: .utf8)
+            let json = try XCTUnwrap(script.range(of: "= ").map { String(script[$0.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: ";\n")) })
+            let table = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+            return ((table["textures"] as? [String: Any]) ?? [:]).keys.sorted()
+        }
+        try WallpaperEngineProjectFolder.layOut(scene: scene)
+        XCTAssertFalse(try laidOutTextures().contains("user/custombg"))
+
+        let chosen = root.appendingPathComponent("mine.png")
+        try pngFile(width: 16, height: 16).write(to: chosen)
+        try WallpaperEngineProjectFolder.keep(chosen, for: "custombg", scene: scene)
+        XCTAssertEqual(Array(WallpaperEngineProjectFolder.chosenPictures(scene: scene).keys), ["custombg"])
+        try WallpaperEngineProjectFolder.layOut(scene: scene)
+        XCTAssertTrue(try laidOutTextures().contains("user/custombg"))
+
+        // Taken away, the scene's own shows again.
+        try WallpaperEngineProjectFolder.keep(nil, for: "custombg", scene: scene)
+        XCTAssertTrue(WallpaperEngineProjectFolder.chosenPictures(scene: scene).isEmpty)
+        try WallpaperEngineProjectFolder.layOut(scene: scene)
+        XCTAssertFalse(try laidOutTextures().contains("user/custombg"))
+    }
+
     func testRemovingAnObjectTakesWhatHangsOnItAlong() {
         var document = WallpaperEngineDocument.empty(title: "", width: 100, height: 100)
         let group = document.addGroup(name: "Group")
@@ -445,5 +494,18 @@ final class WallpaperEngineModelPartsTests: XCTestCase {
         XCTAssertEqual(read.pieces.first?.solid.first, 1)
         XCTAssertEqual(read.pieces.first?.triangles, [0, 1, 2])
         XCTAssertEqual((read.table["pieces"] as? [[String: Any]])?.count, 1)
+    }
+}
+
+/// Not a test: with WALLAERO_CHOOSE_DEMO set to "<scene folder>|<setting>|<picture>", keeps the
+/// picture for the setting of that scene and lays the scene out again, to be played and looked at.
+final class WallpaperEngineChosenPictureDemo: XCTestCase {
+    func testChoose() throws {
+        guard let asked = ProcessInfo.processInfo.environment["WALLAERO_CHOOSE_DEMO"] else { throw XCTSkip("no scene asked for") }
+        let parts = asked.components(separatedBy: "|")
+        guard parts.count == 3 else { throw XCTSkip("expected <scene>|<setting>|<picture>") }
+        let scene = URL(fileURLWithPath: parts[0], isDirectory: true)
+        try WallpaperEngineProjectFolder.keep(parts[2].isEmpty ? nil : URL(fileURLWithPath: parts[2]), for: parts[1], scene: scene)
+        try WallpaperEngineProjectFolder.layOut(scene: scene)
     }
 }

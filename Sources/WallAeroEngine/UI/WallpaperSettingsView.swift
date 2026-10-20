@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WallpaperCore
 
@@ -48,6 +49,13 @@ struct WallpaperSettingsView: View {
                             }
                         }
                     }
+                    if model.itemID == item.id, !model.pictures.isEmpty {
+                        Section("Pictures") {
+                            ForEach(model.pictures) { picture in
+                                pictureRow(picture)
+                            }
+                        }
+                    }
                 }
                 .formStyle(.grouped)
             } else {
@@ -71,6 +79,30 @@ struct WallpaperSettingsView: View {
     private func show(_ item: Wallpaper?) {
         model.manager = manager
         model.show(item, folder: item.flatMap { library.isScene($0) ? library.projectURL(for: $0) : nil })
+    }
+
+    /// A setting of a scene that takes a picture: the one chosen, if any, to be chosen anew or
+    /// taken away, which puts back the scene's own.
+    @ViewBuilder
+    private func pictureRow(_ picture: WallpaperSettingsModel.Picture) -> some View {
+        LabeledContent {
+            HStack {
+                if model.working.contains(picture.id) {
+                    ProgressView().controlSize(.small)
+                }
+                Text(verbatim: picture.file ?? NSLocalizedString("The scene's own", comment: "No picture chosen for a scene's setting"))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button("Choose…") { model.choosePicture(for: picture.id) }
+                if picture.file != nil {
+                    Button("Remove") { model.keepPicture(nil, for: picture.id) }
+                }
+            }
+            .disabled(model.working.contains(picture.id))
+        } label: {
+            Text(verbatim: picture.title)
+        }
     }
 
     // MARK: - What the wallpaper is
@@ -166,6 +198,18 @@ struct WallpaperSettingsView: View {
 @MainActor
 final class WallpaperSettingsModel: ObservableObject {
     @Published private(set) var scene: WallpaperScene?
+    /// The settings of a scene of Wallpaper Engine's that take a picture.
+    @Published private(set) var pictures: [Picture] = []
+    /// The settings whose picture is being put into the scene.
+    @Published private(set) var working: Set<String> = []
+
+    struct Picture: Identifiable, Equatable {
+        /// The setting's name.
+        let id: String
+        let title: String
+        /// The name of the picture chosen, if one is.
+        let file: String?
+    }
     private(set) var itemID: UUID?
     weak var manager: WallpaperManager?
 
@@ -184,6 +228,7 @@ final class WallpaperSettingsModel: ObservableObject {
         itemID = item?.id
         watcher = nil
         scene = folder.flatMap { try? SceneProject.read(from: $0) }
+        readPictures()
         guard let folder else { return }
         watcher = FolderWatcher(folder: folder) { [weak self] paths in
             guard paths.contains(where: { ($0 as NSString).lastPathComponent == SceneProject.sceneFileName }) else { return }
@@ -252,6 +297,56 @@ final class WallpaperSettingsModel: ObservableObject {
             manager?.webWallpaperDidChange(item)
         } catch {
             Log.playback.error("Cannot save the settings of \(folder.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Pictures
+
+    private func readPictures() {
+        guard let folder, let project = WallpaperEngineProjectFolder.project(ofScene: folder),
+              let read = WallpaperEngineProject(folder: project) else {
+            pictures = []
+            return
+        }
+        let chosen = WallpaperEngineProjectFolder.chosenPictures(scene: folder)
+        pictures = read.pictureSettingTitles.map { setting in
+            Picture(id: setting.name, title: setting.title, file: chosen[setting.name].map { _ in
+                NSLocalizedString("Chosen", comment: "A picture is chosen for a scene's setting")
+            })
+        }
+    }
+
+    func choosePicture(for setting: String) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.prompt = NSLocalizedString("Choose", comment: "Open panel button")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        keepPicture(url, for: setting)
+    }
+
+    /// Puts the picture into the scene for the setting, or takes the one there out, and lays
+    /// the scene out again; the wallpaper shows it then.
+    func keepPicture(_ picture: URL?, for setting: String) {
+        guard let folder, let item, !working.contains(setting) else { return }
+        working.insert(setting)
+        Task { [weak self] in
+            let failure: Error? = await Task.detached(priority: .userInitiated) {
+                do {
+                    try WallpaperEngineProjectFolder.keep(picture, for: setting, scene: folder)
+                    try WallpaperEngineProjectFolder.layOut(scene: folder)
+                    return nil
+                } catch {
+                    return error
+                }
+            }.value
+            guard let self else { return }
+            self.working.remove(setting)
+            if let failure {
+                NSAlert(error: failure).runModal()
+            }
+            self.readPictures()
+            self.manager?.webWallpaperDidChange(item)
         }
     }
 
