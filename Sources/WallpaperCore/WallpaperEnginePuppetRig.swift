@@ -50,11 +50,37 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
         public var angle: Double
         public var dx: Double
         public var dy: Double
-        public init(frame: Int, angle: Double = 0, dx: Double = 0, dy: Double = 0) {
+        /// Turned about the picture's horizontal axis and its vertical one, in radians: seen
+        /// straight on, the bone's part is squeezed up and down, or from side to side — a lid
+        /// closing over an eye — and past a quarter turn it is seen from behind.
+        public var tiltX: Double = 0
+        public var tiltY: Double = 0
+
+        public init(frame: Int, angle: Double = 0, dx: Double = 0, dy: Double = 0, tiltX: Double = 0, tiltY: Double = 0) {
             self.frame = frame
             self.angle = angle
             self.dx = dx
             self.dy = dy
+            self.tiltX = tiltX
+            self.tiltY = tiltY
+        }
+
+        // Keys saved before there were tilts have none.
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            frame = try values.decode(Int.self, forKey: .frame)
+            angle = try values.decode(Double.self, forKey: .angle)
+            dx = try values.decode(Double.self, forKey: .dx)
+            dy = try values.decode(Double.self, forKey: .dy)
+            tiltX = try values.decodeIfPresent(Double.self, forKey: .tiltX) ?? 0
+            tiltY = try values.decodeIfPresent(Double.self, forKey: .tiltY) ?? 0
+        }
+
+        /// How the bone's part is turned and squeezed as it is seen, before it is moved: the
+        /// turn about x, then y, then in the picture's plane.
+        var turn: CGAffineTransform {
+            let cz = cos(angle), sz = sin(angle), cx = cos(tiltX), sx = sin(tiltX), cy = cos(tiltY), sy = sin(tiltY)
+            return CGAffineTransform(a: cz * cy, b: sz * cy, c: cz * sy * sx - sz * cx, d: sz * sy * sx + cz * cx, tx: 0, ty: 0)
         }
     }
 
@@ -230,7 +256,8 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
             // Eased, as hand-made animation is.
             let eased = share * share * (3 - 2 * share)
             return Key(frame: Int(frame), angle: a.angle + (b.angle - a.angle) * eased,
-                       dx: a.dx + (b.dx - a.dx) * eased, dy: a.dy + (b.dy - a.dy) * eased)
+                       dx: a.dx + (b.dx - a.dx) * eased, dy: a.dy + (b.dy - a.dy) * eased,
+                       tiltX: a.tiltX + (b.tiltX - a.tiltX) * eased, tiltY: a.tiltY + (b.tiltY - a.tiltY) * eased)
         }
         return keys[keys.count - 1]
     }
@@ -280,7 +307,7 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
             let bone = bones[index]
             let key = animation.flatMap { animations.indices.contains($0) ? pose(of: index, in: animations[$0], at: frame) : nil } ?? Key(frame: 0)
             let parentJoint = bone.parent.map { bones[$0].joint } ?? Point(x: 0, y: 0)
-            let local = CGAffineTransform(rotationAngle: key.angle)
+            let local = key.turn
                 .concatenating(CGAffineTransform(translationX: bone.joint.x - parentJoint.x + key.dx, y: bone.joint.y - parentJoint.y + key.dy))
             let made = bone.parent.flatMap { $0 != index && depth < 64 ? world($0, depth + 1) : nil }.map { local.concatenating($0) } ?? local
             result[index] = made
@@ -368,8 +395,8 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
                     float(rigBones[bone].joint.x - parentJoint.x + key.dx)
                     float(rigBones[bone].joint.y - parentJoint.y + key.dy)
                     float(0)
-                    float(0)
-                    float(0)
+                    float(key.tiltX)
+                    float(key.tiltY)
                     float(key.angle)
                     float(1)
                     float(1)
@@ -489,9 +516,11 @@ extension WallpaperEnginePuppetRig {
                     let at = (bone * source.frameCount + frame) * 9
                     guard at + 5 < source.frames.count else { continue }
                     keys.append(Key(frame: frame, angle: Double(source.frames[at + 5]),
-                                    dx: Double(source.frames[at] - rest[12]), dy: Double(source.frames[at + 1] - rest[13])))
+                                    dx: Double(source.frames[at] - rest[12]), dy: Double(source.frames[at + 1] - rest[13]),
+                                    tiltX: Double(source.frames[at + 3]), tiltY: Double(source.frames[at + 4])))
                 }
-                if keys.contains(where: { abs($0.angle) > 1e-5 || abs($0.dx) > 1e-3 || abs($0.dy) > 1e-3 }) {
+                if keys.contains(where: { abs($0.angle) > 1e-5 || abs($0.dx) > 1e-3 || abs($0.dy) > 1e-3 ||
+                                          abs($0.tiltX) > 1e-5 || abs($0.tiltY) > 1e-5 }) {
                     animation.keys[bone] = keys
                 }
             }
