@@ -1,3 +1,4 @@
+import Accelerate
 import CoreGraphics
 import CoreText
 import Foundation
@@ -232,28 +233,17 @@ final class Canvas2D {
     /// Pixels, RGBA, top row first, colors not multiplied by alpha: as a page reads a canvas.
     func pixels(x: Int = 0, y: Int = 0, width w: Int? = nil, height h: Int? = nil) -> Data {
         let w = w ?? width, h = h ?? height
-        guard let c = context, let base = c.data, w > 0, h > 0 else { return Data(count: max(0, (w ?? 0) * (h ?? 0) * 4)) }
-        let row = c.bytesPerRow
+        guard w > 0, h > 0 else { return Data() }
         var out = Data(count: w * h * 4)
+        // Only the part that lies on the canvas has anything; the rest stays nought.
+        let left = max(0, x), top = max(0, y), right = min(width, x + w), bottom = min(height, y + h)
+        guard let c = context, let base = c.data, right > left, bottom > top else { return out }
         out.withUnsafeMutableBytes { raw in
-            let o = raw.bindMemory(to: UInt8.self)
-            let i = base.assumingMemoryBound(to: UInt8.self)
-            for yy in 0..<h {
-                let sy = y + yy
-                guard sy >= 0, sy < height else { continue }
-                for xx in 0..<w {
-                    let sx = x + xx
-                    guard sx >= 0, sx < width else { continue }
-                    let s = sy * row + sx * 4, d = (yy * w + xx) * 4
-                    let a = i[s + 3]
-                    o[d + 3] = a
-                    if a == 0 { continue }
-                    if a == 255 { o[d] = i[s]; o[d + 1] = i[s + 1]; o[d + 2] = i[s + 2]; continue }
-                    o[d] = UInt8(min(255, (Int(i[s]) * 255 + Int(a) / 2) / Int(a)))
-                    o[d + 1] = UInt8(min(255, (Int(i[s + 1]) * 255 + Int(a) / 2) / Int(a)))
-                    o[d + 2] = UInt8(min(255, (Int(i[s + 2]) * 255 + Int(a) / 2) / Int(a)))
-                }
-            }
+            var source = vImage_Buffer(data: base.advanced(by: top * c.bytesPerRow + left * 4), height: vImagePixelCount(bottom - top),
+                                       width: vImagePixelCount(right - left), rowBytes: c.bytesPerRow)
+            var target = vImage_Buffer(data: raw.baseAddress!.advanced(by: ((top - y) * w + (left - x)) * 4), height: source.height,
+                                       width: source.width, rowBytes: w * 4)
+            vImageUnpremultiplyData_RGBA8888(&source, &target, vImage_Flags(kvImageNoFlags))
         }
         return out
     }

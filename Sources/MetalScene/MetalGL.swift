@@ -29,6 +29,10 @@ final class MetalGL {
         var format: MTLPixelFormat = .rgba8Unorm
         var wrapS = GLConstant.repeat, wrapT = GLConstant.repeat, mag = GLConstant.linear, min = GLConstant.linear
     }
+    /// What a program's pipeline is made for: the target, the blending and the vertex layout.
+    struct PipelineKey: Hashable {
+        var format: UInt, depth: Bool, blendOn: Bool, blend: [Int], inputs: [Int]
+    }
     final class Framebuffer { var color: (renderbuffer: Bool, id: Int)?; var depth: Int? }
     final class Program {
         let translated: TranslatedProgram
@@ -36,7 +40,7 @@ final class MetalGL {
         var attributes: [String: Int] = [:]
         var block: Data
         var samplerUnits: [String: Int] = [:]
-        var pipelines: [String: MTLRenderPipelineState] = [:]
+        var pipelines: [PipelineKey: MTLRenderPipelineState] = [:]
         init(translated: TranslatedProgram) {
             self.translated = translated
             block = Data(count: translated.blockSize)
@@ -57,7 +61,7 @@ final class MetalGL {
     private var drawFB = 0, readFB = 0
     private var viewport = (0, 0, 1, 1)
     private var blendOn = false, blendFunc = (1, 0, 1, 0), blendEquation = GLConstant.funcAdd
-    private var depthOn = false, depthMask = true, depthFunc = 0x201, cullOn = false, frontCCW = true
+    private var depthOn = false, depthMask = true, depthFunc = 0x201, cullOn = false, frontCCW = true, cullMode = 0x0405
     private var clearColor: [Double] = [0, 0, 0, 0]
     private var flipY = false, premultiply = false
 
@@ -70,7 +74,7 @@ final class MetalGL {
     private var drawable: CAMetalDrawable?
     private var screenTexture: MTLTexture?
     private var samplerStates: [SamplerParameters: MTLSamplerState] = [:]
-    private var depthStates: [String: MTLDepthStencilState] = [:]
+    private var depthStates: [Int: MTLDepthStencilState] = [:]
     private let white: MTLTexture
     private var blitPipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     private let blitVertex: MTLFunction, blitFragment: MTLFunction
@@ -246,7 +250,7 @@ final class MetalGL {
             case GLOp.depthMask: depthMask = int() != 0
             case GLOp.depthFunc: depthFunc = int()
             case GLOp.frontFace: frontCCW = int() == GLConstant.ccw
-            case GLOp.cullFace: _ = int()
+            case GLOp.cullFace: cullMode = int()
             case GLOp.framebufferTexture2D:
                 let target = int(), attachment = int()
                 _ = int()
@@ -601,27 +605,32 @@ final class MetalGL {
         guard let encoder = beginPass(drawFB), let color = colorTexture(of: drawFB) else { return }
         let depth = depthTexture(of: drawFB)
         // The vertex layout: a buffer binding of its own for each attribute.
-        let vd = MTLVertexDescriptor()
-        var key = "\(color.pixelFormat.rawValue)|\(depth != nil)|\(blendOn)|\(blendFunc)|\(blendEquation)"
+        var key = PipelineKey(format: color.pixelFormat.rawValue, depth: depth != nil, blendOn: blendOn,
+                              blend: [blendFunc.0, blendFunc.1, blendFunc.2, blendFunc.3, blendEquation], inputs: [])
         var bindings: [(index: Int, buffer: MTLBuffer, offset: Int)] = []
+        var inputs: [(location: Int, format: MTLVertexFormat, stride: Int, divisor: Int)] = []
         for (name, glIndex) in p.attributes {
             guard let location = t.inputs[name], let a = va.attributes[glIndex], a.enabled, let buffer = buffers[a.buffer]?.metal else { continue }
-            let slot = 16 + location
             let format = vertexFormat(a)
-            vd.attributes[location].format = format
-            vd.attributes[location].offset = 0
-            vd.attributes[location].bufferIndex = slot
             let stride = a.stride > 0 ? a.stride : a.size * typeSize(a.type)
-            vd.layouts[slot].stride = stride
-            vd.layouts[slot].stepFunction = a.divisor > 0 ? .perInstance : .perVertex
-            vd.layouts[slot].stepRate = max(1, a.divisor)
-            bindings.append((slot, buffer, a.offset))
-            key += "|\(location):\(format.rawValue):\(stride):\(a.divisor)"
+            bindings.append((16 + location, buffer, a.offset))
+            inputs.append((location, format, stride, a.divisor))
+            key.inputs += [location, Int(format.rawValue), stride, a.divisor]
         }
         let pipeline: MTLRenderPipelineState
         if let made = p.pipelines[key] {
             pipeline = made
         } else {
+            let vd = MTLVertexDescriptor()
+            for input in inputs {
+                let slot = 16 + input.location
+                vd.attributes[input.location].format = input.format
+                vd.attributes[input.location].offset = 0
+                vd.attributes[input.location].bufferIndex = slot
+                vd.layouts[slot].stride = input.stride
+                vd.layouts[slot].stepFunction = input.divisor > 0 ? .perInstance : .perVertex
+                vd.layouts[slot].stepRate = max(1, input.divisor)
+            }
             let d = MTLRenderPipelineDescriptor()
             d.vertexFunction = t.vertex
             d.fragmentFunction = t.fragment
@@ -653,7 +662,7 @@ final class MetalGL {
         encoder.setViewport(MTLViewport(originX: Double(viewport.0), originY: Double(viewport.1), width: Double(viewport.2),
                                         height: Double(viewport.3), znear: 0, zfar: 1))
         if depth != nil {
-            let depthKey = "\(depthOn)|\(depthMask)|\(depthFunc)"
+            let depthKey = (depthOn ? 1 : 0) | (depthMask ? 2 : 0) | depthFunc << 2
             let state: MTLDepthStencilState
             if let made = depthStates[depthKey] {
                 state = made
@@ -672,7 +681,9 @@ final class MetalGL {
         }
         // The vertices turned over turn the winding round.
         encoder.setFrontFacing(frontCCW ? .clockwise : .counterClockwise)
-        encoder.setCullMode(cullOn ? .back : .none)
+        // Both sides culled: nothing is drawn.
+        if cullOn && cullMode == 0x0408 { return }
+        encoder.setCullMode(cullOn ? (cullMode == 0x0404 ? .front : .back) : .none)
         for binding in bindings { encoder.setVertexBuffer(binding.buffer, offset: binding.offset, index: binding.index) }
         p.block.withUnsafeBytes { raw in
             let large = raw.count > 4096 ? device.makeBuffer(bytes: raw.baseAddress!, length: raw.count, options: .storageModeShared) : nil

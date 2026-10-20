@@ -106,7 +106,8 @@ while IFS= read -r -d '' library; do sign "$library"; done \
 sign "$FRAMEWORKS/Chromium Embedded Framework.framework"
 sign "$FRAMEWORKS/libWallAeroCodecs.dylib"
 for helper in "$FRAMEWORKS/"*Helper*.app; do sign "$helper"; done
-sign "$APP"
+# The app itself may compile code as it runs: JavaScriptCore does, for the scenes' scripts.
+codesign --force --sign - --timestamp=none --entitlements scripts/WallAeroEngine.entitlements "$APP"
 
 if [ "$DIST" -eq 1 ]; then
     echo "→ Packing dist/$EXECUTABLE.zip…"
