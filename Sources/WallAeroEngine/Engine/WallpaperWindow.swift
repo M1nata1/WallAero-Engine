@@ -33,6 +33,8 @@ final class WallpaperView: NSView {
     private let playerLayer = AVPlayerLayer()
     private let imageLayer = CALayer()
     private(set) var webView: WebWallpaperView?
+    /// A scene of Wallpaper Engine's the app draws itself, in place of `webView`.
+    private(set) var nativeView: NativeSceneView?
     /// Called once what was asked for can be seen: at once for a picture, with the first frame
     /// for a video, when the page has drawn for a web wallpaper.
     var onReady: (() -> Void)?
@@ -93,6 +95,9 @@ final class WallpaperView: NSView {
     func currentFrame() async -> CGImage? {
         if let webView {
             return await webView.snapshot()
+        }
+        if let nativeView {
+            return nativeView.snapshot()
         }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         var picture: CGImage?
@@ -176,6 +181,26 @@ final class WallpaperView: NSView {
         webView.show(project, backdrop: backdrop)
     }
 
+    /// Plays a scene of Wallpaper Engine's with the app's own renderer. False if this Mac
+    /// cannot; then nothing is shown, and the scene is for `showWeb`.
+    @discardableResult
+    func showNativeScene(_ folder: URL, backdrop: NSImage? = nil) -> Bool {
+        clear()
+        let view = NativeSceneView(frame: bounds)
+        addSubview(view)
+        nativeView = view
+        view.setAudio(muted: isMuted, volume: volume)
+        view.setPlaying(isPlaying, rate: rate)
+        view.frameRate = frameRate
+        view.renderScale = renderScale
+        view.onReady = { [weak self] in self?.contentIsReady() }
+        guard view.show(folder: folder, backdrop: backdrop) else {
+            clear()
+            return false
+        }
+        return true
+    }
+
     private func contentIsReady() {
         guard !isReady else { return }
         isReady = true
@@ -189,6 +214,9 @@ final class WallpaperView: NSView {
         webView?.unload()
         webView?.removeFromSuperview()
         webView = nil
+        nativeView?.unload()
+        nativeView?.removeFromSuperview()
+        nativeView = nil
         loadTask?.cancel()
         loadTask = nil
         videoURL = nil
@@ -206,12 +234,14 @@ final class WallpaperView: NSView {
         self.rate = rate
         applyPlayback()
         webView?.setPlaying(playing, rate: rate)
+        nativeView?.setPlaying(playing, rate: rate)
     }
 
     func setAudio(muted: Bool, volume: Float) {
         isMuted = muted
         self.volume = volume
         webView?.setAudio(muted: muted, volume: volume)
+        nativeView?.setAudio(muted: muted, volume: volume)
         if videoHasAudio, playerHasAudio == muted {
             // Silent and audible playback use different players, see loadPlayer().
             loadPlayer()
@@ -229,6 +259,8 @@ final class WallpaperView: NSView {
         self.renderScale = renderScale
         webView?.frameRate = frameRate
         webView?.renderScale = renderScale
+        nativeView?.frameRate = frameRate
+        nativeView?.renderScale = renderScale
     }
 
     /// How the video or picture fills the view. `position` matters when filling crops it: in

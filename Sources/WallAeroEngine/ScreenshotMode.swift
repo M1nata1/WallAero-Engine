@@ -1042,6 +1042,7 @@ enum ScreenshotMode {
     /// has played, each printing what it comes to; `--pause-after <seconds>` pauses the
     /// wallpaper then, the way the app does when windows cover the desktop.
     ///
+    /// `--native` draws a scene of Wallpaper Engine's with the app's own renderer, as the desktop does.
     /// `--full-screen` makes the window as large as the main display, which is what a wallpaper
     /// costs for real, and `--zoomed` as large as a window gets short of that, to serve as one
     /// lying over the desktop. `--fps <n>` and `--render-scale <part>` are the app's two settings
@@ -1088,7 +1089,12 @@ enum ScreenshotMode {
         var isFolder: ObjCBool = false
         FileManager.default.fileExists(atPath: target.path, isDirectory: &isFolder)
         if isFolder.boolValue, let project = WebProject(folder: target) {
-            view.showWeb(project, hearsSound: false)
+            // `--native`: a scene of Wallpaper Engine's drawn by the app itself, as on the desktop.
+            if arguments.contains("--native"), SceneProject.isNativelyPlayable(target), view.showNativeScene(target) {
+                print("drawn by the app")
+            } else {
+                view.showWeb(project, hearsSound: false)
+            }
         } else if UTType(filenameExtension: target.pathExtension)?.conforms(to: .image) == true {
             view.showImage(at: target)
         } else {

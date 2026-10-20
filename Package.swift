@@ -15,6 +15,34 @@ let package = Package(
             path: "Sources/CCodecs",
             exclude: ["vpx/LICENSE", "opus/COPYING"]
         ),
+        // Shaders of WebGL made over for Metal: glslang and SPIRV-Cross, as they come (see
+        // VERSIONS.txt), with a small bridge.
+        .target(
+            name: "ShaderTranslation",
+            path: "Sources/ShaderTranslation",
+            exclude: ["glslang/LICENSE.txt", "glslang/LICENSES", "SPIRV-Cross/LICENSE", "VERSIONS.txt"],
+            cxxSettings: [
+                .headerSearchPath("glslang"),
+                .headerSearchPath("SPIRV-Cross"),
+                .define("ENABLE_OPT", to: "0"),
+                .define("GLSLANG_OSINCLUDE_UNIX"),
+                // Their own warnings, not the app's.
+                .unsafeFlags(["-w"]),
+            ]
+        ),
+        // Wallpaper Engine's scenes drawn with Metal: the scene player run in JavaScriptCore,
+        // its WebGL calls carried out natively.
+        .target(
+            name: "MetalScene",
+            dependencies: ["ShaderTranslation"],
+            path: "Sources/MetalScene",
+            linkerSettings: [
+                .linkedFramework("Metal"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("JavaScriptCore"),
+                .linkedLibrary("c++"),
+            ]
+        ),
         // Media import, conversion and the wallpaper library. No UI code.
         .target(
             name: "WallpaperCore",
@@ -71,7 +99,7 @@ let package = Package(
         // The menu bar app: desktop windows, playback engine and SwiftUI screens.
         .executableTarget(
             name: "WallAeroEngine",
-            dependencies: ["WallpaperCore", "CursorCore", "CEFHost"],
+            dependencies: ["WallpaperCore", "CursorCore", "CEFHost", "MetalScene"],
             path: "Sources/WallAeroEngine"
         ),
         // Command-line helper to apply or reset a cursor theme, reusing the app's engine.

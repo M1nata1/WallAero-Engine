@@ -80,6 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.run()
             return
         }
+        if let request = NativeSceneTest.request {
+            NativeSceneTest.run(request)
+            app.run()
+            return
+        }
         if let request = ScreenshotMode.engineTest {
             ScreenshotMode.runEngineTest(request)
             app.run()

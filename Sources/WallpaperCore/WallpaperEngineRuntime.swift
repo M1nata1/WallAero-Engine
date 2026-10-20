@@ -1702,50 +1702,63 @@ public enum WallpaperEngineRuntime {
       }
 
       // Smooth noise that repeats every `period` cells, so that a texture of it tiles.
+      function wrapped(cell, period) {
+        return ((cell % period) + period) % period;
+      }
       function smoothNoise(x, y, period, seed) {
         var x0 = Math.floor(x), y0 = Math.floor(y);
         var fx = x - x0, fy = y - y0;
         fx = fx * fx * (3 - 2 * fx);
         fy = fy * fy * (3 - 2 * fy);
-        function corner(cx, cy) {
-          return hash(((cx % period) + period) % period, ((cy % period) + period) % period, seed);
-        }
-        var top = corner(x0, y0) + (corner(x0 + 1, y0) - corner(x0, y0)) * fx;
-        var bottom = corner(x0, y0 + 1) + (corner(x0 + 1, y0 + 1) - corner(x0, y0 + 1)) * fx;
+        var left = wrapped(x0, period), right = wrapped(x0 + 1, period);
+        var up = wrapped(y0, period), down = wrapped(y0 + 1, period);
+        var a = hash(left, up, seed), b = hash(right, up, seed);
+        var c = hash(left, down, seed), d = hash(right, down, seed);
+        var top = a + (b - a) * fx;
+        var bottom = c + (d - c) * fx;
         return top + (bottom - top) * fy;
       }
 
-      // Noise of gradients that repeats every `period` cells: soft, without the blots noise of
-      // values has.
-      function gradientNoise(x, y, period, seed) {
-        var x0 = Math.floor(x), y0 = Math.floor(y);
-        var fx = x - x0, fy = y - y0;
-        function corner(cx, cy, dx, dy) {
-          var angle = hash(((cx % period) + period) % period, ((cy % period) + period) % period, seed) * Math.PI * 2;
-          return Math.cos(angle) * dx + Math.sin(angle) * dy;
-        }
-        var ux = fx * fx * fx * (fx * (fx * 6 - 15) + 10), uy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
-        var top = corner(x0, y0, fx, fy) + (corner(x0 + 1, y0, fx - 1, fy) - corner(x0, y0, fx, fy)) * ux;
-        var bottom = corner(x0, y0 + 1, fx, fy - 1) + (corner(x0 + 1, y0 + 1, fx - 1, fy - 1) - corner(x0, y0 + 1, fx, fy - 1)) * ux;
-        return top + (bottom - top) * uy;
-      }
-
-      // Clouds: noise of several sizes laid over one another, grey around the middle.
+      // Clouds: noise of gradients — soft, without the blots noise of values has — of several
+      // sizes laid over one another, grey around the middle. Each size repeats across the
+      // picture, so that it tiles; the gradients of its cells are worked out once.
       function cloudsPixels(size) {
-        var pixels = new Uint8Array(size * size * 4);
-        for (var y = 0; y < size; y++) {
-          for (var x = 0; x < size; x++) {
-            var value = 0, weight = 0.6, cells = 4;
-            for (var octave = 0; octave < 6; octave++) {
-              value += weight * gradientNoise(x / size * cells, y / size * cells, cells, octave + 1);
-              weight *= 0.5;
-              cells *= 2;
+        var values = new Float64Array(size * size);
+        var weight = 0.6, cells = 4;
+        for (var octave = 0; octave < 6; octave++) {
+          var gx = new Float64Array(cells * cells), gy = new Float64Array(cells * cells);
+          for (var cy = 0; cy < cells; cy++) {
+            for (var cx = 0; cx < cells; cx++) {
+              var angle = hash(cx, cy, octave + 1) * Math.PI * 2;
+              gx[cy * cells + cx] = Math.cos(angle);
+              gy[cy * cells + cx] = Math.sin(angle);
             }
-            var shade = Math.round(Math.max(0, Math.min(1, 0.5 + value)) * 255);
-            var at = (y * size + x) * 4;
-            pixels[at] = pixels[at + 1] = pixels[at + 2] = shade;
-            pixels[at + 3] = 255;
           }
+          for (var y = 0; y < size; y++) {
+            var py = y / size * cells, y0 = Math.floor(py), fy = py - y0;
+            var uy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+            var up = (y0 % cells) * cells, down = ((y0 + 1) % cells) * cells;
+            for (var x = 0; x < size; x++) {
+              var px = x / size * cells, x0 = Math.floor(px), fx = px - x0;
+              var ux = fx * fx * fx * (fx * (fx * 6 - 15) + 10);
+              var left = x0 % cells, right = (x0 + 1) % cells;
+              var a = gx[up + left] * fx + gy[up + left] * fy;
+              var b = gx[up + right] * (fx - 1) + gy[up + right] * fy;
+              var c = gx[down + left] * fx + gy[down + left] * (fy - 1);
+              var d = gx[down + right] * (fx - 1) + gy[down + right] * (fy - 1);
+              var top = a + (b - a) * ux;
+              var bottom = c + (d - c) * ux;
+              values[y * size + x] += weight * (top + (bottom - top) * uy);
+            }
+          }
+          weight *= 0.5;
+          cells *= 2;
+        }
+        var pixels = new Uint8Array(size * size * 4);
+        for (var i = 0; i < size * size; i++) {
+          var shade = Math.round(Math.max(0, Math.min(1, 0.5 + values[i])) * 255);
+          pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = shade;
+          pixels[i * 4 + 3] = 255;
         }
         return pixels;
       }

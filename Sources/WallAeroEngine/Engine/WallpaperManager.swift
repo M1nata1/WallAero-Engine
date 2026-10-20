@@ -347,6 +347,7 @@ final class WallpaperManager: NSObject, ObservableObject {
         let script = "window.wallaero && window.wallaero.setScene(\(String(decoding: data, as: UTF8.self)))"
         for screen in screens.values where screen.item?.id == id {
             screen.view.webView?.evaluate(script)
+            screen.view.nativeView?.showUnsaved(data)
         }
     }
 
@@ -677,6 +678,12 @@ final class ScreenWallpaper: NSObject {
     private static let unseenMustLast: TimeInterval = 0.4
     /// Tells a wallpaper that became ready late that another one has been asked for since.
     private var showGeneration = 0
+    /// Whether scenes of Wallpaper Engine's are drawn by the app rather than by Chromium; the
+    /// `NativeScenes` default, on unless set off, is there to compare the two.
+    static var drawsScenesNatively: Bool {
+        UserDefaults.standard.object(forKey: "NativeScenes") as? Bool ?? true
+    }
+
     /// A wallpaper that cannot be shown is not waited for longer than this.
     private static let longestWaitForPicture: TimeInterval = 3
 
@@ -697,7 +704,13 @@ final class ScreenWallpaper: NSObject {
 
     /// The page of a web wallpaper that is playing here, as what the mouse is passed on to.
     var pointerTarget: PointerForwarder.Target? {
-        guard isPlaying, let page = view.webView else { return nil }
+        guard isPlaying else { return nil }
+        if let scene = view.nativeView {
+            return PointerForwarder.Target(id: ObjectIdentifier(scene), frame: window.frame) { [weak scene] kind, point in
+                scene?.pointer(kind, at: point)
+            }
+        }
+        guard let page = view.webView else { return nil }
         return PointerForwarder.Target(id: ObjectIdentifier(page), frame: window.frame) { [weak page] kind, point in
             page?.pointer(kind, at: point)
         }
@@ -773,10 +786,21 @@ final class ScreenWallpaper: NSObject {
             // The library's picture of it stands in until the page has drawn; the full-size
             // still if there is one, the thumbnail otherwise.
             let picture = (library.renderedStillURL(for: newItem) ?? library.thumbnailURL(for: newItem)).flatMap(NSImage.init(contentsOf:))
-            view.showWeb(project, backdrop: picture)
-            view.webView?.onContentChange = { [weak self] in
-                guard let self else { return }
-                self.manager?.webWallpaperDidChange(newItem)
+            // A scene of Wallpaper Engine's on its own is drawn by the app; anything else, and
+            // any scene on a Mac where the app cannot, by Chromium.
+            if Self.drawsScenesNatively, project.isScene, SceneProject.isNativelyPlayable(project.folder),
+               view.showNativeScene(project.folder, backdrop: picture) {
+                Log.playback.info("“\(newItem.name, privacy: .public)” is drawn by the app")
+                view.nativeView?.onContentChange = { [weak self] in
+                    guard let self else { return }
+                    self.manager?.webWallpaperDidChange(newItem)
+                }
+            } else {
+                view.showWeb(project, backdrop: picture)
+                view.webView?.onContentChange = { [weak self] in
+                    guard let self else { return }
+                    self.manager?.webWallpaperDidChange(newItem)
+                }
             }
             manager?.refreshPicturesIfOutdated(of: newItem)
         }

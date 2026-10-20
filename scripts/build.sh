@@ -73,6 +73,9 @@ cp build/licenses/* "$LICENSES/"
 cp Sources/CCodecs/vpx/LICENSE "$LICENSES/libvpx LICENSE.txt"
 cp Sources/CCodecs/vpx/PATENTS "$LICENSES/libvpx PATENTS.txt"
 cp Sources/CCodecs/opus/COPYING "$LICENSES/Opus COPYING.txt"
+cp Sources/ShaderTranslation/glslang/LICENSE.txt "$LICENSES/glslang LICENSE.txt"
+for file in Sources/ShaderTranslation/glslang/LICENSES/*; do cp "$file" "$LICENSES/glslang $(basename "$file")"; done
+cp Sources/ShaderTranslation/SPIRV-Cross/LICENSE "$LICENSES/SPIRV-Cross LICENSE.txt"
 cp Resources/Fonts/*.txt "$LICENSES/"
 
 # macOS goes by the SDK version stamped into the app: on macOS 26 an app stamped with an earlier
