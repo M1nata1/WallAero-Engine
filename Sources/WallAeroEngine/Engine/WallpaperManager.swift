@@ -354,6 +354,13 @@ final class WallpaperManager: NSObject, ObservableObject {
 
     /// The files of a web wallpaper changed. Once the edits settle, its thumbnail is rendered
     /// again, and its still too if it serves as the macOS wallpaper.
+    /// A video wallpaper's file was made anew: the displays that show it play it again from it.
+    func videoFileDidChange(_ item: Wallpaper) {
+        for screen in screens.values where screen.item?.id == item.id {
+            screen.view.showVideo(at: library.fileURL(for: item))
+        }
+    }
+
     func webWallpaperDidChange(_ item: Wallpaper) {
         pendingWebRefresh[item.id]?.cancel()
         pendingWebRefresh[item.id] = Task {

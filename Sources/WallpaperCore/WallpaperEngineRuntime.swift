@@ -2003,6 +2003,22 @@ public enum WallpaperEngineRuntime {
           note('this Mac\'s web engine has no WebGL 2; the scene cannot be drawn');
           return { stop: function () {} };
         }
+        // What is bound is kept here as it is bound. Asking the context for it makes the page wait
+        // for the GPU's process to answer, and asked for every pass of every frame that adds up to
+        // more than the frame has.
+        var bound = { draw: null, read: null, viewport: [0, 0, canvas.width, canvas.height] };
+        (function () {
+          var bindFramebuffer = gl.bindFramebuffer, viewport = gl.viewport;
+          gl.bindFramebuffer = function (target, framebuffer) {
+            if (target === gl.FRAMEBUFFER || target === gl.DRAW_FRAMEBUFFER) bound.draw = framebuffer;
+            if (target === gl.FRAMEBUFFER || target === gl.READ_FRAMEBUFFER) bound.read = framebuffer;
+            return bindFramebuffer.call(gl, target, framebuffer);
+          };
+          gl.viewport = function (x, y, width, height) {
+            bound.viewport = [x, y, width, height];
+            return viewport.call(gl, x, y, width, height);
+          };
+        })();
 
         // A file of the scene that holds JSON. The files are written by programs, but by many
         // versions of them; one that does not parse is treated as missing.
@@ -2114,7 +2130,20 @@ public enum WallpaperEngineRuntime {
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, clamp ? gl.CLAMP_TO_EDGE : gl.REPEAT);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+          // How it is read, kept with it: see `bound`.
+          texture.looks = { wrapS: clamp ? gl.CLAMP_TO_EDGE : gl.REPEAT, wrapT: clamp ? gl.CLAMP_TO_EDGE : gl.REPEAT, smooth: !!smooth };
           return texture;
+        }
+
+        // How a texture is read: as it was made, or, for one not made here, as the context says,
+        // once.
+        function looksOf(texture) {
+          if (!texture.looks) {
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            texture.looks = { wrapS: gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S), wrapT: gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T),
+                              smooth: gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER) !== gl.NEAREST };
+          }
+          return texture.looks;
         }
 
         // `grainy`: looked at as it is wherever it is shown small — noise that is averaged out
@@ -2563,9 +2592,8 @@ public enum WallpaperEngineRuntime {
         // where it wraps. How each picture repeats and how smooth it is stay as they are.
         var plainSamplers = {};
         function plainSampler(texture) {
-          gl.bindTexture(gl.TEXTURE_2D, texture);
-          var wrapS = gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S), wrapT = gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T);
-          var smooth = gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER) !== gl.NEAREST;
+          var looks = looksOf(texture);
+          var wrapS = looks.wrapS, wrapT = looks.wrapT, smooth = looks.smooth;
           var name = wrapS + ',' + wrapT + ',' + smooth;
           if (!plainSamplers[name]) {
             var sampler = gl.createSampler();
@@ -2586,10 +2614,10 @@ public enum WallpaperEngineRuntime {
           var said = layer.said || {};
           var clamped = flag(said.clampuvs, false), square = flag(said.nointerpolation, false);
           if (!clamped && !square) return source;
-          gl.bindTexture(gl.TEXTURE_2D, source.texture);
-          var wrapS = clamped ? gl.CLAMP_TO_EDGE : gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S);
-          var wrapT = clamped ? gl.CLAMP_TO_EDGE : gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T);
-          var smooth = !square && gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER) !== gl.NEAREST;
+          var looks = looksOf(source.texture);
+          var wrapS = clamped ? gl.CLAMP_TO_EDGE : looks.wrapS;
+          var wrapT = clamped ? gl.CLAMP_TO_EDGE : looks.wrapT;
+          var smooth = !square && looks.smooth;
           var name = wrapS + ',' + wrapT + ',' + smooth;
           if (!layerSamplers[name]) {
             var sampler = gl.createSampler();
@@ -3720,6 +3748,23 @@ public enum WallpaperEngineRuntime {
 
         var CHANNELS = { rgba: 0, r8: 1, rg88: 2 };
 
+        // The pixels of `onto` a rectangle placed by `place` covers, as x0, y0, x1, y1, with a
+        // pixel to spare round it; null if it covers it all.
+        function coveredBy(place, onto) {
+          var low = [Infinity, Infinity], high = [-Infinity, -Infinity];
+          [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]].forEach(function (corner) {
+            var x = place[0] * corner[0] + place[3] * corner[1] + place[6];
+            var y = place[1] * corner[0] + place[4] * corner[1] + place[7];
+            low = [Math.min(low[0], x), Math.min(low[1], y)];
+            high = [Math.max(high[0], x), Math.max(high[1], y)];
+          });
+          var x0 = Math.max(0, Math.floor((low[0] + 1) / 2 * onto.width) - 1), y0 = Math.max(0, Math.floor((low[1] + 1) / 2 * onto.height) - 1);
+          var x1 = Math.min(onto.width, Math.ceil((high[0] + 1) / 2 * onto.width) + 1), y1 = Math.min(onto.height, Math.ceil((high[1] + 1) / 2 * onto.height) + 1);
+          if (!(x1 > x0 && y1 > y0)) return [0, 0, 1, 1];
+          if (x0 === 0 && y0 === 0 && x1 === onto.width && y1 === onto.height) return null;
+          return [x0, y0, x1, y1];
+        }
+
         // Draws a texture onto whatever is bound, placed by `place`.
         // `how`: 'translucent', 'additive', 'normal' (as it is, over what is there) or a number,
         // one of the blend modes. `mesh`, if given, is drawn in place of the plain rectangle.
@@ -3735,7 +3780,10 @@ public enum WallpaperEngineRuntime {
             if (!surface.copy) surface.copy = acquire(onto.width, onto.height);
             gl.bindFramebuffer(gl.READ_FRAMEBUFFER, onto.framebuffer);
             gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, surface.copy.framebuffer);
-            gl.blitFramebuffer(0, 0, onto.width, onto.height, 0, 0, onto.width, onto.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+            // Only what lies under the picture: a small one copies a small part.
+            var under = mesh ? null : coveredBy(place, onto);
+            if (under) gl.blitFramebuffer(under[0], under[1], under[2], under[3], under[0], under[1], under[2], under[3], gl.COLOR_BUFFER_BIT, gl.NEAREST);
+            else gl.blitFramebuffer(0, 0, onto.width, onto.height, 0, 0, onto.width, onto.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
             gl.bindFramebuffer(gl.FRAMEBUFFER, onto.framebuffer);
             program = mesh ? meshBlendProgram : blendProgram;
           }
@@ -3777,8 +3825,8 @@ public enum WallpaperEngineRuntime {
         // A puppet drawn part by part, in its order: a part that shows only within others through
         // a mask of those others, drawn first as they are bent at the moment.
         function putClipped(source, place, tint, how, mesh) {
-          var framebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-          var view = gl.getParameter(gl.VIEWPORT);
+          var framebuffer = bound.draw;
+          var view = bound.viewport.slice();
           var width = view[2], height = view[3];
           var clippedBy = {};
           mesh.clips.forEach(function (clip) { clippedBy[clip.part] = clip; });
@@ -5636,8 +5684,16 @@ public enum WallpaperEngineRuntime {
           var stands = standing(layer);
           if (!stands.visible) return;
           var nominal = layer.size;
-          var width = nominal[0] * scale, height = nominal[1] * scale;
           var matrix = layer.shift ? nudged(stands.matrix, layer.shift[0], layer.shift[1]) : stands.matrix;
+          // The layer's effects are worked out no finer than the layer shows on the screen: one
+          // shown at a third of its size needs a ninth of the pixels, and its effects, which are
+          // told the layer's own size, come out the same. Taken in sixteenths, so that a layer
+          // whose size is animated does not ask for a picture of a new size every frame.
+          var finer = function (x, y) {
+            var shown = Math.sqrt(x * x + y * y);
+            return Math.max(1 / 16, Math.min(1, Math.ceil(shown * 16) / 16));
+          };
+          var width = nominal[0] * scale * finer(matrix[0], matrix[1]), height = nominal[1] * scale * finer(matrix[4], matrix[5]);
           var bright = layer.brightness;
           if (layer.materialAlpha !== undefined) stands = { matrix: stands.matrix, alpha: stands.alpha * layer.materialAlpha, above: stands.above, visible: stands.visible };
           var tint = layer.ownColor ? [1, 1, 1, stands.alpha]
@@ -5669,7 +5725,11 @@ public enum WallpaperEngineRuntime {
             put(withLooks(source, layer), place, tint, how, mesh);
             return;
           }
-          // One that does not move is drawn once and kept.
+          // One that does not move is drawn once and kept — at the size it is now shown at.
+          if (layer.kept && (layer.kept.width !== Math.max(1, Math.round(width)) || layer.kept.height !== Math.max(1, Math.round(height)))) {
+            release(layer.kept);
+            layer.kept = null;
+          }
           if (layer.kept) {
             put(withLooks({ texture: layer.kept.texture }, layer), place, tint, how, mesh);
             return;
@@ -6597,7 +6657,7 @@ public enum WallpaperEngineRuntime {
         }
         function opaqueCells(texture, width, height, channels) {
           if (!(width > 0 && height > 0)) return null;
-          var wasRead = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING), wasDrawn = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+          var wasRead = bound.read, wasDrawn = bound.draw;
           var read = gl.createFramebuffer(), small = gl.createFramebuffer(), store = gl.createRenderbuffer();
           gl.bindRenderbuffer(gl.RENDERBUFFER, store);
           gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, OPAQUE_SIDE, OPAQUE_SIDE);

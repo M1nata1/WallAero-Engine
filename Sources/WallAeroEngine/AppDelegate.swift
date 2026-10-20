@@ -182,6 +182,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for item in redone { self?.manager.webWallpaperDidChange(item) }
         }
         MediaConversion.shared.convertLibrary(library)
+        MediaConversion.shared.makeVideosDecodableInHardware(library.items, in: library) { [weak self] item in
+            self?.manager.videoFileDidChange(item)
+        }
         cursorSettings.reapplyIfNeeded()
         statusMenu = StatusMenuController(library: library, manager: manager, actions: .init(
             openLibrary: { [unowned self] in showLibrary(nil) },

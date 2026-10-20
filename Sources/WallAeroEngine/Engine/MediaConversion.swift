@@ -52,6 +52,30 @@ final class MediaConversion {
         }
     }
 
+    /// Makes over in HEVC the video wallpapers the Mac's media engine cannot decode (see
+    /// `HardwareVideo`), one at a time and in the background; `done` is told of each, to be
+    /// shown again from its new file.
+    func makeVideosDecodableInHardware(_ items: [Wallpaper], in library: WallpaperLibrary,
+                                       done: @escaping @MainActor (Wallpaper) -> Void) {
+        let videos = items.filter { $0.kind == .video }.map { ($0, library.fileURL(for: $0)) }
+        guard !videos.isEmpty else { return }
+        let before = last
+        let task = Task.detached(priority: .utility) {
+            await before?.value
+            for (item, url) in videos {
+                do {
+                    if try await HardwareVideo.makeDecodableInHardware(url) {
+                        Log.playback.info("Made “\(item.name, privacy: .public)” over in HEVC for the media engine")
+                        await done(item)
+                    }
+                } catch {
+                    Log.playback.error("Cannot make “\(item.name, privacy: .public)” over in HEVC: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
+        last = task
+    }
+
     func convertLibrary(_ library: WallpaperLibrary) {
         guard WebMediaConverter.encodersAvailable else {
             Log.playback.error("The video encoders are missing; videos of web wallpapers stay as they are")
