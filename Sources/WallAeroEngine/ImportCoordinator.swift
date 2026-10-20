@@ -94,6 +94,10 @@ final class ImportCoordinator: ObservableObject {
                         }
                     }
                     report(1)
+                    // A video the media engine cannot decode is made over afterwards, while it plays.
+                    MediaConversion.shared.makeVideosDecodableInHardware(added, in: library) { [weak manager] item in
+                        manager?.videoFileDidChange(item)
+                    }
                     for item in added where item.kind == .web && item.thumbnailFileName == nil {
                         // No preview came with the page; draw one.
                         await manager.refreshPictures(of: item)
