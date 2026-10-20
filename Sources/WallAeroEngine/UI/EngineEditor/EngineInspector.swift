@@ -33,7 +33,7 @@ private struct EngineObjectProperties: View {
             LabeledContent("Kind") { Text(EngineEditorModel.kindTitle(kind)) }
             Toggle("Visible", isOn: model.flag(id, "visible", default: true))
                 .disabled(model.isScripted(id, "visible"))
-            if kind != .sound {
+            if kind != .sound && kind != .light {
                 Toggle("Show on Lock Screen", isOn: model.showsOnLockScreen(id))
             }
         }
@@ -95,6 +95,9 @@ private struct EngineObjectProperties: View {
                 }
                 Button("Replace Picture…") { model.replacePicture(of: id) }
                 Button("Puppet Warp…") { model.sheet = .puppet(object: id) }
+            }
+            if model.document.material(ofObject: id) != nil {
+                lightingSection
             }
         case .solid:
             Section("Size") {
@@ -213,8 +216,66 @@ private struct EngineObjectProperties: View {
                     set: { value in model.document.update(id) { $0["config"] = .object(["passthrough": .bool(value)]) } }
                 ))
             }
-        case .model, .light, .group, .fullscreen:
+        case .light:
+            Section("Light Source") {
+                Picker("Kind", selection: Binding(
+                    get: { model.value(id, "light")?.stringValue ?? "lpoint" },
+                    set: { kind in model.change { document in
+                        document.update(id) { $0["light"] = .string(kind) }
+                        document.countLights()
+                    } }
+                )) {
+                    ForEach(WallpaperEngineDocument.LightKind.allCases, id: \.self) { kind in
+                        Text(EngineEditorModel.lightTitle(kind)).tag(kind.rawValue)
+                    }
+                }
+                ColorRow("Color", hex: model.color(id, "color"))
+                    .disabled(model.isScripted(id, "color"))
+                NumberRow("Brightness", value: model.number(id, "intensity", default: 1), in: 0...20, step: 0.01)
+                NumberRow("Reach", value: model.number(id, "radius", default: 500), in: 0...max(model.document.size.width * 2, 1000))
+                NumberRow("Falloff", value: model.number(id, "exponent", default: 1), in: 0.01...10, step: 0.01)
+                NumberRow("Height", value: model.part(id, "origin", 2, default: [0, 0, 200]), in: -500...2000)
+            }
+        case .model, .group, .fullscreen:
             EmptyView()
+        }
+    }
+
+    /// How a picture takes the scene's lights, and reflects what is behind it.
+    @ViewBuilder
+    private var lightingSection: some View {
+        let lighting = model.materialCombo(id, "LIGHTING")
+        let reflection = model.materialCombo(id, "REFLECTION")
+        let normalMap = model.materialTexture(id, slot: 1)
+        Section {
+            Toggle("Lighting", isOn: lighting)
+            Toggle("Reflection", isOn: reflection)
+            if lighting.wrappedValue || reflection.wrappedValue {
+                LabeledContent("Normal Map") {
+                    Text(verbatim: normalMap.map { ($0 as NSString).lastPathComponent } ?? NSLocalizedString("None", comment: "No normal map"))
+                        .foregroundStyle(.secondary)
+                }
+                Button("Choose Normal Map…") { model.chooseNormalMap(of: id) }
+                if normalMap != nil {
+                    Button("Remove Normal Map", role: .destructive) { model.setMaterialTexture(id, slot: 1, to: nil) }
+                }
+                if reflection.wrappedValue && normalMap == nil {
+                    Text("A picture reflects only with a normal map.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                NumberRow("Metalness", value: model.materialValue(id, "metallic", default: 0.5), in: 0...1, step: 0.01)
+                NumberRow("Surface Roughness", value: model.materialValue(id, "roughness", default: 0.5), in: 0...1, step: 0.01)
+                if reflection.wrappedValue {
+                    NumberRow("Reflectivity", value: model.materialValue(id, "reflectivity", default: 1), in: 0...1, step: 0.01)
+                }
+            }
+        } header: {
+            Text("Lighting and Reflections")
+        } footer: {
+            if lighting.wrappedValue && !model.document.objects.contains(where: { $0["light"] != nil }) {
+                Text("The scene has no lights yet: add one with Add → Light Source.")
+            }
         }
     }
 

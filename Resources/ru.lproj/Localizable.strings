@@ -748,3 +748,21 @@
 "Wind" = "Ветер";
 "Wind Strength" = "Сила ветра";
 "Wind Direction" = "Направление ветра";
+
+/* Engine editor: lights and lit pictures */
+"Point Light" = "Точечный свет";
+"Spotlight" = "Прожектор";
+"Directional Light" = "Направленный свет";
+"Tube Light" = "Световая трубка";
+"Falloff" = "Затухание";
+"Lighting" = "Освещение";
+"Reflection" = "Отражение";
+"Normal Map" = "Карта нормалей";
+"Choose Normal Map…" = "Выбрать карту нормалей…";
+"A picture reflects only with a normal map." = "Отражение работает только с картой нормалей.";
+"Metalness" = "Металличность";
+"Surface Roughness" = "Шероховатость";
+"Reflectivity" = "Сила отражения";
+"Lighting and Reflections" = "Освещение и отражения";
+"The scene has no lights yet: add one with Add → Light Source." = "В сцене пока нет света: добавьте его через «Добавить → Источник света».";
+"Remove Normal Map" = "Убрать карту нормалей";

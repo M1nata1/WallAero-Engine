@@ -143,6 +143,21 @@ final class WallpaperEngineEditingTests: XCTestCase {
         document.reorder([copy!, other])
         XCTAssertEqual(document.objectIDs, [copy!, other])
     }
+
+    func testLightsAreCountedAsWallpaperEngineCountsThem() throws {
+        var document = WallpaperEngineDocument.empty(title: "", width: 1920, height: 1080)
+        XCTAssertNil(document[general: "lightconfig"])
+        let point = document.addLight(.point, name: "Point")
+        _ = document.addLight(.point, name: "Point 2")
+        _ = document.addLight(.spot, name: "Spot")
+        XCTAssertEqual(document[general: "lightconfig"], .object(["point": .number(2), "spot": .number(1)]))
+        let light = try XCTUnwrap(document.object(point))
+        XCTAssertEqual(light["light"], .string("lpoint"))
+        XCTAssertEqual(light["origin"]?.vector, [960, 540, 200])
+        document.remove(point)
+        document.countLights()
+        XCTAssertEqual(document[general: "lightconfig"], .object(["point": .number(1), "spot": .number(1)]))
+    }
 }
 
 /// Not a test: with WALLAERO_EFFECT_DEMO set to a folder, lays out there a scene with each of

@@ -191,6 +191,67 @@ extension EngineEditorModel {
         )
     }
 
+    // MARK: - The material of a picture
+
+    /// Changes the first pass of the material a picture is drawn with.
+    private func changeMaterial(of id: Int, _ change: (inout JSONValue) -> Void) {
+        guard let material = document.material(ofObject: id) else { return }
+        var value = material.value
+        guard var passes = value["passes"]?.arrayValue, !passes.isEmpty else { return }
+        change(&passes[0])
+        value["passes"] = .array(passes)
+        document.setFile(material.name, value)
+    }
+
+    private func materialPass(of id: Int) -> JSONValue? {
+        document.material(ofObject: id)?.value["passes"]?[0]
+    }
+
+    /// A switch of the material's shader: lighting, reflection.
+    func materialCombo(_ id: Int, _ name: String) -> Binding<Bool> {
+        Binding(
+            get: { [weak self] in self?.materialPass(of: id)?["combos"]?[name]?.numberValue == 1 },
+            set: { [weak self] on in
+                self?.changeMaterial(of: id) { pass in
+                    var combos = pass["combos"] ?? .object([:])
+                    combos[name] = on ? .number(1) : nil
+                    pass["combos"] = combos
+                }
+            }
+        )
+    }
+
+    /// A value of the material, as its shader names it.
+    func materialValue(_ id: Int, _ name: String, default fallback: Double) -> Binding<Double> {
+        Binding(
+            get: { [weak self] in self?.materialPass(of: id)?["constantshadervalues"]?[name]?.plain.numberValue ?? fallback },
+            set: { [weak self] new in
+                self?.changeMaterial(of: id) { pass in
+                    var values = pass["constantshadervalues"] ?? .object([:])
+                    values[name] = .number(new)
+                    pass["constantshadervalues"] = values
+                }
+            }
+        )
+    }
+
+    /// The texture in a slot of the material after the picture itself: 1 the normal map.
+    func materialTexture(_ id: Int, slot: Int) -> String? {
+        guard let textures = materialPass(of: id)?["textures"]?.arrayValue, slot < textures.count else { return nil }
+        return textures[slot].stringValue
+    }
+
+    func setMaterialTexture(_ id: Int, slot: Int, to texture: String?) {
+        changeMaterial(of: id) { pass in
+            var textures = pass["textures"]?.arrayValue ?? []
+            while textures.count <= slot { textures.append(.null) }
+            textures[slot] = texture.map { .string($0) } ?? .null
+            // What is left empty at the end is not written.
+            while let last = textures.last, last.isNull, textures.count > 1 { textures.removeLast() }
+            pass["textures"] = .array(textures)
+        }
+    }
+
     // MARK: - The scene
 
     func general(_ key: String, default fallback: Double) -> Binding<Double> {

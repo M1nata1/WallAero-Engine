@@ -5044,6 +5044,30 @@ public enum WallpaperEngineRuntime {
           layer.brightness *= number(plain(own.brightness), 1);
           layer.blendMode = number(object.colorBlendMode, 0);
           if (layer.picture && layer.picture.frames) layer.moving = true;
+          // A picture lit by the scene's lights, through a map of which way its surface faces, or
+          // showing what is behind it as a polished surface would: as its material says.
+          var combos = merged(base.combos, instance.combos);
+          var lighting = number(combos.LIGHTING, 0) === 1, reflecting = number(combos.REFLECTION, 0) === 1;
+          if ((lighting || reflecting) && layer.picture) {
+            var slot = function (index) {
+              var name = (instance.textures || [])[index] || (base.textures || [])[index];
+              return typeof name === 'string' && name ? shows(layer, texture('materials/' + name)) : null;
+            };
+            var normal = slot(1), masks = slot(2);
+            // Without a normal map nothing is reflected, as in Wallpaper Engine.
+            if (lighting || normal) layer.lit = {
+              lighting: lighting, reflecting: reflecting && !!normal, normal: normal, masks: masks,
+              metallic: number(plain(own.metallic), 0.5), roughness: number(plain(own.roughness), 0.5),
+              reflectivity: number(plain(own.reflectivity), 1),
+              emissive: numbers(plain(own.emissivecolor), 3, 1), glow: number(plain(own.emissivebrightness), 1),
+              // Which of the four channels of the masks stand for what.
+              maps: [number(combos.METALLIC_MAP, 0), number(combos.ROUGHNESS_MAP, 0), number(combos.REFLECTION_MAP, 0), number(combos.EMISSIVE_MAP, 0)]
+                      .map(function (on) { return masks && on === 1 ? 1 : 0; }),
+              target: null
+            };
+            // Lights move, and what is behind a polished picture changes.
+            if (layer.lit) layer.moving = true;
+          }
           // A picture that bends, if its bones came with the scene and could be read.
           var bends = model && model.puppet ? puppets[key(model.puppet)] : null;
           if (bends) {
@@ -5349,6 +5373,191 @@ public enum WallpaperEngineRuntime {
           return [-eye.x * depth[0] * eye.amount * sceneWidth, eye.y * depth[1] * eye.amount * sceneHeight];
         }
 
+        // A picture as the scene's lights show it, drawn into a target of its own the size it is
+        // drawn at: lit by every light, by physically based shading with the surface facing as
+        // its normal map says (or straight out of the scene without one), plus what is behind it,
+        // reflected and bent by its normal map. What comes out is drawn as the picture would be.
+        var litMade = null, litWhite = null;
+        function litProgramNow() {
+          if (litMade !== null) return litMade;
+          litMade = link(fillVertex, [
+            '#version 300 es',
+            'precision highp float;',
+            'in vec2 v_Uv;',
+            'uniform sampler2D u_Texture;',
+            'uniform vec4 u_Frame;',
+            'uniform int u_Channels;',
+            'uniform sampler2D u_Normal;',
+            'uniform int u_HasNormal;',
+            'uniform sampler2D u_Masks;',
+            'uniform vec4 u_Maps;',          // which channels of the masks are used: metal, rough, reflect, glow
+            'uniform sampler2D u_Scene;',
+            'uniform int u_Lighting;',
+            'uniform int u_Reflecting;',
+            'uniform mat4 u_Matrix;',        // the picture in the scene
+            'uniform vec2 u_Size;',          // its size, in units of the scene
+            'uniform vec2 u_SceneSize;',
+            'uniform float u_Metallic;',
+            'uniform float u_Roughness;',
+            'uniform float u_Reflectivity;',
+            'uniform vec3 u_Emissive;',
+            'uniform vec3 u_Ambient;',
+            'uniform int u_LightCount;',
+            'uniform vec4 u_LightPlace[' + MAX_LIGHTS + '];',
+            'uniform vec4 u_LightColor[' + MAX_LIGHTS + '];',
+            'uniform vec4 u_LightAim[' + MAX_LIGHTS + '];',
+            'out vec4 color;',
+            'const float PI = 3.14159265;',
+            // Light from one direction on a surface: the diffuse part, and the specular one by the
+            // GGX distribution, Smith geometry and Schlick's Fresnel.
+            'vec3 shade(vec3 n, vec3 l, vec3 albedo, vec3 radiance, vec3 f0, float rough, float metal) {',
+            '  vec3 v = vec3(0.0, 0.0, 1.0);',
+            '  vec3 h = normalize(v + l);',
+            '  float a = rough * rough;',
+            '  float a2 = a * a;',
+            '  float nh = max(dot(n, h), 0.0);',
+            '  float spread = nh * nh * (a2 - 1.0) + 1.0;',
+            '  float d = a2 / (PI * spread * spread);',
+            '  float k = (rough + 1.0) * (rough + 1.0) / 8.0;',
+            '  float nv = max(dot(n, v), 0.001);',
+            '  float nl = max(dot(n, l), 0.0);',
+            '  float g = nv / (nv * (1.0 - k) + k) * max(nl, 0.001) / (max(nl, 0.001) * (1.0 - k) + k);',
+            '  vec3 f = f0 + (1.0 - f0) * pow(max(1.0 - max(dot(h, v), 0.0), 0.001), 5.0);',
+            '  vec3 specular = d * g * f / max(4.0 * nv * nl, 0.001);',
+            '  vec3 diffuse = (1.0 - metal) * (1.0 - f);',
+            '  return (diffuse * albedo / PI + specular) * radiance * nl;',
+            '}',
+            'void main() {',
+            '  vec4 base = texture(u_Texture, u_Frame.xy + v_Uv * u_Frame.zw);',
+            '  if (u_Channels == 1) base = vec4(1.0, 1.0, 1.0, base.r);',
+            '  if (u_Channels == 2) base = vec4(base.rrr, base.g);',
+            '  vec4 masks = texture(u_Masks, v_Uv);',
+            '  float metal = mix(u_Metallic, masks.r, u_Maps.x);',
+            '  float rough = clamp(mix(u_Roughness, masks.g, u_Maps.y), 0.03, 1.0);',
+            // The picture's own directions in the scene: across it, and up it.
+            '  vec3 across = normalize(u_Matrix[0].xyz);',
+            '  vec3 up = normalize(u_Matrix[1].xyz);',
+            '  vec3 n = vec3(0.0, 0.0, 1.0);',
+            '  if (u_HasNormal == 1) {',
+            '    vec2 m = texture(u_Normal, v_Uv).xy * 2.0 - 1.0;',
+            '    n = vec3(m, sqrt(clamp(1.0 - dot(m, m), 0.0, 1.0)));',
+            '  }',
+            '  vec3 world = normalize(across * n.x + up * n.y + vec3(0.0, 0.0, n.z));',
+            // Where this point of the picture is in the scene; its top row comes first.
+            '  vec2 local = vec2((v_Uv.x - 0.5) * u_Size.x, (0.5 - v_Uv.y) * u_Size.y);',
+            '  vec3 place = (u_Matrix * vec4(local, 0.0, 1.0)).xyz;',
+            '  vec3 result = base.rgb;',
+            '  if (u_Lighting == 1) {',
+            '    vec3 f0 = mix(vec3(0.04), base.rgb, metal);',
+            '    vec3 light = vec3(0.0);',
+            '    for (int i = 0; i < ' + MAX_LIGHTS + '; i++) {',
+            '      if (i >= u_LightCount) break;',
+            '      vec3 toLight;',
+            '      float left = 1.0;',
+            '      if (u_LightPlace[i].w > 0.5) {',
+            '        vec3 way = u_LightPlace[i].xyz - place;',
+            '        float far = length(way);',
+            '        toLight = way / max(far, 0.0001);',
+            '        float reach = u_LightColor[i].w;',
+            '        if (reach > 0.0) left = pow(clamp(1.0 - far / reach, 0.0, 1.0), max(u_LightAim[i].w, 0.01));',
+            '        if (dot(u_LightAim[i].xyz, u_LightAim[i].xyz) > 0.0) left *= smoothstep(0.5, 0.9, dot(-toLight, normalize(u_LightAim[i].xyz)));',
+            '      } else {',
+            '        toLight = normalize(-u_LightPlace[i].xyz);',
+            '      }',
+            '      light += shade(world, toLight, base.rgb, u_LightColor[i].rgb * left * PI, f0, rough, metal);',
+            '    }',
+            '    if (u_Maps.w > 0.5) light = max(light, u_Emissive * base.rgb * masks.a);',
+            '    result = max(vec3(0.001), u_Ambient) * base.rgb + light;',
+            '  }',
+            '  if (u_Reflecting == 1) {',
+            // What is behind, seen through the surface where it leans: further the more it does.
+            '    float facing = max(0.001, n.z);',
+            '    vec2 lean = length(n.xy) > 0.0001 ? normalize(n.xy) * vec2(0.15, 0.15 * u_SceneSize.x / u_SceneSize.y) : vec2(0.0);',
+            '    vec2 onScene = vec2(place.x / u_SceneSize.x, 1.0 - place.y / u_SceneSize.y);',
+            '    onScene += (vec2(across.x, -across.y) * lean.x + vec2(up.x, -up.y) * lean.y) * facing;',
+            // A rough surface reflects a blur.
+            '    float spread = rough * 0.01;',
+            '    vec3 seen = texture(u_Scene, onScene).rgb * 0.4;',
+            '    seen += (texture(u_Scene, onScene + vec2(spread, 0.0)).rgb + texture(u_Scene, onScene - vec2(spread, 0.0)).rgb',
+            '           + texture(u_Scene, onScene + vec2(0.0, spread)).rgb + texture(u_Scene, onScene - vec2(0.0, spread)).rgb) * 0.15;',
+            '    float strength = u_Reflectivity * mix(1.0, masks.b, u_Maps.z);',
+            '    seen = pow(max(vec3(0.001), seen * (1.0 - facing) * strength), vec3(2.0 - metal));',
+            '    result += clamp(seen, 0.0, 1.0);',
+            '  }',
+            '  color = vec4(result, base.a);',
+            '}'
+          ].join('\n'), 'the player\'s own shader') || false;
+          return litMade;
+        }
+
+        function litPicture(layer, source, matrix, nominal, width, height) {
+          var lit = layer.lit;
+          if (!lit.target || lit.target.width !== Math.max(1, Math.round(width)) || lit.target.height !== Math.max(1, Math.round(height))) {
+            release(lit.target);
+            lit.target = acquire(width, height);
+          }
+          var program = litProgramNow();
+          var at = function (name) { return program.uniforms[name] ? program.uniforms[name].location : null; };
+          // What is under the picture, for it to reflect: a copy of what it is drawn on.
+          var behind = null;
+          if (lit.reflecting) {
+            var onto = surface.target;
+            behind = acquire(onto.width, onto.height);
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, onto.framebuffer);
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, behind.framebuffer);
+            gl.blitFramebuffer(0, 0, onto.width, onto.height, 0, 0, onto.width, onto.height, gl.COLOR_BUFFER_BIT, gl.LINEAR);
+          }
+          gl.bindFramebuffer(gl.FRAMEBUFFER, lit.target.framebuffer);
+          gl.viewport(0, 0, lit.target.width, lit.target.height);
+          gl.disable(gl.BLEND);
+          gl.useProgram(program.program);
+          litWhite = litWhite || flat(255, 255, 255, 255);
+          var white = litWhite;
+          [[0, source.texture, 'u_Texture'],
+           [1, lit.normal && lit.normal.ready !== false ? lit.normal.layers[0].texture : white.layers[0].texture, 'u_Normal'],
+           [2, lit.masks && lit.masks.ready !== false ? lit.masks.layers[0].texture : white.layers[0].texture, 'u_Masks'],
+           [3, behind ? behind.texture : white.layers[0].texture, 'u_Scene']].forEach(function (input) {
+            gl.activeTexture(gl.TEXTURE0 + input[0]);
+            gl.bindTexture(gl.TEXTURE_2D, input[1]);
+            if (at(input[2])) gl.uniform1i(at(input[2]), input[0]);
+          });
+          gl.uniform4fv(at('u_Frame'), source.frame || [0, 0, 1, 1]);
+          gl.uniform1i(at('u_Channels'), CHANNELS[source.channels] || 0);
+          gl.uniform1i(at('u_HasNormal'), lit.normal && lit.normal.ready !== false ? 1 : 0);
+          gl.uniform4fv(at('u_Maps'), lit.maps);
+          gl.uniform1i(at('u_Lighting'), lit.lighting ? 1 : 0);
+          gl.uniform1i(at('u_Reflecting'), behind ? 1 : 0);
+          gl.uniformMatrix4fv(at('u_Matrix'), false, new Float32Array(matrix));
+          gl.uniform2f(at('u_Size'), nominal[0], nominal[1]);
+          gl.uniform2f(at('u_SceneSize'), sceneWidth, sceneHeight);
+          gl.uniform1f(at('u_Metallic'), lit.metallic);
+          gl.uniform1f(at('u_Roughness'), lit.roughness);
+          gl.uniform1f(at('u_Reflectivity'), lit.reflectivity);
+          gl.uniform3f(at('u_Emissive'), lit.emissive[0] * lit.glow, lit.emissive[1] * lit.glow, lit.emissive[2] * lit.glow);
+          var ambient = numbers(general.ambientcolor, 3, 0.2);
+          gl.uniform3f(at('u_Ambient'), ambient[0], ambient[1], ambient[2]);
+          var lights = sceneLights();
+          gl.uniform1i(at('u_LightCount'), lights.length);
+          if (lights.length) {
+            var places = [], shades = [], aims = [];
+            lights.forEach(function (light) { places.push.apply(places, light.place); shades.push.apply(shades, light.color); aims.push.apply(aims, light.aim); });
+            gl.uniform4fv(at('u_LightPlace'), new Float32Array(places));
+            gl.uniform4fv(at('u_LightColor'), new Float32Array(shades));
+            gl.uniform4fv(at('u_LightAim'), new Float32Array(aims));
+          }
+          gl.bindVertexArray(passShape);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          [0, 1, 2, 3].forEach(function (unit) {
+            gl.activeTexture(gl.TEXTURE0 + unit);
+            gl.bindTexture(gl.TEXTURE_2D, null);
+          });
+          gl.activeTexture(gl.TEXTURE0);
+          release(behind);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, surface.target.framebuffer);
+          gl.viewport(0, 0, surface.target.width, surface.target.height);
+          return { texture: lit.target.texture, resolution: source.resolution };
+        }
+
         function drawImage(layer) {
           var state = layer.state;
           var stands = standing(layer);
@@ -5382,6 +5591,7 @@ public enum WallpaperEngineRuntime {
             source = { texture: first.texture, frame: shown ? shown.frame : null, channels: layer.picture.channels,
                        resolution: layer.plain ? [nominal[0], nominal[1], nominal[0], nominal[1]] : [first.width, first.height, first.width, first.height] };
           }
+          if (source && layer.lit && litProgramNow()) source = litPicture(layer, source, matrix, nominal, width, height);
           if (!effects.length && source) {
             put(withLooks(source, layer), place, tint, how, mesh);
             return;
