@@ -2578,6 +2578,33 @@ public enum WallpaperEngineRuntime {
           return plainSamplers[name];
         }
 
+        // How a layer's picture is read where it is put on the scene, if the layer says: ending
+        // at its edges rather than repeating (`clampuvs`), and its pixels kept square rather than
+        // smoothed (`nointerpolation`). Otherwise as the picture itself says.
+        var layerSamplers = {};
+        function withLooks(source, layer) {
+          var said = layer.said || {};
+          var clamped = flag(said.clampuvs, false), square = flag(said.nointerpolation, false);
+          if (!clamped && !square) return source;
+          gl.bindTexture(gl.TEXTURE_2D, source.texture);
+          var wrapS = clamped ? gl.CLAMP_TO_EDGE : gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S);
+          var wrapT = clamped ? gl.CLAMP_TO_EDGE : gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T);
+          var smooth = !square && gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER) !== gl.NEAREST;
+          var name = wrapS + ',' + wrapT + ',' + smooth;
+          if (!layerSamplers[name]) {
+            var sampler = gl.createSampler();
+            gl.samplerParameteri(sampler, gl.TEXTURE_WRAP_S, wrapS);
+            gl.samplerParameteri(sampler, gl.TEXTURE_WRAP_T, wrapT);
+            gl.samplerParameteri(sampler, gl.TEXTURE_MAG_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+            gl.samplerParameteri(sampler, gl.TEXTURE_MIN_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+            layerSamplers[name] = sampler;
+          }
+          var looked = {};
+          Object.keys(source).forEach(function (name) { looked[name] = source[name]; });
+          looked.sampler = layerSamplers[name];
+          return looked;
+        }
+
         function drawPass(pass, target, inputs, layer, onScreen) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
           gl.viewport(0, 0, target.width, target.height);
@@ -2933,10 +2960,14 @@ public enum WallpaperEngineRuntime {
           if (thing.own) {
             // How a text looks, which a script may change as well as what it says.
             ['font', 'padding', 'horizontalalign', 'verticalalign', 'opaquebackground', 'backgroundcolor',
-             'limitrows', 'maxrows', 'limitwidth', 'maxwidth'].forEach(function (name) {
+             'limitrows', 'maxrows', 'limitwidth', 'maxwidth', 'anchor', 'limituseellipsis', 'outline', 'outlinecolor',
+             'outlinethickness', 'dropshadow', 'dropshadowcolor', 'dropshadowoffset', 'dropshadowsize', 'dropshadowopacity',
+             'blur', 'blursize', 'spacing'].forEach(function (name) {
               plainOf(name, function () {
                 var now = thing.own[name] !== undefined ? thing.own[name] : plain(thing.said[name]);
-                return name === 'backgroundcolor' ? new Vec3(String(now === undefined ? '0 0 0' : now)) : now;
+                if (/color$/.test(name)) return new Vec3(String(now === undefined ? '0 0 0' : now));
+                if (name === 'dropshadowoffset' || name === 'spacing') return new Vec2(String(now === undefined ? '0 0' : now));
+                return now;
               }, function (value) {
                 thing.own[name] = value && typeof value === 'object' ? String(value) : value;
               });
@@ -3722,6 +3753,7 @@ public enum WallpaperEngineRuntime {
           gl.uniform4fv(program.uniforms.u_Tint.location, tint);
           gl.uniform4fv(program.uniforms.u_Frame.location, source.frame || [0, 0, 1, 1]);
           gl.uniform1i(program.uniforms.u_Channels.location, CHANNELS[source.channels] || 0);
+          if (source.sampler) gl.bindSampler(0, source.sampler);
           if (mesh) {
             gl.bindVertexArray(mesh.shape);
             gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
@@ -3730,6 +3762,7 @@ public enum WallpaperEngineRuntime {
             gl.bindVertexArray(passShape);
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
           }
+          if (source.sampler) gl.bindSampler(0, null);
         }
 
         // A puppet drawn part by part, in its order: a part that shows only within others through
@@ -3864,6 +3897,8 @@ public enum WallpaperEngineRuntime {
 
         // How strongly gravity pulls on a swaying bone, in pixels of the scene a second squared.
         var SWAY_GRAVITY = 1000;
+        // How strongly the scene's wind pushes, at a strength of one.
+        var SWAY_WIND = 400;
 
         // `culls`: whether the picture's material leaves out the backs of its triangles.
         function buildPuppet(said, layers, name, culls, owner) {
@@ -4212,7 +4247,14 @@ public enum WallpaperEngineRuntime {
             } else {
               state.last = { root: root, angle: angle, velocity: null, turn: 0 };
             }
-            var pull = state.gravity ? [state.gravity[0] * SWAY_GRAVITY, state.gravity[1] * SWAY_GRAVITY] : [0, 0];
+            // Gravity as strong as the scene says, and the scene's wind, blowing in gusts.
+            var heavy = SWAY_GRAVITY * Math.max(0, number(general.gravitystrength, 1));
+            var pull = state.gravity ? [state.gravity[0] * heavy, state.gravity[1] * heavy] : [0, 0];
+            if (flag(general.windenabled, false)) {
+              var blowing = numbers(general.winddirection, 3, 0);
+              var gust = number(general.windstrength, 1) * SWAY_WIND * (0.65 + 0.35 * Math.sin(time * 1.3 + length * 0.01) * Math.sin(time * 0.37 + 1.7));
+              pull = [pull[0] + blowing[0] * gust, pull[1] + blowing[1] * gust];
+            }
             var left = Math.min(passed, 0.1);
             while (left > 1e-6) {
               var dt = Math.min(left, 1 / 120);
@@ -4745,6 +4787,14 @@ public enum WallpaperEngineRuntime {
               matrix = times(base, matrix);
             }
           } else {
+            // One anchored to a side of the screen keeps to that side where the screen shows less
+            // of the scene than there is: it moves with the edge the scene is cut at.
+            var anchor = key(String((thing.own && thing.own.anchor !== undefined ? thing.own.anchor : plain((thing.said || {}).anchor)) || 'none'));
+            if (anchor !== 'none' && anchor !== '') {
+              var seen = seenPart();
+              matrix[12] += /left/.test(anchor) ? seen.left : (/right/.test(anchor) ? seen.right - sceneWidth : (seen.left + seen.right - sceneWidth) / 2);
+              matrix[13] += /bottom/.test(anchor) ? seen.bottom : (/top/.test(anchor) ? seen.top - sceneHeight : (seen.bottom + seen.top - sceneHeight) / 2);
+            }
             if ((eye && eye.on) || (shake && shake.on)) {
               // What hangs together moves with the pointer together, and shakes with the camera.
               var moved = shifted(thing);
@@ -4942,7 +4992,13 @@ public enum WallpaperEngineRuntime {
           // the scene shows under it, or holds the layers that hang on it — and one of a single
           // color, which a scene may also bring as a model of its own.
           if (/composelayer|fullscreenlayer|projectlayer/.test(key(modelName))) {
-            if (!layer.holds) layer.takesScene = true;
+            // Told not to copy the background, it starts empty, and its effects make all it shows.
+            if (!layer.holds && flag(object.copybackground, true) === false) {
+              layer.picture = flat(0, 0, 0, 0);
+              layer.plain = true;
+            } else if (!layer.holds) {
+              layer.takesScene = true;
+            }
           } else if (/solidlayer/.test(key(modelName)) || (model && (model.solidlayer === true || /solidlayer/.test(key(String(model.material || '')))))) {
             layer.picture = flat(255, 255, 255, 255);
             // One color all over: as large a picture as the layer is, as far as its effects can tell.
@@ -5106,13 +5162,22 @@ public enum WallpaperEngineRuntime {
           // Draws the text into its picture, if it says or looks other than what is there.
           thing.settle = function () {
             var state = thing.state;
-            var padding = number(said('padding'), 0);
+            // The room left around the letters, across and up: one number for both, or two.
+            var room = numbers(said('padding'), 2, 0);
             var across = key(plain(said('horizontalalign')) || 'center'), down = key(plain(said('verticalalign')) || 'center');
             var background = flag(said('opaquebackground'), false) ? numbers(said('backgroundcolor'), 3, 0) : null;
             var family = fontOf(plain(said('font')));
             var widest = flag(said('limitwidth'), false) ? number(said('maxwidth'), 0) : 0;
             var rows = flag(said('limitrows'), false) ? Math.max(1, number(said('maxrows'), 1)) : 0;
-            var asked = [state.text, state.pointsize[0], state.color.join(), scale, padding, across, down, String(background), family, fontsThere, widest, rows].join('\u0001');
+            var ellipsis = flag(said('limituseellipsis'), false);
+            // Between letters and between lines, in units of the scene.
+            var spacing = numbers(said('spacing'), 2, 0);
+            var outline = flag(said('outline'), false) ? { color: numbers(said('outlinecolor'), 3, 0), thickness: Math.max(0, number(said('outlinethickness'), 1)) } : null;
+            var shadow = flag(said('dropshadow'), false) ? { color: numbers(said('dropshadowcolor'), 3, 0), offset: numbers(said('dropshadowoffset'), 2, 0),
+                                                            size: Math.max(0, number(said('dropshadowsize'), 0)), opacity: Math.max(0, number(said('dropshadowopacity'), 1)) } : null;
+            var blur = flag(said('blur'), false) ? Math.max(0, number(said('blursize'), 0)) : 0;
+            var asked = [state.text, state.pointsize[0], state.color.join(), scale, room.join(), across, down, String(background), family, fontsThere, widest, rows,
+                         ellipsis, spacing.join(), JSON.stringify(outline), JSON.stringify(shadow), blur].join('\u0001');
             if (asked === shown) return;
             shown = asked;
             // Wallpaper Engine counts a point of a font at 300 to the inch, with a unit of the
@@ -5126,14 +5191,20 @@ public enum WallpaperEngineRuntime {
               rise = letter * 0.93;
               fall = letter * 0.24;
             }
-            var line = rise + fall; // from one line to the next
+            var line = Math.max(1, rise + fall + spacing[1]); // from one line to the next
+            // How wide a line is, with the room between its letters.
+            function wide(text) {
+              if (!spacing[0]) return pen.measureText(text).width;
+              var letters = Array.from(text);
+              return pen.measureText(text).width + spacing[0] * Math.max(0, letters.length - 1);
+            }
             // Where another font stands in for the one the text names, its letters are narrower
             // or wider. The box the scene gives says how wide the text was in the right font, so
             // the letters are drawn that much narrower or wider, and the text takes its old room.
             var squeeze = 1;
             if (given[0] > 0 && saved !== '' && saved.indexOf('\n') < 0 && !(widest > 0)) {
-              var measured = pen.measureText(saved).width;
-              var savedWidth = given[0] - (roomy ? padding * 2 : 0);
+              var measured = wide(saved);
+              var savedWidth = given[0] - (roomy ? room[0] * 2 : 0);
               if (measured > 0 && savedWidth > 0) squeeze = Math.max(0.5, Math.min(1.5, savedWidth / measured));
               if (Math.abs(squeeze - 1) < 0.03) squeeze = 1;
             }
@@ -5145,7 +5216,7 @@ public enum WallpaperEngineRuntime {
                 var current = '';
                 each.split(' ').forEach(function (word) {
                   var longer = current ? current + ' ' + word : word;
-                  if (current && pen.measureText(longer).width > widest) {
+                  if (current && wide(longer) > widest) {
                     broken.push(current);
                     current = word;
                   } else {
@@ -5156,30 +5227,97 @@ public enum WallpaperEngineRuntime {
               });
               lines = broken;
             }
-            if (rows > 0) lines = lines.slice(0, rows);
-            var widths = lines.map(function (each) { return pen.measureText(each).width * squeeze; });
-            // The text itself, and around it the room the scene leaves for what effects add.
+            if (rows > 0 && lines.length > rows) {
+              lines = lines.slice(0, rows);
+              // What is cut off is told by an ellipsis at the end of the last line that shows.
+              if (ellipsis) {
+                var last = Array.from(lines[rows - 1].replace(/\s+$/, ''));
+                while (last.length && widest > 0 && wide(last.join('') + '…') > widest) last.pop();
+                lines[rows - 1] = last.join('') + '…';
+              }
+            } else if (ellipsis && widest > 0) {
+              // A single word longer than the line ends with an ellipsis where the line ends.
+              lines = lines.map(function (each) {
+                if (wide(each) <= widest) return each;
+                var letters = Array.from(each);
+                while (letters.length && wide(letters.join('') + '…') > widest) letters.pop();
+                return letters.join('') + '…';
+              });
+            }
+            var widths = lines.map(function (each) { return wide(each) * squeeze; });
+            // The text itself, and around it the room the scene leaves for what effects add; then
+            // as much again as the outline, the shadow and the blur reach past the letters.
             var content = [Math.max.apply(null, widths.concat([1])), Math.max(1, lines.length) * line];
-            var width = content[0] + padding * 2, height = content[1] + padding * 2;
+            var reach = Math.ceil(Math.max(outline ? outline.thickness : 0,
+                                           shadow ? Math.max(Math.abs(shadow.offset[0]), Math.abs(shadow.offset[1])) + shadow.size * 2 : 0,
+                                           blur * 2));
+            var inner = [content[0] + room[0] * 2, content[1] + room[1] * 2];
+            var width = inner[0] + reach * 2, height = inner[1] + reach * 2;
             paper.width = Math.max(1, Math.min(8192, Math.ceil(width * scale)));
             paper.height = Math.max(1, Math.min(8192, Math.ceil(height * scale)));
-            pen.setTransform(paper.width / width, 0, 0, paper.height / height, 0, 0);
+            var unit = paper.width / width; // pixels of the picture to a unit of the scene
+            pen.setTransform(unit, 0, 0, paper.height / height, 0, 0);
             pen.clearRect(0, 0, width, height);
             if (background) {
               pen.fillStyle = hex(background);
-              pen.fillRect(0, 0, width, height);
+              pen.fillRect(reach, reach, inner[0], inner[1]);
             }
             pen.font = font;
-            pen.fillStyle = hex(state.color);
             pen.textBaseline = 'alphabetic';
-            lines.forEach(function (each, index) {
-              var x = across === 'left' ? padding : (across === 'right' ? width - padding - widths[index] : (width - widths[index]) / 2);
+            pen.lineJoin = 'round';
+            // Every line, the way `paint` puts letters down: filled, or traced round.
+            function letters(paint) {
+              lines.forEach(function (each, index) {
+                var x = reach + (across === 'left' ? room[0] : (across === 'right' ? inner[0] - room[0] - widths[index] : (inner[0] - widths[index]) / 2));
+                pen.save();
+                pen.translate(x, reach + room[1] + rise + index * line);
+                pen.scale(squeeze, 1);
+                if (!spacing[0]) {
+                  paint(each, 0);
+                } else {
+                  var at = 0;
+                  Array.from(each).forEach(function (one) {
+                    paint(one, at);
+                    at += pen.measureText(one).width + spacing[0];
+                  });
+                }
+                pen.restore();
+              });
+            }
+            function fill(text, x) { pen.fillText(text, x, 0); }
+            function trace(text, x) { pen.strokeText(text, x, 0); }
+            // The text as a whole, outline under the letters, in one color or as it is.
+            function lettering(color) {
+              if (outline) {
+                pen.strokeStyle = color || hex(outline.color);
+                pen.lineWidth = outline.thickness * 2;
+                letters(trace);
+              }
+              pen.fillStyle = color || hex(state.color);
+              letters(fill);
+            }
+            // A shadow or a blur is drawn as the shadow of letters put far off the picture, so
+            // that only the shadow lands on it: blurred by the canvas, the way it can everywhere.
+            function blurred(color, alpha, size, dx, dy) {
+              var away = width + height + 1000;
               pen.save();
-              pen.translate(x, padding + rise + index * line);
-              pen.scale(squeeze, 1);
-              pen.fillText(each, 0, 0);
+              pen.globalAlpha = Math.min(1, alpha);
+              pen.shadowColor = color;
+              pen.shadowBlur = size * unit;
+              pen.shadowOffsetX = (away + dx) * unit;
+              pen.shadowOffsetY = dy * (paper.height / height);
+              pen.translate(-away, 0);
+              lettering(color);
               pen.restore();
-            });
+            }
+            if (shadow) {
+              // Stronger than whole, a shadow is laid down again for what is past one.
+              for (var left = shadow.opacity; left > 0.001; left -= 1) {
+                blurred(hex(shadow.color), left, shadow.size, shadow.offset[0], shadow.offset[1]);
+              }
+            }
+            if (blur > 0) blurred(hex(state.color), 1, blur, 0, 0);
+            else lettering(null);
             gl.bindTexture(gl.TEXTURE_2D, entry.texture);
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
@@ -5245,12 +5383,12 @@ public enum WallpaperEngineRuntime {
                        resolution: layer.plain ? [nominal[0], nominal[1], nominal[0], nominal[1]] : [first.width, first.height, first.width, first.height] };
           }
           if (!effects.length && source) {
-            put(source, place, tint, how, mesh);
+            put(withLooks(source, layer), place, tint, how, mesh);
             return;
           }
           // One that does not move is drawn once and kept.
           if (layer.kept) {
-            put({ texture: layer.kept.texture }, place, tint, how, mesh);
+            put(withLooks({ texture: layer.kept.texture }, layer), place, tint, how, mesh);
             return;
           }
 
@@ -5391,7 +5529,7 @@ public enum WallpaperEngineRuntime {
 
           gl.bindFramebuffer(gl.FRAMEBUFFER, onto.target.framebuffer);
           gl.viewport(0, 0, onto.target.width, onto.target.height);
-          put({ texture: previous.texture }, place, tint, how, mesh);
+          put(withLooks({ texture: previous.texture }, layer), place, tint, how, mesh);
           // What holds other layers is another picture whenever one of them is.
           if (!layer.moving && !layer.holds && held && loading === 0) {
             layer.kept = held;
@@ -7600,6 +7738,18 @@ public enum WallpaperEngineRuntime {
           var kept = (canvas.style.objectPosition || '50% 50%').split(/\s+/).map(parseFloat);
           return { left: box.left + (box.width - width) * (isFinite(kept[0]) ? kept[0] : 50) / 100,
                    top: box.top + (box.height - height) * (isFinite(kept[1]) ? kept[1] : 50) / 100, width: width, height: height };
+        }
+        // The part of the scene the screen shows, in the scene's units from its bottom left
+        // corner: all of it, unless the scene is cut to fill the screen. Worked out once a frame.
+        var seenOnce = { frame: -1 };
+        function seenPart() {
+          if (seenOnce.frame === frames) return seenOnce;
+          var box = canvas.getBoundingClientRect();
+          var from = box.width > 0 && box.height > 0 ? sceneAt(box.left, box.bottom) : [0, 0];
+          var to = box.width > 0 && box.height > 0 ? sceneAt(box.right, box.top) : [sceneWidth, sceneHeight];
+          seenOnce = { frame: frames, left: Math.max(0, from[0]), bottom: Math.max(0, from[1]),
+                       right: Math.min(sceneWidth, to[0]), top: Math.min(sceneHeight, to[1]) };
+          return seenOnce;
         }
         // A point of the page as a point of the scene, and back. The scene counts from its bottom.
         function sceneAt(pageX, pageY) {
