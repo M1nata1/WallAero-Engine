@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import CoreVideo
 import Foundation
@@ -188,14 +189,8 @@ final class MediaElement {
                                           space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
             else { return false }
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            let p = raw.bindMemory(to: UInt8.self)
-            for i in stride(from: 0, to: width * height * 4, by: 4) {
-                let a = Int(p[i + 3])
-                if a == 0 || a == 255 { continue }
-                p[i] = UInt8(min(255, (Int(p[i]) * 255 + a / 2) / a))
-                p[i + 1] = UInt8(min(255, (Int(p[i + 1]) * 255 + a / 2) / a))
-                p[i + 2] = UInt8(min(255, (Int(p[i + 2]) * 255 + a / 2) / a))
-            }
+            var buffer = vImage_Buffer(data: raw.baseAddress, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width * 4)
+            vImageUnpremultiplyData_RGBA8888(&buffer, &buffer, vImage_Flags(kvImageNoFlags))
             return true
         }
         return drawn ? (data, width, height) : nil

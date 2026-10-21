@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 import Metal
 import QuartzCore
@@ -392,6 +393,17 @@ final class MetalGL {
         descriptor.usage = [.shaderRead, .renderTarget]
         descriptor.storageMode = .private
         texture.metal = device.makeTexture(descriptor: descriptor)
+        // WebGL hands out a new texture as nought; Metal's holds whatever the memory held,
+        // which a shader that reads its own last frame — a water simulation — would take in.
+        if let made = texture.metal, !made.pixelFormat.isDepth {
+            endEncoder()
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = made
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+            pass.colorAttachments[0].storeAction = .store
+            ensureCommandBuffer().makeRenderCommandEncoder(descriptor: pass)?.endEncoding()
+        }
     }
 
     private var currentTexture: Texture {
@@ -464,19 +476,14 @@ final class MetalGL {
             let flip = flipY, premultiplied = premultiply && bytesPerPixel == 4
             rows.withUnsafeMutableBytes { out in
                 pixels.withUnsafeBytes { input in
-                    let o = out.bindMemory(to: UInt8.self), i = input.bindMemory(to: UInt8.self)
                     let rowBytes = width * bytesPerPixel
                     for y in 0..<height {
-                        let from = (flip ? height - 1 - y : y) * rowBytes, to = y * rowBytes
-                        for x in 0..<rowBytes { o[to + x] = i[from + x] }
-                        if premultiplied {
-                            for x in 0..<width {
-                                let p = to + x * 4, a = UInt16(o[p + 3])
-                                o[p] = UInt8(UInt16(o[p]) * a / 255)
-                                o[p + 1] = UInt8(UInt16(o[p + 1]) * a / 255)
-                                o[p + 2] = UInt8(UInt16(o[p + 2]) * a / 255)
-                            }
-                        }
+                        let from = (flip ? height - 1 - y : y) * rowBytes
+                        memcpy(out.baseAddress! + y * rowBytes, input.baseAddress! + from, rowBytes)
+                    }
+                    if premultiplied {
+                        var buffer = vImage_Buffer(data: out.baseAddress, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: rowBytes)
+                        vImagePremultiplyData_RGBA8888(&buffer, &buffer, vImage_Flags(kvImageNoFlags))
                     }
                 }
             }
@@ -932,4 +939,8 @@ enum GLOp {
     static let bindSampler = 27, texImage2D = 28, texImageSource = 29, pixelStorei = 30, blitFramebuffer = 31, clear = 32
     static let clearColor = 33, depthMask = 34, depthFunc = 35, frontFace = 36, cullFace = 37, framebufferTexture2D = 38
     static let framebufferRenderbuffer = 39, bindRenderbuffer = 40, renderbufferStorage = 41, generateMipmap = 42, delete = 43
+}
+
+private extension MTLPixelFormat {
+    var isDepth: Bool { self == .depth32Float || self == .depth16Unorm || self == .depth32Float_stencil8 }
 }

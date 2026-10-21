@@ -7163,7 +7163,9 @@ public enum WallpaperEngineRuntime {
             case 'turbulentvelocityrandom':
               // A speed in a direction that wanders around `forward`, the more the larger the scale.
               var forward = numbers(said.forward, 3, [0, 1, 0]);
-              var heading = Math.atan2(forward[1], forward[0]);
+              // `offset` turns the way it goes, in radians: leaves at 3 fall where embers at −0.5 rise
+              // (measured on Wallpaper Engine's own video of "Anime lake at night").
+              var heading = Math.atan2(forward[1], forward[0]) + number(said.offset, 0);
               var spread = number(said.scale, 1) * Math.PI / 2;
               least = number(said.speedmin, 100);
               most = number(said.speedmax, 250);
@@ -9298,6 +9300,8 @@ public enum WallpaperEngineRuntime {
             changed();
           },
           // What was made of the scene, for whoever looks into why it shows as it does.
+          // How many of the scene's pictures and videos have yet to come.
+          loading: function () { return loading; },
           report: function () {
             return JSON.stringify({
               scene: sceneWidth + '×' + sceneHeight, drawn: canvas.width + '×' + canvas.height, frames: frames,
@@ -9553,6 +9557,7 @@ public enum WallpaperEngineRuntime {
           return current;
         },
         report: function () { return current && current.report ? current.report() : JSON.stringify({ notes: notes }); },
+        loading: function () { return current && current.loading ? current.loading() : 0; },
         describe: ofCurrent('describe'),
         hit: ofCurrent('hit'),
         outline: ofCurrent('outline'),
