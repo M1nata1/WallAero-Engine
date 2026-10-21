@@ -27,6 +27,7 @@ public final class MetalScenePlayer {
     public var rendersStill = false
     /// Called when the scene's first frame is on the screen.
     public var onFirstFrame: (() -> Void)?
+    private var toldFirstFrame = false
 
     private let folder: URL
     private let engineScript: String
@@ -353,7 +354,12 @@ public final class MetalScenePlayer {
         let now = (CACurrentMediaTime() - started) * 1000
         call("__frame", [now])
         gl.present()
-        if gl.framesShown == 1 { onFirstFrame?() }
+        // Shown once its pictures are all there, or after a few seconds whatever came: a scene
+        // drawn while they arrive shows black, and its water ripples on what was not yet there.
+        if !toldFirstFrame, CACurrentMediaTime() - started > 4 || (context.evaluateScript("WallaeroEngine.loading()")?.toInt32() ?? 0) == 0 {
+            toldFirstFrame = true
+            onFirstFrame?()
+        }
     }
 
     /// Whether the scene has been on the screen a while: long enough for its pictures to come.
