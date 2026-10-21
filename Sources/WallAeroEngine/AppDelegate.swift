@@ -79,6 +79,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.run()
             return
         }
+        // A developer's helper: lays a scene's Wallpaper Engine project out anew, as the app
+        // does after an update, for a copy of a scene to be tested.
+        if let index = CommandLine.arguments.firstIndex(of: "--lay-out"), index + 1 < CommandLine.arguments.count {
+            let folder = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+            do {
+                try WallpaperEngineProjectFolder.layOut(scene: folder)
+                print("laid out \(folder.path)")
+                exit(0)
+            } catch {
+                print("cannot lay out: \(error)")
+                exit(1)
+            }
+        }
         if let request = NativeSceneTest.request {
             NativeSceneTest.run(request)
             app.run()

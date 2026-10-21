@@ -198,7 +198,7 @@ public enum WallpaperEngineScene {
             }
         }
 
-        let solids = Set(puppets.filter { ($0.value as? [String: Any])?["solid"] != nil }.keys)
+        let solids = Set(puppets.filter { ($0.value as? [String: Any])?["solid"] != nil || ($0.value as? [String: Any])?["skinned"] != nil }.keys)
         return leftOut(of: objects, in: package, puppets: Set(puppets.keys), solids: solids)
     }
 

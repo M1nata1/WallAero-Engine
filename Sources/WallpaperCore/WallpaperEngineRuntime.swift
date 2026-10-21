@@ -825,6 +825,48 @@ public enum WallpaperEngineRuntime {
       }
 
       function mendOne(source, message, line) {
+        var rows = source.split('\n');
+        var row = line > 0 ? rows[line - 1] : undefined;
+        // A part of a value handed over that its declaration here is too small to have, as
+        // Direct3D allows: the value is taken whole, as four numbers.
+        if (/vector swizzle selection out of range/.test(message) && row !== undefined) {
+          var picked = /\b(\w+)\s*\.\s*[xyzwrgba]+\b/g, found, widened = source;
+          while ((found = picked.exec(row))) {
+            var declared = new RegExp('^([ \\t]*(?:flat[ \\t]+|smooth[ \\t]+)?(?:in|varying)[ \\t]+(?:(?:highp|mediump|lowp)[ \\t]+)?)(float|vec[23])([ \\t]+' + found[1] + '[ \\t]*;)', 'm');
+            if (declared.test(widened)) return widened.replace(declared, '$1vec4$3');
+          }
+          return null;
+        }
+        // A constant worked out from uniforms, which GLSL will not have at the top of a shader:
+        // the name stands for the expression wherever it is used.
+        if (/global const initializers must be constant/.test(message) && row !== undefined) {
+          var constant = /^[ \t]*const[ \t]+(?:(?:highp|mediump|lowp)[ \t]+)?\w+[ \t]+(\w+)[ \t]*=[ \t]*(.+?);[ \t]*$/.exec(row);
+          if (!constant) return null;
+          rows[line - 1] = '#define ' + constant[1] + ' (' + constant[2] + ')';
+          return rows.join('\n');
+        }
+        // A constant inside a function given what is known only as it runs, as Direct3D allows:
+        // a plain value.
+        if (/'non-constant initializer' : not supported/.test(message) && row !== undefined && /\bconst\b/.test(row)) {
+          rows[line - 1] = row.replace(/\bconst\s+/, '');
+          return rows.join('\n');
+        }
+        // A name the shared header already gives a value: the shader's own takes its place.
+        var redefined = /'#define' : Macro redefined[^:]*: (\w+)/.exec(message);
+        if (redefined && row !== undefined) {
+          rows[line - 1] = '#undef ' + redefined[1] + '\n' + row;
+          return rows.join('\n');
+        }
+        // A texture read at four numbers, as Direct3D reads it at the first two.
+        if (/'texture' : no matching overloaded function found/.test(message) && row !== undefined) {
+          var mended = row.replace(/\btexture\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)/g, function (all, sampler, at) {
+            return new RegExp('\\bvec4[ \\t]+' + at + '\\b').test(source) ? 'texture(' + sampler + ', ' + at + '.xy)' : all;
+          });
+          if (mended !== row) {
+            rows[line - 1] = mended;
+            return rows.join('\n');
+          }
+        }
         // A value handed to the fragment shader that it changes: it changes a copy of its own,
         // made as its work begins.
         var handed = /l-value required \(can't modify an input "(\w+)"\)/.exec(message);
@@ -3115,7 +3157,7 @@ public enum WallpaperEngineRuntime {
           gl.attachShader(program, vertex);
           gl.attachShader(program, fragment);
           // The same places in every program, so that one shape serves them all.
-          ['a_Position', 'a_TexCoord', 'a_Place', 'a_Color', 'a_Frame', 'a_Spot', 'a_Uv', 'a_More', 'a_Normal'].forEach(function (name, index) {
+          ['a_Position', 'a_TexCoord', 'a_Place', 'a_Color', 'a_Frame', 'a_Spot', 'a_Uv', 'a_More', 'a_Normal', 'a_Bones', 'a_Weights'].forEach(function (name, index) {
             gl.bindAttribLocation(program, index, name);
           });
           gl.linkProgram(program);
@@ -3483,6 +3525,9 @@ public enum WallpaperEngineRuntime {
 
         var description = json('scene.json') || {};
         var general = description.general || {};
+        // A scene in three dimensions, seen through a camera that stands in it, rather than a
+        // picture of so many pixels: there the scene's pixels and the camera's 2D offsets mean nothing.
+        var inDepth = !general.orthogonalprojection;
         var projection = general.orthogonalprojection || {};
         var sceneWidth = number(projection.width, 0);
         var sceneHeight = number(projection.height, 0);
@@ -5561,25 +5606,8 @@ public enum WallpaperEngineRuntime {
         // and of the picture's own color as far as it is metal.
 
         var MAX_LIGHTS = 8;
-        var modelProgram = link([
-          '#version 300 es',
-          'in vec3 a_Position;',
-          'in vec3 a_Normal;',
-          'in vec2 a_TexCoord;',
-          'uniform mat4 u_Model;',
-          'uniform mat4 u_ViewProjection;',
-          'uniform mat3 u_NormalMatrix;',
-          'out vec3 v_World;',
-          'out vec3 v_Normal;',
-          'out vec2 v_Uv;',
-          'void main() {',
-          '  vec4 world = u_Model * vec4(a_Position, 1.0);',
-          '  v_World = world.xyz;',
-          '  v_Normal = u_NormalMatrix * a_Normal;',
-          '  v_Uv = a_TexCoord;',
-          '  gl_Position = u_ViewProjection * world;',
-          '}'
-        ].join('\n'), [
+        // How a model in three dimensions is shaded, whether its corners stand still or hang on bones.
+        var modelFragment = [
           '#version 300 es',
           'precision highp float;',
           'in vec3 v_World;',
@@ -5598,6 +5626,25 @@ public enum WallpaperEngineRuntime {
           'uniform vec4 u_LightPlace[' + MAX_LIGHTS + '];', // where (w 1), or which way it shines (w 0)
           'uniform vec4 u_LightColor[' + MAX_LIGHTS + '];', // color times strength, and how far it reaches
           'uniform vec4 u_LightAim[' + MAX_LIGHTS + '];',   // which way a spot points, and how fast it fades
+          // The sun's shadows: where each point is as the light sees it, and how near to the
+          // light the nearest thing there is, kept in four bytes.
+          'uniform int u_Shadows;',
+          'uniform mat4 u_ShadowMatrix;',
+          'uniform sampler2D u_ShadowMap;',
+          'uniform vec2 u_ShadowTexel;',
+          'float unpackDepth(vec4 c) { return dot(c, vec4(1.0, 1.0 / 255.0, 1.0 / 65025.0, 1.0 / 16581375.0)); }',
+          // As Wallpaper Engine does: nine samples around the point, each lit or not.
+          'float sunlit(vec3 world) {',
+          '  vec4 seen = u_ShadowMatrix * vec4(world, 1.0);',
+          '  vec3 at = seen.xyz / seen.w * 0.5 + 0.5;',
+          '  if (at.x <= 0.0 || at.x >= 1.0 || at.y <= 0.0 || at.y >= 1.0 || at.z >= 1.0) return 1.0;',
+          '  float lit = 0.0;',
+          '  for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {',
+          '    float nearest = unpackDepth(texture(u_ShadowMap, at.xy + vec2(float(dx), float(dy)) * u_ShadowTexel));',
+          '    lit += at.z - 0.0015 <= nearest ? 1.0 : 0.0;',
+          '  }',
+          '  return lit / 9.0;',
+          '}',
           'out vec4 color;',
           'const float PI = 3.14159265;',
           // Light from one direction, as Wallpaper Engine lights a model: a diffuse part and a
@@ -5628,7 +5675,9 @@ public enum WallpaperEngineRuntime {
           '  vec3 toEye = normalize(u_Eye - v_World);',
           '  vec3 f0 = mix(vec3(0.04), base.rgb, u_Metallic);',
           '  float rough = clamp(u_Roughness, 0.03, 1.0);',
-          '  vec3 lit = u_Ambient * base.rgb + u_Sky * base.rgb * (0.5 + 0.5 * n.y);',
+          // As Wallpaper Engine's generic4: the sky's light from below blending into the ambient
+          // light from above, by which way the surface faces.
+          '  vec3 lit = mix(u_Sky, u_Ambient, dot(n, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5) * base.rgb;',
           '  for (int i = 0; i < ' + MAX_LIGHTS + '; i++) {',
           '    if (i >= u_LightCount) break;',
           '    vec3 toLight;',
@@ -5642,12 +5691,170 @@ public enum WallpaperEngineRuntime {
           '      if (dot(u_LightAim[i].xyz, u_LightAim[i].xyz) > 0.0) left *= smoothstep(0.5, 0.9, dot(-toLight, normalize(u_LightAim[i].xyz)));',
           '    } else {',
           '      toLight = normalize(-u_LightPlace[i].xyz);',
+          '      if (i == 0 && u_Shadows == 1) left *= sunlit(v_World);',
           '    }',
-          '    lit += shade(n, toEye, toLight, base.rgb, u_LightColor[i].rgb * left * PI, f0, rough, u_Metallic);',
+          // A light's color times its strength is what reaches the surface, as in Wallpaper
+          // Engine's lighting; the diffuse part is the albedo over pi of it.
+          '    lit += shade(n, toEye, toLight, base.rgb, u_LightColor[i].rgb * left, f0, rough, u_Metallic);',
           '  }',
           '  color = vec4(lit, base.a);',
           '}'
+        ].join('\n');
+        var modelProgram = link([
+          '#version 300 es',
+          'in vec3 a_Position;',
+          'in vec3 a_Normal;',
+          'in vec2 a_TexCoord;',
+          'uniform mat4 u_Model;',
+          'uniform mat4 u_ViewProjection;',
+          'uniform mat3 u_NormalMatrix;',
+          'out vec3 v_World;',
+          'out vec3 v_Normal;',
+          'out vec2 v_Uv;',
+          'void main() {',
+          '  vec4 world = u_Model * vec4(a_Position, 1.0);',
+          '  v_World = world.xyz;',
+          '  v_Normal = u_NormalMatrix * a_Normal;',
+          '  v_Uv = a_TexCoord;',
+          '  gl_Position = u_ViewProjection * world;',
+          '}'
+        ].join('\n'), modelFragment, 'the player\'s own shader');
+        // A model whose corners hang on bones: each corner is moved by up to four of them, as
+        // much as its weights say, before it is placed in the scene.
+        var MAX_SKIN_BONES = 128;
+        var skinnedProgram = link([
+          '#version 300 es',
+          'in vec3 a_Position;',
+          'in vec3 a_Normal;',
+          'in vec2 a_TexCoord;',
+          'in vec4 a_Bones;',
+          'in vec4 a_Weights;',
+          'uniform mat4 u_Model;',
+          'uniform mat4 u_ViewProjection;',
+          'uniform mat3 u_NormalMatrix;',
+          'uniform mat4 u_Skin[' + MAX_SKIN_BONES + '];',
+          'out vec3 v_World;',
+          'out vec3 v_Normal;',
+          'out vec2 v_Uv;',
+          'void main() {',
+          '  float total = a_Weights.x + a_Weights.y + a_Weights.z + a_Weights.w;',
+          '  vec4 w = total > 0.0001 ? a_Weights / total : vec4(1.0, 0.0, 0.0, 0.0);',
+          '  mat4 skin = u_Skin[int(a_Bones.x)] * w.x + u_Skin[int(a_Bones.y)] * w.y + u_Skin[int(a_Bones.z)] * w.z + u_Skin[int(a_Bones.w)] * w.w;',
+          '  vec4 world = u_Model * (skin * vec4(a_Position, 1.0));',
+          '  v_World = world.xyz;',
+          '  v_Normal = u_NormalMatrix * (mat3(skin) * a_Normal);',
+          '  v_Uv = a_TexCoord;',
+          '  gl_Position = u_ViewProjection * world;',
+          '}'
+        ].join('\n'), modelFragment, 'the player\'s own shader');
+        // --- The sun's shadows ------------------------------------------------------------------
+        //
+        // As Wallpaper Engine draws them for a light that casts shadows: what casts them is drawn
+        // as the light sees it, nearest only, and every lit point asks whether something nearer
+        // to the light stands in the way. One map around the camera, as far as the light's nearer
+        // cascades reach.
+        var SHADOW_SIZE = 2048;
+        var shadowVertex = [
+          '#version 300 es',
+          'in vec3 a_Position;',
+          'in vec4 a_Bones;',
+          'in vec4 a_Weights;',
+          'uniform mat4 u_Model;',
+          'uniform mat4 u_LightViewProjection;',
+          'uniform int u_Skinned;',
+          'uniform mat4 u_Skin[' + MAX_SKIN_BONES + '];',
+          'void main() {',
+          '  vec4 place = vec4(a_Position, 1.0);',
+          '  if (u_Skinned == 1) {',
+          '    float total = a_Weights.x + a_Weights.y + a_Weights.z + a_Weights.w;',
+          '    vec4 w = total > 0.0001 ? a_Weights / total : vec4(1.0, 0.0, 0.0, 0.0);',
+          '    place = (u_Skin[int(a_Bones.x)] * w.x + u_Skin[int(a_Bones.y)] * w.y + u_Skin[int(a_Bones.z)] * w.z + u_Skin[int(a_Bones.w)] * w.w) * place;',
+          '  }',
+          '  gl_Position = u_LightViewProjection * (u_Model * place);',
+          '}'
+        ].join('\n');
+        var shadowProgram = link(shadowVertex, [
+          '#version 300 es',
+          'precision highp float;',
+          'out vec4 color;',
+          'void main() {',
+          '  vec4 e = fract(gl_FragCoord.z * vec4(1.0, 255.0, 65025.0, 16581375.0));',
+          '  color = e - e.yzww * vec4(1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0, 0.0);',
+          '}'
         ].join('\n'), 'the player\'s own shader');
+        var shadowMap = null, shadowFrame = -1, shadowState = null;
+
+        // The light that casts shadows, if the scene has one that shows: the first sun.
+        function shadowLight() {
+          for (var index = 0; index < objects.length; index++) {
+            var thing = objects[index];
+            if (thing.lightKind === 'directional' && flag(plain(thing.said.castshadow), false) && standing(thing, true).visible) return thing;
+          }
+          return null;
+        }
+        // Draws what casts shadows as the light sees it, once a frame; what is drawn after it
+        // binds its own target again.
+        function ensureShadows() {
+          if (shadowFrame === frames) return shadowState;
+          shadowFrame = frames;
+          shadowState = null;
+          var sun = inDepth && shadowProgram ? shadowLight() : null;
+          if (!sun) return null;
+          if (!shadowMap) {
+            shadowMap = { texture: newTexture(true, false), framebuffer: gl.createFramebuffer(), depth: gl.createRenderbuffer() };
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SHADOW_SIZE, SHADOW_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+            gl.bindRenderbuffer(gl.RENDERBUFFER, shadowMap.depth);
+            gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, SHADOW_SIZE, SHADOW_SIZE);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, shadowMap.framebuffer);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, shadowMap.texture, 0);
+            gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, shadowMap.depth);
+          }
+          var m = standing(sun, true).matrix;
+          var way = [m[0], m[1], m[2]], length = Math.hypot(way[0], way[1], way[2]) || 1;
+          way = way.map(function (part) { return part / length; });
+          var reach = Math.max(1, number(plain(sun.said.cascadedistance1), number(plain(sun.said.cascadedistance0), 25)));
+          var centre = eyePlace();
+          var from = [centre[0] - way[0] * reach * 2, centre[1] - way[1] * reach * 2, centre[2] - way[2] * reach * 2];
+          var up = Math.abs(way[1]) > 0.95 ? [0, 0, 1] : [0, 1, 0];
+          var look = Mat4.lookAt(new Vec3(from[0], from[1], from[2]), new Vec3(centre[0], centre[1], centre[2]), new Vec3(up[0], up[1], up[2])).m;
+          var far = reach * 4;
+          var box = [1 / reach, 0, 0, 0, 0, 1 / reach, 0, 0, 0, 0, -2 / far, 0, 0, 0, -1, 1];
+          var matrix = times4(box, look);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, shadowMap.framebuffer);
+          gl.viewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
+          gl.disable(gl.BLEND);
+          gl.enable(gl.DEPTH_TEST);
+          gl.depthFunc(gl.LEQUAL);
+          gl.depthMask(true);
+          gl.clearColor(1, 1, 1, 1);
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+          gl.useProgram(shadowProgram.program);
+          function at(name) { var uniform = shadowProgram.uniforms[name]; return uniform ? uniform.location : null; }
+          gl.uniformMatrix4fv(at('u_LightViewProjection'), false, new Float32Array(matrix));
+          objects.forEach(function (thing) {
+            if (!thing.drawShadow || flag(plain(thing.said.castshadow), true) === false) return;
+            var stands = standing(thing);
+            if (!stands.visible) return;
+            thing.drawShadow(stands.matrix, at);
+          });
+          gl.bindVertexArray(null);
+          gl.disable(gl.DEPTH_TEST);
+          shadowState = { matrix: matrix, texture: shadowMap.texture };
+          return shadowState;
+        }
+        // Hands the shadows to a program that lights.
+        function useShadows(at, unit) {
+          var shadows = shadowState;
+          gl.uniform1i(at('u_Shadows'), shadows ? 1 : 0);
+          if (!shadows) return;
+          gl.uniformMatrix4fv(at('u_ShadowMatrix'), false, new Float32Array(shadows.matrix));
+          gl.uniform2f(at('u_ShadowTexel'), 1 / SHADOW_SIZE, 1 / SHADOW_SIZE);
+          gl.activeTexture(gl.TEXTURE0 + unit);
+          gl.bindTexture(gl.TEXTURE_2D, shadows.texture);
+          gl.uniform1i(at('u_ShadowMap'), unit);
+          gl.activeTexture(gl.TEXTURE0);
+        }
+
 
         // The lights of the scene as they are now, for the models: at most so many, the strongest.
         function sceneLights() {
@@ -5659,8 +5866,10 @@ public enum WallpaperEngineRuntime {
             var m = stands.matrix;
             var shade = thing.state.color || [1, 1, 1];
             var strength = number((thing.state.intensity || [])[0], 1);
-            // Which way it shines: down its own z axis.
-            var aim = [-m[8], -m[9], -m[10]];
+            // Which way it shines: a sun along its own x axis — the way the light of the Sonic
+            // scenes falls in Wallpaper Engine's videos of them, from above where their scripts
+            // turn it — a spot down its own z axis.
+            var aim = thing.lightKind === 'directional' ? [m[0], m[1], m[2]] : [-m[8], -m[9], -m[10]];
             var length = Math.sqrt(aim[0] * aim[0] + aim[1] * aim[1] + aim[2] * aim[2]) || 1;
             aim = aim.map(function (part) { return part / length; });
             list.push({
@@ -5684,20 +5893,294 @@ public enum WallpaperEngineRuntime {
             return [2 / w, 0, 0, 0, 0, -2 / h, 0, 0, 0, 0, -1 / far, 0,
                     -1 - 2 * surface.left / w, 1 + 2 * surface.bottom / h, 0, 1];
           }
-          // Through a camera of the scene, as wide as it sees.
-          var fov = (view().fov || number(general.perspectiveoverridefov, number(general.fov, 50))) * Math.PI / 180;
-          var away = (sceneHeight / 2) / Math.tan(fov / 2);
-          var near = Math.max(0.01, number(general.nearz, 0.01)), f = 1 / Math.tan(fov / 2), aspect = w / h;
+          // A scene in three dimensions, seen through its camera: the last camera object that
+          // shows, where it stands — it may hang on what moves it — looking down its own −z; else
+          // the scene's own eye, looking at its centre. As wide as the camera sees, up and down.
+          var shot = activeCamera();
+          var fov = ((shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) || number(general.perspectiveoverridefov, number(general.fov, 50))) * Math.PI / 180;
+          var near = Math.max(0.0001, number(general.nearz, 0.01)), f = 1 / Math.tan(fov / 2), aspect = w / h;
           var lens = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
-          var look = Mat4.lookAt(new Vec3(sceneWidth / 2, sceneHeight / 2, away), new Vec3(sceneWidth / 2, sceneHeight / 2, 0), new Vec3(0, 1, 0)).m;
+          var look;
+          if (shot) {
+            look = m4invert(standing(shot, true).matrix);
+          } else {
+            var eyeSaid = (description.camera || {});
+            var eye = numbers(eyeSaid.eye, 3, 0), centre = numbers(eyeSaid.center, 3, 0), up = numbers(eyeSaid.up, 3, 0);
+            if (!eyeSaid.eye) { eye = [0, 0, 1]; centre = [0, 0, 0]; }
+            if (!(up[0] || up[1] || up[2])) up = [0, 1, 0];
+            look = Mat4.lookAt(new Vec3(eye[0], eye[1], eye[2]), new Vec3(centre[0], centre[1], centre[2]), new Vec3(up[0], up[1], up[2])).m;
+          }
           var seen = times4(lens, look);
           [1, 5, 9, 13].forEach(function (index) { seen[index] = -seen[index]; });
           return seen;
         }
 
+        // --- Models whose corners hang on bones ----------------------------------------------
+        //
+        // A character that walks, a stage that moves: corners in three dimensions, each moved by
+        // up to four bones; the bones posed, frame by frame, by the model's animations, in the
+        // layers the scene sets — one that sets the pose, others that add to it.
+
+        // Matrices of four by four, column by column, as plain lists: fast enough for every bone
+        // of every frame.
+        function m4mul(a, b) {
+          var out = new Array(16);
+          for (var c = 0; c < 4; c++) {
+            for (var r = 0; r < 4; r++) {
+              out[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+            }
+          }
+          return out;
+        }
+        function m4invert(m) {
+          var inv = new Array(16);
+          inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+          inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+          inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+          inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+          inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+          inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+          inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+          inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+          inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+          inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+          inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+          inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+          inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+          inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+          inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+          inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+          var det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+          if (Math.abs(det) < 1e-12) return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+          return inv.map(function (v) { return v / det; });
+        }
+        // Place, turn (about x, then y, then z) and scale, as a matrix.
+        function m4pose(p) {
+          var cx = Math.cos(p[3]), sx = Math.sin(p[3]), cy = Math.cos(p[4]), sy = Math.sin(p[4]), cz = Math.cos(p[5]), sz = Math.sin(p[5]);
+          // R = Rz · Ry · Rx
+          var r00 = cz * cy, r01 = cz * sy * sx - sz * cx, r02 = cz * sy * cx + sz * sx;
+          var r10 = sz * cy, r11 = sz * sy * sx + cz * cx, r12 = sz * sy * cx - cz * sx;
+          var r20 = -sy, r21 = cy * sx, r22 = cy * cx;
+          return [r00 * p[6], r10 * p[6], r20 * p[6], 0, r01 * p[7], r11 * p[7], r21 * p[7], 0, r02 * p[8], r12 * p[8], r22 * p[8], 0, p[0], p[1], p[2], 1];
+        }
+        // A matrix as place, turn and scale, the way `m4pose` makes one.
+        function m4unpose(m) {
+          var sx = Math.hypot(m[0], m[1], m[2]) || 1, sy = Math.hypot(m[4], m[5], m[6]) || 1, sz = Math.hypot(m[8], m[9], m[10]) || 1;
+          var r20 = m[2] / sx, r21 = m[6] / sy, r22 = m[10] / sz, r10 = m[1] / sx, r00 = m[0] / sx;
+          var y = Math.asin(Math.max(-1, Math.min(1, -r20)));
+          return [m[12], m[13], m[14], Math.atan2(r21, r22), y, Math.atan2(r10, r00), sx, sy, sz];
+        }
+
+        function buildSkinned(mesh, object, thing) {
+          var bones = (mesh.bones || []).map(function (bone) {
+            var rest = (bone.matrix || []).slice(0, 16);
+            if (rest.length < 16) rest = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+            return { name: bone.name || '', parent: number(bone.parent, -1), rest: rest, still: m4unpose(rest) };
+          });
+          if (!bones.length) bones = [{ name: '', parent: -1, rest: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], still: [0, 0, 0, 0, 0, 0, 1, 1, 1] }];
+          var count = Math.min(bones.length, MAX_SKIN_BONES);
+          // Where each bone is at rest in the model, and the way back from there.
+          var restWorld = [];
+          function worldAtRest(index, depth) {
+            if (restWorld[index]) return restWorld[index];
+            var bone = bones[index];
+            restWorld[index] = bone.parent >= 0 && bone.parent < bones.length && depth < 256 ? m4mul(worldAtRest(bone.parent, depth + 1), bone.rest) : bone.rest;
+            return restWorld[index];
+          }
+          var back = bones.map(function (bone, index) { return m4invert(worldAtRest(index, 0)); });
+
+          // The layers of animation, each with its clock.
+          var animations = mesh.animations || [];
+          var layers = (object.animationlayers || []).map(function (config) {
+            var wanted = number(plain(config.animation), -1);
+            var animation = animations.filter(function (each) { return each.id === wanted; })[0];
+            if (!animation) return null;
+            return { frames: numbersOf(animation.frames, Float32Array), frameCount: animation.frameCount, length: animation.length,
+                     fps: animation.fps || 30, mode: animation.mode, speed: number(plain(config.rate), 1),
+                     adds: flag(config.additive, false), blend: Math.max(0, Math.min(1, number(plain(config.blend), 1))),
+                     visible: plain(config.visible) !== false, frame: 0 };
+          }).filter(Boolean);
+          function sample(layer, index) {
+            var at = layer.frame, length = Math.max(1, layer.length);
+            if (layer.mode === 'mirror') { at = at % (length * 2); if (at > length) at = length * 2 - at; }
+            else if (layer.mode === 'single') at = Math.min(at, length);
+            else at = at % length;
+            var before = Math.min(Math.floor(at), layer.frameCount - 1), after = Math.min(before + 1, layer.frameCount - 1), share = at - before;
+            var one = (index * layer.frameCount + before) * 9, two = (index * layer.frameCount + after) * 9, out = [];
+            for (var k = 0; k < 9; k++) {
+              var a = layer.frames[one + k], b = layer.frames[two + k];
+              // A turn takes the short way round.
+              if (k >= 3 && k < 6) { while (b - a > Math.PI) b -= Math.PI * 2; while (a - b > Math.PI) b += Math.PI * 2; }
+              out.push(a + (b - a) * share);
+            }
+            return out;
+          }
+          var skin = new Float32Array(MAX_SKIN_BONES * 16);
+          for (var i = 0; i < MAX_SKIN_BONES; i++) skin[i * 16] = skin[i * 16 + 5] = skin[i * 16 + 10] = skin[i * 16 + 15] = 1;
+          var posed = -1;
+          // Every bone where the layers have it now, and how far each corner on it moves.
+          function pose() {
+            if (posed === frames) return;
+            posed = frames;
+            var base = layers.filter(function (layer) { return layer.visible && !layer.adds; })[0];
+            var world = [];
+            for (var index = 0; index < count; index++) {
+              var bone = bones[index];
+              var p = base && base.frameCount > 0 ? sample(base, index) : bone.still.slice();
+              layers.forEach(function (layer) {
+                if (!layer.visible || !layer.adds || !(layer.frameCount > 0)) return;
+                var q = sample(layer, index);
+                for (var k = 0; k < 6; k++) p[k] += (q[k] - bone.still[k]) * layer.blend;
+                for (var s = 6; s < 9; s++) p[s] *= 1 + (q[s] / (bone.still[s] || 1) - 1) * layer.blend;
+              });
+              var local = m4pose(p);
+              world[index] = bone.parent >= 0 && bone.parent < index ? m4mul(world[bone.parent], local)
+                           : (bone.parent >= 0 && world[bone.parent] ? m4mul(world[bone.parent], local) : local);
+              var moved = m4mul(world[index], back[index]);
+              for (var e = 0; e < 16; e++) skin[index * 16 + e] = moved[e];
+            }
+            thing.boneWorld = world;
+          }
+          thing.step = function (passed) {
+            layers.forEach(function (layer) { if (layer.visible) layer.frame += passed * layer.fps * layer.speed; });
+          };
+          thing.moving = layers.length > 0;
+
+          var low = [Infinity, Infinity, Infinity], high = [-Infinity, -Infinity, -Infinity];
+          var parts = (mesh.skinned || []).map(function (piece, number_) {
+            var corners = numbersOf(piece.corners, Float32Array);
+            var triangles = numbersOf(piece.triangles, Uint32Array);
+            var cornerCount = Math.floor(corners.length / 16);
+            if (!cornerCount || !triangles.length) return null;
+            for (var corner = 0; corner < cornerCount; corner += 7) {
+              for (var axis = 0; axis < 3; axis++) {
+                low[axis] = Math.min(low[axis], corners[corner * 16 + axis]);
+                high[axis] = Math.max(high[axis], corners[corner * 16 + axis]);
+              }
+            }
+            var materialName = number_ === 0 && object.material ? object.material : piece.material;
+            var material = json(String(materialName || '')) || {};
+            var pass = (material.passes || [])[0] || {};
+            var constants = {};
+            Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
+            var shape = gl.createVertexArray();
+            gl.bindVertexArray(shape);
+            gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+            gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
+            [[0, 3, 0], [8, 3, 12], [1, 2, 24], [9, 4, 32], [10, 4, 48]].forEach(function (a) {
+              gl.enableVertexAttribArray(a[0]);
+              gl.vertexAttribPointer(a[0], a[1], gl.FLOAT, false, 64, a[2]);
+            });
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
+            gl.bindVertexArray(null);
+            return {
+              shape: shape, length: triangles.length,
+              picture: (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null,
+              culls: key(String(pass.cullmode || 'normal')) !== 'nocull',
+              tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
+              writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
+              blending: key(String(pass.blending || 'normal')),
+              metallic: number(plain(constants.metallic), 0), roughness: number(plain(constants.roughness), 0.5),
+              lit: number((pass.combos || {}).LIGHTING, 1) !== 0,
+              // How much it shows, as its material says: a number, or what a script makes of it —
+              // a flame that shows only while the button is held.
+              alpha: constants.alpha === undefined ? null : live(constants.alpha, 1, 1, thing)
+            };
+          }).filter(Boolean);
+          if (!parts.length) return null;
+          var middle = [(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, (low[2] + high[2]) / 2];
+          thing.bounds = { middle: middle, radius: Math.hypot(high[0] - low[0], high[1] - low[1], high[2] - low[2]) / 2 };
+          // Where a bone of the model is in the scene, by name: what scripts and cameras ask.
+          thing.boneMatrix = function (name) {
+            pose();
+            for (var b = 0; b < count; b++) if (bones[b].name === name) return m4mul(standing(thing).matrix, thing.boneWorld[b]);
+            return null;
+          };
+          thing.drawShadow = function (matrix, at) {
+            pose();
+            gl.uniformMatrix4fv(at('u_Model'), false, new Float32Array(matrix));
+            gl.uniform1i(at('u_Skinned'), 1);
+            gl.uniformMatrix4fv(at('u_Skin[0]') || at('u_Skin'), false, skin);
+            gl.disable(gl.CULL_FACE);
+            parts.forEach(function (part) {
+              if (part.blending === 'additive' || !part.writes) return;
+              gl.bindVertexArray(part.shape);
+              gl.drawElements(gl.TRIANGLES, part.length, gl.UNSIGNED_INT, 0);
+            });
+          };
+          var white = null;
+          thing.draw = function () {
+            var stands = standing(thing);
+            if (!stands.visible || !skinnedProgram) return;
+            pose();
+            ensureShadows();
+            var target = surface.target;
+            depthOf(target);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+            gl.viewport(0, 0, target.width, target.height);
+            var program = skinnedProgram;
+            function at(name) { var uniform = program.uniforms[name]; return uniform ? uniform.location : null; }
+            gl.useProgram(program.program);
+            var model = stands.matrix;
+            gl.uniformMatrix4fv(at('u_Model'), false, new Float32Array(model));
+            gl.uniformMatrix4fv(at('u_ViewProjection'), false, new Float32Array(viewProjection()));
+            gl.uniformMatrix3fv(at('u_NormalMatrix'), false, new Float32Array(new Mat4(model).normalMatrix().m));
+            gl.uniformMatrix4fv(at('u_Skin[0]') || at('u_Skin'), false, skin);
+            useShadows(at, 3);
+            var tint = thing.state.color || [1, 1, 1];
+            gl.uniform4f(at('u_Tint'), tint[0], tint[1], tint[2], stands.alpha);
+            var ambient = numbers(plain(general.ambientcolor), 3, 0), sky = numbers(plain(general.skylightcolor), 3, 0);
+            gl.uniform3f(at('u_Ambient'), ambient[0], ambient[1], ambient[2]);
+            gl.uniform3f(at('u_Sky'), sky[0], sky[1], sky[2]);
+            var eyeAt = eyePlace();
+            gl.uniform3f(at('u_Eye'), eyeAt[0], eyeAt[1], eyeAt[2]);
+            var lights = sceneLights();
+            gl.uniform1i(at('u_LightCount'), lights.length);
+            if (lights.length) {
+              var places = [], shades = [], aims = [];
+              lights.forEach(function (light) { places.push.apply(places, light.place); shades.push.apply(shades, light.color); aims.push.apply(aims, light.aim); });
+              gl.uniform4fv(at('u_LightPlace'), new Float32Array(places));
+              gl.uniform4fv(at('u_LightColor'), new Float32Array(shades));
+              gl.uniform4fv(at('u_LightAim'), new Float32Array(aims));
+            }
+            gl.depthFunc(gl.LEQUAL);
+            gl.frontFace(gl.CW);
+            gl.enable(gl.BLEND);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.uniform1i(at('u_Texture'), 0);
+            parts.forEach(function (part) {
+              gl.uniform1f(at('u_Metallic'), part.metallic);
+              gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
+              gl.uniform1f(at('u_Roughness'), part.roughness);
+              var shown = part.alpha ? Math.max(0, Math.min(1, number((part.alpha.now || [1])[0], 1))) : 1;
+              if (!(shown > 0.001)) return;
+              gl.uniform4f(at('u_Tint'), tint[0], tint[1], tint[2], stands.alpha * shown);
+              var layer = part.picture && part.picture.ready !== false ? part.picture.layers[0] : null;
+              if (!layer) white = white || flat(255, 255, 255, 255);
+              gl.bindTexture(gl.TEXTURE_2D, (layer || white.layers[0]).texture);
+              gl.uniform1i(at('u_Channels'), layer ? (CHANNELS[part.picture.channels] || 0) : 0);
+              if (part.tests) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
+              gl.depthMask(part.writes);
+              if (part.culls) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);
+              if (part.blending === 'additive') gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
+              else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+              gl.bindVertexArray(part.shape);
+              gl.drawElements(gl.TRIANGLES, part.length, gl.UNSIGNED_INT, 0);
+            });
+            gl.bindVertexArray(null);
+            gl.disable(gl.DEPTH_TEST);
+            gl.disable(gl.CULL_FACE);
+            gl.frontFace(gl.CCW);
+            gl.depthMask(true);
+          };
+          return thing;
+        }
+
         function buildModel(object, thing) {
           var name = String(plain(object.model) || '');
           var mesh = puppets[key(name)];
+          if (mesh && mesh.skinned && mesh.skinned.length) return buildSkinned(mesh, object, thing);
           if (!mesh || !mesh.solid || !modelProgram) {
             note('“' + thing.name + '”: its model, ' + name + ', ' + (mesh ? 'has no faces to light' : 'is not in the scene') + '; it is left out');
             return null;
@@ -5757,10 +6240,21 @@ public enum WallpaperEngineRuntime {
             }
           });
           thing.bounds = { middle: middle, radius: radius };
+          thing.drawShadow = function (matrix, at) {
+            gl.uniformMatrix4fv(at('u_Model'), false, new Float32Array(matrix));
+            gl.uniform1i(at('u_Skinned'), 0);
+            gl.disable(gl.CULL_FACE);
+            parts.forEach(function (part) {
+              if (part.blending === 'additive' || !part.writes) return;
+              gl.bindVertexArray(part.shape);
+              gl.drawElements(gl.TRIANGLES, part.length, gl.UNSIGNED_SHORT, 0);
+            });
+          };
           var white = null;
           thing.draw = function () {
             var stands = standing(thing);
             if (!stands.visible) return;
+            ensureShadows();
             var target = surface.target;
             depthOf(target);
             gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
@@ -5773,12 +6267,14 @@ public enum WallpaperEngineRuntime {
             gl.uniformMatrix4fv(at('u_Model'), false, new Float32Array(model));
             gl.uniformMatrix4fv(at('u_ViewProjection'), false, new Float32Array(viewProjection()));
             gl.uniformMatrix3fv(at('u_NormalMatrix'), false, new Float32Array(new Mat4(model).normalMatrix().m));
+            useShadows(at, 3);
             var tint = thing.state.color || [1, 1, 1];
             gl.uniform4f(at('u_Tint'), tint[0], tint[1], tint[2], stands.alpha);
-            var ambient = numbers(general.ambientcolor, 3, 0), sky = numbers(general.skylightcolor, 3, 0);
+            var ambient = numbers(plain(general.ambientcolor), 3, 0), sky = numbers(plain(general.skylightcolor), 3, 0);
             gl.uniform3f(at('u_Ambient'), ambient[0], ambient[1], ambient[2]);
             gl.uniform3f(at('u_Sky'), sky[0], sky[1], sky[2]);
-            gl.uniform3f(at('u_Eye'), sceneWidth / 2, sceneHeight / 2, Math.max(sceneWidth, sceneHeight) * 4);
+            var eyeAt = eyePlace();
+            gl.uniform3f(at('u_Eye'), eyeAt[0], eyeAt[1], eyeAt[2]);
             var lights = sceneLights();
             gl.uniform1i(at('u_LightCount'), lights.length);
             if (lights.length) {
@@ -5906,6 +6402,24 @@ public enum WallpaperEngineRuntime {
         // of the scene that shows — of several, the last in the scene's list, as in Wallpaper
         // Engine — moved and zoomed further by a script and by the scene's own zoom.
         var viewOnce = { frame: -1 };
+        // The camera object the scene is seen through: the last one that shows.
+        // Where the eye is, for how light glints: the camera of a scene in three dimensions, or in
+        // front of the middle of a flat one.
+        function eyePlace() {
+          if (inDepth) {
+            var shot = activeCamera();
+            if (shot) { var m = standing(shot, true).matrix; return [m[12], m[13], m[14]]; }
+            var eye = numbers((description.camera || {}).eye, 3, 0);
+            return (description.camera || {}).eye ? eye : [0, 0, 1];
+          }
+          return [sceneWidth / 2, sceneHeight / 2, Math.max(sceneWidth, sceneHeight) * 4];
+        }
+        function activeCamera() {
+          for (var index = things.length - 1; index >= 0; index--) {
+            if (things[index].isCamera && showsAll(things[index])) return things[index];
+          }
+          return null;
+        }
         function view() {
           if (viewOnce.frame === frames) return viewOnce;
           // While the scene is being made, before scripts can move the camera, there is no frame yet.
@@ -5966,7 +6480,7 @@ public enum WallpaperEngineRuntime {
               // Engine puts it: at the scene's corner, not in its middle, where it is drawn — a
               // layer over the whole screen, say, whose pictures are placed by the scene's pixels.
               var base = up.matrix;
-              if (parent.parent === undefined && !isSet(parent.said && parent.said.origin)) {
+              if (!inDepth && parent.parent === undefined && !isSet(parent.said && parent.said.origin)) {
                 base = base.slice();
                 base[12] -= sceneWidth / 2;
                 base[13] -= sceneHeight / 2;
@@ -5988,7 +6502,7 @@ public enum WallpaperEngineRuntime {
               matrix[12] += moved[0] + (shake ? shake.x : 0);
               matrix[13] += moved[1] + (shake ? shake.y : 0);
             }
-            var seen = view();
+            var seen = inDepth ? { x: 0, y: 0, zoom: 1 } : view();
             if (seen.x || seen.y || seen.zoom !== 1) {
               // Where the camera is: the scene seen from there, nearer or further.
               var cx = sceneWidth / 2, cy = sceneHeight / 2;
@@ -6652,7 +7166,7 @@ public enum WallpaperEngineRuntime {
             '      } else {',
             '        toLight = normalize(-u_LightPlace[i].xyz);',
             '      }',
-            '      light += shade(world, toLight, base.rgb, u_LightColor[i].rgb * left * PI, f0, rough, metal);',
+            '      light += shade(world, toLight, base.rgb, u_LightColor[i].rgb * left, f0, rough, metal);',
             '    }',
             '    if (u_Maps.w > 0.5) light = max(light, u_Emissive * base.rgb * masks.a);',
             '    result = max(vec3(0.001), u_Ambient) * base.rgb + light;',

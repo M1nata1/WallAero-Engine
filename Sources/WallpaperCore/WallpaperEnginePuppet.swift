@@ -94,6 +94,18 @@ struct WallpaperEnginePuppet {
         var solid: [Float]
         var triangles: [UInt16]
     }
+    /// A model in three dimensions whose corners hang on bones — a character that walks, a
+    /// stage — every part of it: nil for anything else.
+    var skinned: [SkinnedPiece]?
+
+    struct SkinnedPiece: Equatable {
+        var material: String
+        /// For every corner: place (3), the way it faces (3), place in the picture (2), four
+        /// bones and their four weights.
+        var corners: [Float]
+        var triangles: [UInt32]
+    }
+
     var triangles: [UInt16]
     var bones: [Bone]
     /// In the order they are drawn; empty when the file does not say, and the triangles are
@@ -182,6 +194,67 @@ struct WallpaperEnginePuppet {
         (parts, clips) = Self.layout(in: data, from: mesh.end, before: bonesAt, indexCount: mesh.triangles.count)
         attachments = Self.attachments(in: data, from: reader.offset, boneCount: Int(boneCount))
         animations = Self.animations(in: data, from: reader.offset, boneCount: Int(boneCount))
+        skinned = Self.skinnedPieces(in: data, before: bonesAt, boneCount: Int(boneCount))
+    }
+
+    /// The parts of a model whose corners hang on bones, read whole, one after another from
+    /// the head of the file: the material, a number whose lowest bit says the triangles' corners
+    /// are counted in four bytes rather than two (a part of more than 65 536 corners), the box
+    /// the part fills, a number for what its corners hold — bones among it — and how many
+    /// bytes they take; the corners, eighty bytes each (place, the way it faces, the way it
+    /// lies, four bones, four weights, place in the picture); the triangles; and what follows
+    /// the triangles of a puppet (see `layout`), here always empty. Nil for any other model.
+    private static func skinnedPieces(in data: Data, before end: Int, boneCount: Int) -> [SkinnedPiece]? {
+        var reader = BinaryReader(data)
+        guard reader.textToZero()?.hasPrefix("MDLV") == true, reader.uint32() != nil, reader.uint32() != nil,
+              let count = reader.uint32(), count >= 1, count <= 4096 else { return nil }
+        var pieces: [SkinnedPiece] = []
+        for _ in 0..<count {
+            guard let material = reader.textToZero(atMost: 1024), let kind = reader.uint32(), reader.skip(24),
+                  let format = reader.uint32(), format & 0x0180_0000 != 0, let cornerBytes = reader.uint32(),
+                  cornerBytes % 80 == 0, reader.offset + Int(cornerBytes) <= end else { return nil }
+            let cornerCount = Int(cornerBytes) / 80
+            var corners: [Float] = []
+            corners.reserveCapacity(cornerCount * 16)
+            let start = reader.offset
+            let ok: Bool = data.withUnsafeBytes { raw in
+                let base = raw.baseAddress!.advanced(by: start)
+                for corner in 0..<cornerCount {
+                    let at = base.advanced(by: corner * 80)
+                    func float(_ offset: Int) -> Float { Float(bitPattern: UInt32(littleEndian: at.loadUnaligned(fromByteOffset: offset, as: UInt32.self))) }
+                    func whole(_ offset: Int) -> UInt32 { UInt32(littleEndian: at.loadUnaligned(fromByteOffset: offset, as: UInt32.self)) }
+                    for offset in [0, 4, 8, 12, 16, 20, 72, 76] { corners.append(float(offset)) }
+                    for slot in 0..<4 {
+                        let bone = whole(40 + slot * 4)
+                        if Int(bone) >= boneCount { return false }
+                        corners.append(Float(bone))
+                    }
+                    for slot in 0..<4 { corners.append(float(56 + slot * 4)) }
+                }
+                return true
+            }
+            guard ok, reader.skip(Int(cornerBytes)), let triangleBytes = reader.uint32(), reader.offset + Int(triangleBytes) <= end else { return nil }
+            let wide = kind & 1 != 0
+            let size = wide ? 4 : 2, triangleStart = reader.offset
+            var triangles: [UInt32] = []
+            triangles.reserveCapacity(Int(triangleBytes) / size)
+            let inside: Bool = data.withUnsafeBytes { raw in
+                let base = raw.baseAddress!.advanced(by: triangleStart)
+                for index in 0..<(Int(triangleBytes) / size) {
+                    let corner = wide ? UInt32(littleEndian: base.loadUnaligned(fromByteOffset: index * 4, as: UInt32.self))
+                                      : UInt32(UInt16(littleEndian: base.loadUnaligned(fromByteOffset: index * 2, as: UInt16.self)))
+                    if Int(corner) >= cornerCount { return false }
+                    triangles.append(corner)
+                }
+                return true
+            }
+            guard inside, reader.skip(Int(triangleBytes)) else { return nil }
+            // What a puppet keeps after its triangles; nothing, for such a model.
+            guard let first = reader.bytes(1), first.first == 0, let second = reader.bytes(1), second.first == 0,
+                  let clips = reader.uint32(), clips == 0 else { return nil }
+            pieces.append(SkinnedPiece(material: material, corners: corners, triangles: triangles))
+        }
+        return pieces
     }
 
     /// The parts after the triangles, in later versions: a flag and, if it is set, blocks this
@@ -483,6 +556,15 @@ struct WallpaperEnginePuppet {
         // A model in three dimensions, and the material its file names.
         if let solid { table["solid"] = packed(solid) }
         if let material { table["material"] = material }
+        if let skinned {
+            table["skinned"] = skinned.map { piece -> [String: Any] in
+                var triangleData = Data(capacity: piece.triangles.count * 4)
+                for corner in piece.triangles {
+                    withUnsafeBytes(of: corner.littleEndian) { triangleData.append(contentsOf: $0) }
+                }
+                return ["material": piece.material, "corners": packed(piece.corners), "triangles": triangleData.base64EncodedString()]
+            }
+        }
         if !pieces.isEmpty {
             table["pieces"] = pieces.map { piece -> [String: Any] in
                 var triangleData = Data(capacity: piece.triangles.count * 2)
