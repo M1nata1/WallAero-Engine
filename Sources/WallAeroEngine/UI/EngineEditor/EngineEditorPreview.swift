@@ -7,22 +7,61 @@ import WallpaperCore
 /// changes in the editor is handed to the player as it changes, before it is written.
 @MainActor
 final class EngineEditorPreviewController {
-    let view: WebWallpaperView
+    /// What the preview is shown in: the scene drawn by the app, or its page in Chromium.
+    let view: NSView
+    private var webView: WebWallpaperView?
+    private var sceneView: NativeSceneView?
+    private var overlay: EngineEditorOverlay?
     private weak var model: EngineEditorModel?
     private var colorsObserver: NSObjectProtocol?
 
     init(model: EngineEditorModel) {
         self.model = model
-        view = WebWallpaperView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
-        view.editorScript = Self.editorScript
-        view.hearsSound = true
-        view.onEditorMessage = { [weak self] message in
-            self?.handle(message)
+        let frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        // A scene the app draws on the desktop it draws here too, with the editor's frame over it.
+        if ScreenWallpaper.drawsScenesNatively, SceneProject.isNativelyPlayable(model.folder) {
+            let container = NSView(frame: frame)
+            let scene = NativeSceneView(frame: frame)
+            scene.hearsSound = true
+            scene.setAudio(muted: true, volume: 0)
+            scene.setPlaying(true, rate: 1)
+            let overlay = EngineEditorOverlay(frame: frame)
+            container.addSubview(scene)
+            container.addSubview(overlay)
+            view = container
+            sceneView = scene
+            self.overlay = overlay
+            overlay.onSelect = { [weak model] id in model?.selection = id }
+            overlay.onChange = { [weak model] id, patch in model?.applyFromPreview(object: id, patch: patch) }
+            overlay.onCommit = { [weak model] in model?.endGesture() }
+            scene.onRestart = { [weak self] in self?.sceneRestarted() }
+            if scene.show(folder: model.folder, watchingForChanges: false) {
+                model.preview = self
+                return
+            }
+            container.subviews.forEach { $0.removeFromSuperview() }
+            sceneView = nil
+            self.overlay = nil
+            let web = WebWallpaperView(frame: frame)
+            container.addSubview(web)
+            web.autoresizingMask = [.width, .height]
+            webView = web
+        } else {
+            let web = WebWallpaperView(frame: frame)
+            view = web
+            webView = web
         }
-        view.setAudio(muted: true, volume: 0)
-        view.setPlaying(true, rate: 1)
-        if let project = WebProject(folder: model.folder) {
-            view.show(project)
+        if let webView {
+            webView.editorScript = Self.editorScript
+            webView.hearsSound = true
+            webView.onEditorMessage = { [weak self] message in
+                self?.handle(message)
+            }
+            webView.setAudio(muted: true, volume: 0)
+            webView.setPlaying(true, rate: 1)
+            if let project = WebProject(folder: model.folder) {
+                webView.show(project)
+            }
         }
         model.preview = self
         colorsObserver = NotificationCenter.default.addObserver(forName: NSColor.systemColorsDidChangeNotification,
@@ -37,11 +76,62 @@ final class EngineEditorPreviewController {
         }
     }
 
+    /// A new player: the frame asks it, and the editor learns what the scene has once it plays.
+    private func sceneRestarted() {
+        guard let overlay, let player = sceneView?.scenePlayer else { return }
+        overlay.player = player
+        player.onEngineStarted = { [weak self] in self?.engineStarted() }
+    }
+
+    private func engineStarted() {
+        guard let model, let overlay, let text = overlay.describe(),
+              let description = try? JSONDecoder().decode(EngineSceneDescription.self, from: Data(text.utf8)) else { return }
+        model.playerDidStart(description)
+        overlay.selectObject(model.selection)
+    }
+
+    /// Returns once the preview has loaded; a scene the app draws starts at once.
+    func waitUntilLoaded() async {
+        await webView?.waitUntilLoaded()
+    }
+
+    /// Whether the scene is drawn by the app, for tests.
+    var drawsNatively: Bool { sceneView != nil }
+
+    /// The mouse pressed at one point of the preview, dragged to another and let go, each as
+    /// a share of the preview's width and height from its top left, for tests.
+    func drag(from startShare: CGPoint, to endShare: CGPoint) {
+        guard let overlay, let window = overlay.window else { return }
+        let size = overlay.bounds.size
+        let start = CGPoint(x: startShare.x * size.width, y: startShare.y * size.height)
+        let end = CGPoint(x: endShare.x * size.width, y: endShare.y * size.height)
+        func event(_ type: NSEvent.EventType, _ at: CGPoint) -> NSEvent? {
+            let inWindow = overlay.convert(at, to: nil)
+            return NSEvent.mouseEvent(with: type, location: inWindow, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        }
+        if let down = event(.leftMouseDown, start) { overlay.mouseDown(with: down) }
+        for step in 1...8 {
+            let share = CGFloat(step) / 8
+            let at = CGPoint(x: start.x + (end.x - start.x) * share, y: start.y + (end.y - start.y) * share)
+            if let moved = event(.leftMouseDragged, at) { overlay.mouseDragged(with: moved) }
+        }
+        if let up = event(.leftMouseUp, end) { overlay.mouseUp(with: up) }
+    }
+
+    /// A picture of the preview as it is now.
+    func snapshot() async -> CGImage? {
+        if let sceneView { return sceneView.snapshot() }
+        return await webView?.snapshot()
+    }
+
     private static var editorScript: String {
         SceneEditorScript.source + "\nwindow.wallaeroEditor.setAccent('\(NSColor.controlAccentColor.cssHex)');"
     }
 
     private func showAccentColor() {
+        overlay?.needsDisplay = true
+        guard let view = webView else { return }
         view.editorScript = Self.editorScript
         view.evaluate("window.wallaeroEditor && window.wallaeroEditor.setAccent('\(NSColor.controlAccentColor.cssHex)')")
     }
@@ -54,6 +144,23 @@ final class EngineEditorPreviewController {
             changed[Self.key(name)] = value.text
         }
         let scene = document.scene.text
+        if let player = sceneView?.scenePlayer {
+            // What the frame showed while an object was dragged is in the scene now.
+            overlay?.forgetChanges()
+            player.editorUpdate(settings: nil, changes: [:])
+            if changed.isEmpty {
+                player.setSceneFile(scene)
+            } else {
+                changed["scene.json"] = scene
+                player.setFiles(changed)
+            }
+            if let text = overlay?.describe(),
+               let description = try? JSONDecoder().decode(EngineSceneDescription.self, from: Data(text.utf8)) {
+                model?.playerDidStart(description)
+            }
+            return
+        }
+        guard let view = webView else { return }
         let call: String
         if changed.isEmpty {
             call = "window.wallaero.setEngineScene(\(Self.literal(scene)))"
@@ -77,15 +184,24 @@ final class EngineEditorPreviewController {
 
     /// The scene's files were laid out anew: they are read again.
     func reload() {
-        view.evaluate("window.wallaero && window.wallaero.reloadEngine && window.wallaero.reloadEngine()")
+        if let player = sceneView?.scenePlayer {
+            player.reloadFiles()
+            return
+        }
+        webView?.evaluate("window.wallaero && window.wallaero.reloadEngine && window.wallaero.reloadEngine()")
     }
 
     func select(_ id: Int?) {
-        view.evaluate("window.wallaeroEditor && window.wallaeroEditor.selectObject(\(id.map(String.init) ?? "null"))")
+        if let overlay {
+            if overlay.object != id { overlay.selectObject(id) }
+            return
+        }
+        webView?.evaluate("window.wallaeroEditor && window.wallaeroEditor.selectObject(\(id.map(String.init) ?? "null"))")
     }
 
     func setPlaying(_ playing: Bool) {
-        view.setPlaying(playing, rate: 1)
+        webView?.setPlaying(playing, rate: 1)
+        sceneView?.setPlaying(playing, rate: 1)
     }
 
     private func handle(_ message: [String: Any]) {
@@ -146,8 +262,8 @@ struct EngineEditorPreview: View {
 }
 
 private struct EnginePreviewHost: NSViewRepresentable {
-    let view: WebWallpaperView
+    let view: NSView
 
-    func makeNSView(context: Context) -> WebWallpaperView { view }
-    func updateNSView(_ nsView: WebWallpaperView, context: Context) {}
+    func makeNSView(context: Context) -> NSView { view }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }

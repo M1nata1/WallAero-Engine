@@ -1,7 +1,8 @@
 import AppKit
 import CEFHost
 
-/// Chromium, which draws the web wallpapers: started once, when the app starts.
+/// Chromium, which draws the web pages among the wallpapers: started once, when the first one
+/// is to be shown.
 @MainActor
 enum Chromium {
     private(set) static var isRunning = false
@@ -22,7 +23,8 @@ enum Chromium {
     }
 
     static func stop() {
-        CEFRuntime.shutdown()
+        // Never started: nothing to shut down.
+        if isRunning { CEFRuntime.shutdown() }
         isRunning = false
         if let temporaryCache {
             try? FileManager.default.removeItem(at: temporaryCache)

@@ -22,6 +22,9 @@ public final class MetalScenePlayer {
     public var frameRate: Int = 30 { didSet { restartClock() } }
     /// Frames a second of the screen the scene is on, for a `frameRate` of nought.
     public var screenRate: Int = 60 { didSet { restartClock() } }
+    /// Set before `start` when the scene is drawn for the lock screen: what is not to be
+    /// seen there is left out.
+    public var rendersStill = false
     /// Called when the scene's first frame is on the screen.
     public var onFirstFrame: (() -> Void)?
 
@@ -107,6 +110,7 @@ public final class MetalScenePlayer {
         context.evaluateScript(MetalSceneScripts.environment, withSourceURL: URL(string: "wallaero://environment.js"))
         context.evaluateScript(MetalSceneScripts.metalGL, withSourceURL: URL(string: "wallaero://metalgl.js"))
         call("__wallaeroHost.apply", [hostSettings])
+        if rendersStill { context.evaluateScript("window.wallaeroStill = true;") }
         applySize()
         let table = folder.appendingPathComponent("engine/files.js")
         guard let files = try? String(contentsOf: table, encoding: .utf8) else {
@@ -164,7 +168,8 @@ public final class MetalScenePlayer {
 
     /// Where the whole canvas is in the view, in points from the top left; parts of it may be
     /// cut off. As the scene player works it out for the pointer (`shownAt`).
-    private func canvasFrame(canvas: CGSize) -> CGRect {
+    private func canvasFrame(canvas: CGSize, in size: CGSize? = nil) -> CGRect {
+        let size = size ?? self.size
         guard canvas.width > 0, canvas.height > 0 else { return CGRect(origin: .zero, size: size) }
         if fit == "fill" { return CGRect(origin: .zero, size: size) }
         let by = fit == "contain" ? min(size.width / canvas.width, size.height / canvas.height)
@@ -182,7 +187,99 @@ public final class MetalScenePlayer {
         frame.origin.y = size.height - frame.maxY
         metalLayer.frame = frame
         metalLayer.contentsScale = scale
+        for mirror in mirrors { place(mirror) }
         CATransaction.commit()
+        gl.refreshMirrors()
+    }
+
+    // MARK: Other screens
+
+    /// A screen that shows the scene as this one draws it: its view's layer, and its size.
+    private final class Mirror {
+        let layer = CALayer()
+        let metal = CAMetalLayer()
+        var size = CGSize(width: 1, height: 1)
+    }
+    private var mirrors: [Mirror] = []
+
+    /// A layer for another screen's view that shows this scene, drawn once for both: each
+    /// frame is copied there as it is, and laid in that view as it is laid in this one.
+    public func makeMirror() -> CALayer {
+        let mirror = Mirror()
+        mirror.layer.masksToBounds = true
+        mirror.layer.isOpaque = true
+        mirror.layer.backgroundColor = layer.backgroundColor
+        mirror.metal.device = gl.device
+        mirror.metal.pixelFormat = metalLayer.pixelFormat
+        mirror.metal.framebufferOnly = false
+        mirror.metal.contentsGravity = .resize
+        mirror.metal.isOpaque = true
+        mirror.layer.addSublayer(mirror.metal)
+        mirrors.append(mirror)
+        gl.mirrors = mirrors.map(\.metal)
+        place(mirror)
+        gl.refreshMirrors()
+        return mirror.layer
+    }
+
+    public func setMirrorSize(_ layer: CALayer, _ size: CGSize, scale: CGFloat) {
+        guard let mirror = mirrors.first(where: { $0.layer === layer }) else { return }
+        mirror.size = size
+        mirror.metal.contentsScale = scale
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        place(mirror)
+        CATransaction.commit()
+        gl.refreshMirrors()
+    }
+
+    // MARK: The editor
+
+    /// Called each time the scene has been played anew and can say what it has.
+    public var onEngineStarted: (() -> Void)?
+
+    /// Tells the scene its settings and what the editor changed of it.
+    public func editorUpdate(settings: [String: Any]?, changes: [String: Any]) {
+        call("__editor.update", [settings.map { $0 as Any } ?? NSNull(), changes])
+    }
+
+    /// The scene file as the editor has just written it.
+    public func setSceneFile(_ text: String) { call("__editor.setScene", [text]) }
+
+    /// Other files as the editor has just written them, by the names the player knows them by.
+    public func setFiles(_ files: [String: String]) { call("__editor.setFiles", [files]) }
+
+    /// The scene's files laid out anew: read again, and the scene played anew.
+    public func reloadFiles() {
+        let table = folder.appendingPathComponent("engine/files.js")
+        guard let files = try? String(contentsOf: table, encoding: .utf8) else { return }
+        context.evaluateScript(files, withSourceURL: table)
+        call("__replay")
+    }
+
+    /// One of the player's questions for the editor — `describe`, `hit`, `outline`, `placeAt` —
+    /// and its answer as JSON.
+    public func ask(_ name: String, _ arguments: [Any] = []) -> Any? {
+        guard let text = call("__editor.call", [name] + arguments)?.toString(), text != "null", text != "undefined",
+              let data = text.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+    }
+
+    /// Frames copied to other screens so far.
+    public var mirroredFrames: Int { gl.mirroredFrames }
+
+    public func removeMirror(_ layer: CALayer) {
+        mirrors.removeAll { $0.layer === layer }
+        gl.mirrors = mirrors.map(\.metal)
+    }
+
+    private func place(_ mirror: Mirror) {
+        mirror.layer.frame.size = mirror.size
+        mirror.layer.backgroundColor = layer.backgroundColor
+        mirror.metal.drawableSize = metalLayer.drawableSize
+        var frame = canvasFrame(canvas: metalLayer.drawableSize, in: mirror.size)
+        frame.origin.y = mirror.size.height - frame.maxY
+        mirror.metal.frame = frame
     }
 
     private func applySize() {
@@ -498,6 +595,10 @@ public final class MetalScenePlayer {
             self.onListensToMedia?(on)
         }
         define("listensToMedia", listensToMedia)
+        let engineStarted: @convention(block) () -> Void = { [weak self] in
+            DispatchQueue.main.async { self?.onEngineStarted?() }
+        }
+        define("engineStarted", engineStarted)
         context.setObject(native, forKeyedSubscript: "__native" as NSString)
     }
 

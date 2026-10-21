@@ -66,7 +66,7 @@ enum EngineExport {
         try FileManager.default.copyItem(at: model.projectFolder, to: folder)
         // The preview the project names: the scene as the editor shows it now.
         let previewName = model.document.project["preview"]?.stringValue ?? "preview.jpg"
-        if Archive.staysInside(previewName), let image = await model.preview?.view.snapshot() {
+        if Archive.staysInside(previewName), let image = await model.preview?.snapshot() {
             try? Thumbnailer.writeJPEG(image, to: folder.appendingPathComponent(previewName))
         }
         return folder

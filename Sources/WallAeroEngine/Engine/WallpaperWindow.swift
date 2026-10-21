@@ -85,6 +85,12 @@ final class WallpaperView: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         layoutMedia()
+        resizeMirror()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        resizeMirror()
     }
 
     // MARK: - The picture shown now
@@ -99,10 +105,14 @@ final class WallpaperView: NSView {
         if let nativeView {
             return nativeView.snapshot()
         }
+        // Another screen's scene: as it is drawn there.
+        if let scene = leader?.nativeView {
+            return scene.snapshot()
+        }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         var picture: CGImage?
         var gravity = CALayerContentsGravity.resize
-        if let player, let item = player.currentItem, !playerLayer.isHidden {
+        if let player = playerLayer.player, let item = player.currentItem, !playerLayer.isHidden {
             let generator = AVAssetImageGenerator(asset: item.asset)
             generator.appliesPreferredTrackTransform = true
             generator.requestedTimeToleranceBefore = .zero
@@ -194,10 +204,12 @@ final class WallpaperView: NSView {
         view.frameRate = frameRate
         view.renderScale = renderScale
         view.onReady = { [weak self] in self?.contentIsReady() }
+        view.onRestart = { [weak self] in self?.leaderContentChanged() }
         guard view.show(folder: folder, backdrop: backdrop) else {
             clear()
             return false
         }
+        leaderContentChanged()
         return true
     }
 
@@ -206,9 +218,71 @@ final class WallpaperView: NSView {
         isReady = true
         firstFrame = nil
         onReady?()
+        for follower in followers.allObjects { follower.contentIsReady() }
+    }
+
+    // MARK: - The same wallpaper on another screen
+
+    /// The view whose wallpaper this one shows: the same video or scene on another display is
+    /// played and drawn once, there, and shown here too.
+    private(set) weak var leader: WallpaperView?
+    private let followers = NSHashTable<WallpaperView>.weakObjects()
+    /// The leader's scene, as this view shows it.
+    private var mirrorView: NSView?
+
+    /// Shows what `leader` shows, as it is laid out here: its video from its own player, its
+    /// scene as it draws it. Playing, pausing and sound are the leader's.
+    func follow(_ leader: WallpaperView) {
+        clear()
+        self.leader = leader
+        leader.followers.add(self)
+        attachToLeader()
+        if leader.isReady { contentIsReady() }
+    }
+
+    /// What the leader shows has changed: a scene started anew, a video got its player.
+    private func attachToLeader() {
+        detachFromLeader()
+        guard let leader else { return }
+        if let scene = leader.nativeView, let mirror = scene.makeMirror() {
+            let view = NSView(frame: bounds)
+            view.autoresizingMask = [.width, .height]
+            view.wantsLayer = true
+            view.layer = mirror
+            addSubview(view)
+            mirrorView = view
+            resizeMirror()
+        } else if let player = leader.player {
+            playerLayer.player = player
+            playerLayer.isHidden = false
+        }
+    }
+
+    /// Whether this view shows the very player of `other`'s video, for tests.
+    func sharesPlayer(with other: WallpaperView) -> Bool {
+        playerLayer.player != nil && playerLayer.player === other.player
+    }
+
+    private func detachFromLeader() {
+        if let mirror = mirrorView?.layer { leader?.nativeView?.removeMirror(mirror) }
+        mirrorView?.removeFromSuperview()
+        mirrorView = nil
+        if player == nil { playerLayer.player = nil }
+    }
+
+    private func resizeMirror() {
+        guard let mirror = mirrorView?.layer else { return }
+        leader?.nativeView?.setMirrorSize(mirror, bounds.size, scale: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2)
+    }
+
+    private func leaderContentChanged() {
+        for follower in followers.allObjects { follower.attachToLeader() }
     }
 
     func clear() {
+        detachFromLeader()
+        leader?.followers.remove(self)
+        leader = nil
         isReady = false
         firstFrame = nil
         webView?.unload()
@@ -217,6 +291,7 @@ final class WallpaperView: NSView {
         nativeView?.unload()
         nativeView?.removeFromSuperview()
         nativeView = nil
+        leaderContentChanged()
         loadTask?.cancel()
         loadTask = nil
         videoURL = nil
@@ -372,6 +447,7 @@ final class WallpaperView: NSView {
         playerHasAudio = hasAudio
         playerLayer.player = player
         applyPlayback()
+        leaderContentChanged()
     }
 
     private func removePlayer() {

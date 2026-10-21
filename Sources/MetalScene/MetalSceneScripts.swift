@@ -580,9 +580,48 @@ enum MetalSceneScripts {
         var canvas = global.__mainCanvas;
         canvas.style.objectFit = fit || 'cover';
         canvas.style.objectPosition = position + '% ' + position + '%';
-        global.__player = global.WallaeroEngine.play(canvas, global.wallaeroEngineScene, settings || {}, changes || {});
+        global.__settings = settings || {};
+        global.__changes = changes || {};
+        global.__player = global.WallaeroEngine.play(canvas, global.wallaeroEngineScene, global.__settings, global.__changes);
         global.__flushAll();
       };
+
+      // The editor's side, as the scene's page has it (runtime.js): the scene played anew, or
+      // told what changed, as the editor changes it.
+      global.__replay = function () {
+        if (global.__player) global.__player.stop(true);
+        global.__player = global.WallaeroEngine.play(global.__mainCanvas, global.wallaeroEngineScene, global.__settings, global.__changes);
+        global.__flushAll();
+      };
+      global.__editor = {
+        // The settings and the editor's changes; what cannot be shown so is shown by playing anew.
+        update: function (settings, changes) {
+          global.__settings = settings || global.__settings;
+          global.__changes = changes || {};
+          var player = global.__player;
+          if (!player) return;
+          if (player.setProperties) player.setProperties(global.__settings);
+          if (player.setChanges && player.setChanges(global.__changes) === false) global.__replay();
+          global.__flushAll();
+        },
+        setScene: function (text) {
+          if (!global.wallaeroEngineScene || !global.__player) return;
+          global.wallaeroEngineScene.files['scene.json'] = text;
+          if (global.__player.setDescription && global.__player.setDescription(text)) { global.__flushAll(); return; }
+          global.__replay();
+        },
+        setFiles: function (changed) {
+          if (!global.wallaeroEngineScene) return;
+          Object.keys(changed || {}).forEach(function (name) { global.wallaeroEngineScene.files[name] = changed[name]; });
+          global.__replay();
+        },
+        call: function (name, a, b, c) {
+          var player = global.WallaeroEngine;
+          var value = player && player[name] ? player[name](a, b, c) : null;
+          return value === undefined ? null : JSON.stringify(value);
+        }
+      };
+      global.document.addEventListener('wallaero:engine', function () { native.engineStarted(); });
     })(this);
     """#
 }

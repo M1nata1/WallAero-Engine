@@ -820,10 +820,21 @@ enum ScreenshotMode {
         centerOnSharpestScreen(window)
         window.makeKeyAndOrderFront(nil)
         Task {
-            await preview.view.waitUntilLoaded()
+            await preview.waitUntilLoaded()
             try? await Task.sleep(nanoseconds: 1_500_000_000)
+            print("preview drawn by the app: \(preview.drawsNatively)")
             if let number = values(of: "--select-object").last.flatMap(Int.init) {
                 model.selection = number
+            }
+            // `--drag <x0> <y0> <x1> <y1>`: the mouse dragged over the preview, in shares of its size.
+            let arguments0 = CommandLine.arguments
+            if let index = arguments0.firstIndex(of: "--drag"), index + 4 < arguments0.count,
+               let x0 = Double(arguments0[index + 1]), let y0 = Double(arguments0[index + 2]),
+               let x1 = Double(arguments0[index + 3]), let y1 = Double(arguments0[index + 4]) {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                preview.drag(from: CGPoint(x: x0, y: y0), to: CGPoint(x: x1, y: y1))
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                print("after the drag: selection \(model.selection.map(String.init) ?? "scene"), undo: \(model.canUndo)")
             }
             for name in values(of: "--add-particles") {
                 if let preset = WallpaperEngineParticlePreset.named(name) { model.addParticles(preset) }
@@ -1042,6 +1053,7 @@ enum ScreenshotMode {
     /// has played, each printing what it comes to; `--pause-after <seconds>` pauses the
     /// wallpaper then, the way the app does when windows cover the desktop.
     ///
+    /// `--twice [--shared]` shows it in a second window too, played there or shown from the first.
     /// `--native` draws a scene of Wallpaper Engine's with the app's own renderer, as the desktop does.
     /// `--full-screen` makes the window as large as the main display, which is what a wallpaper
     /// costs for real, and `--zoomed` as large as a window gets short of that, to serve as one
@@ -1101,6 +1113,32 @@ enum ScreenshotMode {
             view.showVideo(at: target)
         }
         window.orderFrontRegardless()
+        // `--twice`: the same wallpaper in a second, smaller window, as on a second display —
+        // played there on its own, or with `--shared` shown from the first as the app does.
+        var second: WallpaperView?
+        if arguments.contains("--twice") {
+            let other = NSWindow(contentRect: NSRect(x: origin.x + 40, y: origin.y + 40, width: size.width * 0.6, height: size.height * 0.5),
+                                 styleMask: [.borderless], backing: .buffered, defer: false)
+            other.isReleasedWhenClosed = false
+            other.level = .floating
+            other.collectionBehavior = window.collectionBehavior
+            let view2 = WallpaperView(frame: NSRect(origin: .zero, size: other.frame.size))
+            other.contentView = view2
+            view2.setPlaying(true, rate: 1)
+            view2.setDrawing(frameRate: values(of: "--fps").last.flatMap(Int.init) ?? 0,
+                             renderScale: values(of: "--render-scale").last.flatMap(Double.init) ?? 1)
+            if arguments.contains("--shared") {
+                view2.follow(view)
+            } else if isFolder.boolValue, let project = WebProject(folder: target) {
+                if !(arguments.contains("--native") && SceneProject.isNativelyPlayable(target) && view2.showNativeScene(target)) {
+                    view2.showWeb(project, hearsSound: false)
+                }
+            } else {
+                view2.showVideo(at: target)
+            }
+            other.orderFrontRegardless()
+            second = view2
+        }
         print("pid \(ProcessInfo.processInfo.processIdentifier)")
         fflush(stdout)
         Task {
@@ -1128,6 +1166,18 @@ enum ScreenshotMode {
                         print("frame at \(moment) s: \(frame.width)×\(frame.height) → \(output.path)")
                     } else {
                         print("frame at \(moment) s: none")
+                    }
+                    if let second, let frame = await second.currentFrame(),
+                       let data = NSBitmapImageRep(cgImage: frame).representation(using: .png, properties: [:]) {
+                        let path = output.deletingPathExtension().path + "-second.png"
+                        try? data.write(to: URL(fileURLWithPath: path))
+                        print("second window: \(frame.width)×\(frame.height) → \(path)")
+                    }
+                    if let scene = view.nativeView, arguments.contains("--shared") {
+                        print("frames copied to the second window: \(scene.mirroredFrames)")
+                    }
+                    if let second {
+                        print("second window plays a video of the first: \(second.sharesPlayer(with: view))")
                     }
                     fflush(stdout)
                 }

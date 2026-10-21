@@ -15,6 +15,10 @@ final class MetalGL {
     let queue: MTLCommandQueue
     /// The screen: what is drawn to framebuffer 0.
     var layer: CAMetalLayer?
+    /// Other screens that show the same frame: each gets a copy of it, drawn once.
+    var mirrors: [CAMetalLayer] = []
+    /// Frames copied to other screens so far.
+    private(set) var mirroredFrames = 0
     /// What the screen shows now: the last frame given to it.
     private(set) var shown: MTLTexture?
 
@@ -205,7 +209,9 @@ final class MetalGL {
             case GLOp.texParameteri:
                 _ = int()
                 let name = int(), value = int()
-                if let texture = textures[unitTextures[unit] ?? -1] {
+                // Set before the texture has a picture as often as after: it is made here then.
+                if unitTextures[unit] ?? 0 != 0 {
+                    let texture = currentTexture
                     switch name {
                     case GLConstant.wrapS: texture.wrapS = value
                     case GLConstant.wrapT: texture.wrapT = value
@@ -731,12 +737,17 @@ final class MetalGL {
     // MARK: Copies
 
     private func blit(_ n: [Int]) {
-        let s = (n[0], n[1], n[2], n[3]), d = (n[4], n[5], n[6], n[7])
+        var s = (n[0], n[1], n[2], n[3]), d = (n[4], n[5], n[6], n[7])
         let filter = n[9]
         flushClear(readFB)
         guard let source = colorTexture(of: readFB) else { return }
         flushClear(drawFB)
         guard let target = colorTexture(of: drawFB) else { return }
+        // As WebGL does: what of the source lies outside its picture is not copied, and what
+        // of the target lies outside its own is not drawn; the other rectangle loses as much.
+        guard let clipped = Self.clip(source: s, target: d, sourceSize: (source.width, source.height),
+                                      targetSize: (target.width, target.height)) else { return }
+        (s, d) = clipped
         let sameSize = (s.2 - s.0) == (d.2 - d.0) && (s.3 - s.1) == (d.3 - d.1) && s.2 > s.0 && s.3 > s.1
         if sameSize && drawFB != 0 && source.pixelFormat == target.pixelFormat && source !== target {
             endEncoder()
@@ -750,6 +761,27 @@ final class MetalGL {
             return
         }
         drawQuad(source: source, into: target, sourceRect: s, targetRect: d, smooth: filter != GLConstant.nearest, toScreen: drawFB == 0)
+    }
+
+    typealias Rect = (Int, Int, Int, Int)
+
+    /// The two rectangles of a copy cut to the pictures they lie in, each by as much as the
+    /// other loses; nil if nothing is left. Only rectangles that run forwards are cut.
+    static func clip(source s: Rect, target d: Rect, sourceSize: (Int, Int), targetSize: (Int, Int)) -> (Rect, Rect)? {
+        guard s.2 > s.0, s.3 > s.1, d.2 > d.0, d.3 > d.1 else { return (s, d) }
+        var s0 = [Double(s.0), Double(s.1)], s1 = [Double(s.2), Double(s.3)]
+        var d0 = [Double(d.0), Double(d.1)], d1 = [Double(d.2), Double(d.3)]
+        let sourceLimit = [Double(sourceSize.0), Double(sourceSize.1)], targetLimit = [Double(targetSize.0), Double(targetSize.1)]
+        for axis in 0..<2 {
+            let scale = (d1[axis] - d0[axis]) / (s1[axis] - s0[axis])
+            if s0[axis] < 0 { d0[axis] -= s0[axis] * scale; s0[axis] = 0 }
+            if s1[axis] > sourceLimit[axis] { d1[axis] -= (s1[axis] - sourceLimit[axis]) * scale; s1[axis] = sourceLimit[axis] }
+            if d0[axis] < 0 { s0[axis] -= d0[axis] / scale; d0[axis] = 0 }
+            if d1[axis] > targetLimit[axis] { s1[axis] -= (d1[axis] - targetLimit[axis]) / scale; d1[axis] = targetLimit[axis] }
+            guard s1[axis] > s0[axis], d1[axis] > d0[axis] else { return nil }
+        }
+        func r(_ v: Double) -> Int { Int(v.rounded()) }
+        return ((r(s0[0]), r(s0[1]), r(s1[0]), r(s1[1])), (r(d0[0]), r(d0[1]), r(d1[0]), r(d1[1])))
     }
 
     /// A rectangle of `source` drawn into one of `target`, rows as WebGL counts them; the
@@ -809,6 +841,7 @@ final class MetalGL {
         endEncoder()
         for fb in Array(pendingClear.keys) { flushClear(fb) }
         if let drawable, let commandBuffer {
+            if let screenTexture { copy(screenTexture, toMirrorsIn: commandBuffer) }
             commandBuffer.present(drawable)
             shown = screenTexture
         }
@@ -817,6 +850,28 @@ final class MetalGL {
         commandBuffer = nil
         drawable = nil
         screenTexture = nil
+    }
+
+    /// The frame on the screen copied to the other screens: as it is, the copy costs nearly
+    /// nothing next to drawing it again.
+    private func copy(_ frame: MTLTexture, toMirrorsIn commands: MTLCommandBuffer) {
+        for mirror in mirrors {
+            guard Int(mirror.drawableSize.width) == frame.width, Int(mirror.drawableSize.height) == frame.height,
+                  mirror.pixelFormat == frame.pixelFormat, let target = mirror.nextDrawable(),
+                  let blit = commands.makeBlitCommandEncoder() else { continue }
+            blit.copy(from: frame, to: target.texture)
+            blit.endEncoding()
+            commands.present(target)
+            mirroredFrames += 1
+        }
+    }
+
+    /// Gives the other screens the frame shown now: one just added, or one resized, would
+    /// otherwise wait for the next frame, which a scene in which nothing moves never draws.
+    func refreshMirrors() {
+        guard let shown, !mirrors.isEmpty, let commands = queue.makeCommandBuffer() else { return }
+        copy(shown, toMirrorsIn: commands)
+        commands.commit()
     }
 
     /// Waits until everything sent so far is done.

@@ -534,3 +534,12 @@ final class NativeSceneChoiceTests: XCTestCase {
         XCTAssertFalse(SceneProject.isNativelyPlayable(folder))
     }
 }
+
+final class StockFontTests: XCTestCase {
+    /// A font a scene names but does not bring is found among the app's own, if it has it.
+    func testOpenFontsAreFoundByTheNameScenesGive() {
+        XCTAssertNotNil(WallpaperEngineScene.stockFont(named: "fonts/8bitOperatorPlus8-Regular.ttf"))
+        XCTAssertNotNil(WallpaperEngineScene.stockFont(named: "fonts/Segment7Standard.otf"))
+        XCTAssertNil(WallpaperEngineScene.stockFont(named: "fonts/Atami-Regular.otf"))
+    }
+}

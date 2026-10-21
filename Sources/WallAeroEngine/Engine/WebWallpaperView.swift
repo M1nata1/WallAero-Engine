@@ -133,6 +133,9 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
             _ = try? SceneProject.refreshGeneratedFiles(in: project.folder)
         }
 
+        // Chromium starts with the first page it is to draw: a Mac showing only scenes and
+        // videos never runs it.
+        Chromium.start()
         let webView = CEFPageView(frame: bounds)
         webView.autoresizingMask = [.width, .height]
         webView.delegate = self

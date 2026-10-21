@@ -248,14 +248,44 @@ final class WallpaperManager: NSObject, ObservableObject {
     }
 
     private func applyAssignments() {
-        for screen in screens.values {
+        let leaders = leadersOfSharedWallpapers()
+        // Leaders first, so that the screens that follow find what they show.
+        for screen in screens.values.sorted(by: { leaders[$0.displayID] == nil && leaders[$1.displayID] != nil }) {
             let item = assignments.wallpaperID(forDisplay: screen.displayID).flatMap(library.item(withID:))
             // Before the wallpaper is shown, so that a page is loaded once, the way it is to draw.
             screen.view.setDrawing(frameRate: preferences.frameRate, renderScale: preferences.renderScale)
-            screen.show(item, from: library)
+            screen.show(item, from: library, following: leaders[screen.displayID].flatMap { screens[$0] })
         }
         reloadMusic()
         syncSystemWallpapers()
+    }
+
+    /// The displays that show a wallpaper another one shows too, each with the display that
+    /// plays it for both: the one with the most pixels, so that none is drawn smaller than it
+    /// is shown. Only videos and the scenes the app draws itself are shared; a picture costs
+    /// nothing to show twice, and a page draws itself where it is.
+    private func leadersOfSharedWallpapers() -> [String: String] {
+        var groups: [UUID: [ScreenWallpaper]] = [:]
+        for screen in screens.values {
+            guard let item = assignments.wallpaperID(forDisplay: screen.displayID).flatMap(library.item(withID:)),
+                  isShared(item) else { continue }
+            groups[item.id, default: []].append(screen)
+        }
+        var leaders: [String: String] = [:]
+        for group in groups.values where group.count > 1 {
+            guard let leader = group.max(by: { $0.pixelCount < $1.pixelCount || ($0.pixelCount == $1.pixelCount && $0.displayID > $1.displayID) })
+            else { continue }
+            for screen in group where screen !== leader { leaders[screen.displayID] = leader.displayID }
+        }
+        return leaders
+    }
+
+    private func isShared(_ item: Wallpaper) -> Bool {
+        switch item.kind {
+        case .video: return true
+        case .image: return false
+        case .web: return ScreenWallpaper.drawsScenesNatively && SceneProject.isNativelyPlayable(library.projectURL(for: item))
+        }
     }
 
     /// The wallpaper that is heard, and the display it is on: the first one, in menu bar order,
@@ -278,7 +308,9 @@ final class WallpaperManager: NSObject, ObservableObject {
                 screen.view.setFraming(item.shownSettings.scaling, position: item.shownSettings.position,
                                        mediaSize: CGSize(width: item.pixelWidth, height: item.pixelHeight))
             }
-            let audible = isAudible && screen.displayID == audibleDisplay
+            // A display that shows another's video hears it there.
+            let audible = isAudible && (screen.displayID == audibleDisplay
+                || screens.values.contains { $0.leader === screen && $0.displayID == audibleDisplay })
             screen.view.setAudio(muted: !audible, volume: Float(preferences.volume))
             screen.view.setDrawing(frameRate: preferences.frameRate, renderScale: preferences.renderScale)
         }
@@ -307,8 +339,13 @@ final class WallpaperManager: NSObject, ObservableObject {
         }
         for screen in screens.values {
             screen.watchesCover = preferences.pauseWhenCovered
-            let visible = !preferences.pauseWhenCovered || screen.isVisibleOnScreen
-            screen.setPlaying(pauseReason == nil && visible, rate: Float(screen.item?.shownSettings.speed ?? 1))
+        }
+        // A wallpaper shared by several displays plays while any of them shows it.
+        func visible(_ screen: ScreenWallpaper) -> Bool { !preferences.pauseWhenCovered || screen.isVisibleOnScreen }
+        for screen in screens.values {
+            let root = screen.leader ?? screen
+            let seen = screens.values.contains { ($0.leader ?? $0) === root && visible($0) }
+            screen.setPlaying(pauseReason == nil && seen, rate: Float(screen.item?.shownSettings.speed ?? 1))
         }
         // Unlike the picture, the music goes on while windows cover the desktop: songs that
         // stopped whenever a window was maximized would be of little use.
@@ -705,6 +742,13 @@ final class ScreenWallpaper: NSObject {
     /// The page of a web wallpaper that is playing here, as what the mouse is passed on to.
     var pointerTarget: PointerForwarder.Target? {
         guard isPlaying else { return nil }
+        // Another display's scene, shown here: the pointer here moves it there.
+        if leader != nil, let scene = view.leader?.nativeView {
+            let size = view.bounds.size
+            return PointerForwarder.Target(id: ObjectIdentifier(view), frame: window.frame) { [weak scene] kind, point in
+                scene?.pointer(kind, at: point, inViewOf: size)
+            }
+        }
         if let scene = view.nativeView {
             return PointerForwarder.Target(id: ObjectIdentifier(scene), frame: window.frame) { [weak scene] kind, point in
                 scene?.pointer(kind, at: point)
@@ -749,8 +793,41 @@ final class ScreenWallpaper: NSObject {
         view.setPlaying(playing, rate: rate)
     }
 
-    func show(_ newItem: Wallpaper?, from library: WallpaperLibrary) {
-        guard newItem?.id != item?.id else {
+    /// The display whose wallpaper this one shows, played and drawn there; see `WallpaperView.follow`.
+    private(set) weak var leader: ScreenWallpaper?
+
+    /// The display's pixels, to choose the one that draws a wallpaper shared by several.
+    var pixelCount: CGFloat {
+        let size = window.screen?.frame.size ?? window.frame.size
+        let scale = window.screen?.backingScaleFactor ?? 2
+        return size.width * size.height * scale * scale
+    }
+
+    func show(_ newItem: Wallpaper?, from library: WallpaperLibrary, following newLeader: ScreenWallpaper? = nil) {
+        if let newLeader, let newItem {
+            guard newItem.id != item?.id || leader !== newLeader else {
+                item = newItem
+                return
+            }
+            item = newItem
+            leader = newLeader
+            isPlaying = false
+            showGeneration += 1
+            let generation = showGeneration
+            window.alphaValue = 0
+            view.onReady = { [weak self] in self?.reveal(generation) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.longestWaitForPicture) { [weak self] in
+                self?.reveal(generation)
+            }
+            view.follow(newLeader.view)
+            window.orderFrontRegardless()
+            updateVisibilityWatch()
+            return
+        }
+        // A display that showed another's wallpaper shows its own now, even the same one.
+        let wasFollowing = leader != nil
+        leader = nil
+        guard newItem?.id != item?.id || wasFollowing else {
             // The same wallpaper, possibly with other settings; the manager applies those.
             item = newItem
             return
