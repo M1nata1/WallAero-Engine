@@ -25,7 +25,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NowPlaying.asksPlayers = !CommandLine.arguments.contains { $0.hasPrefix("--") } || CommandLine.arguments.contains("--ask-players")
         // Chromium needs to know when the app hands on an event, so the app's object is its kind.
         let app = CEFApplication.shared
-        Chromium.start()
         Codecs.configure()
         if let index = CommandLine.arguments.firstIndex(of: "--convert-media"), index + 2 < CommandLine.arguments.count {
             // A developer's helper: turns one video or sound into WebM as the library would.

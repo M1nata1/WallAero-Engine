@@ -12,6 +12,11 @@ final class NativeSceneView: NSView {
     /// Called once the scene has something to show: its first frame, or a few seconds after
     /// `show` at the latest, so that whoever waits never waits for good.
     var onReady: (() -> Void)?
+    /// Called when the scene is started anew, with a new player: what showed the old one on
+    /// other screens shows it no more.
+    var onRestart: (() -> Void)?
+    /// Set before `show` when the scene is drawn for the lock screen.
+    var rendersStill = false
     /// Set before `show` to let the scene have the spectrum of the sound the Mac is playing.
     var hearsSound = true
 
@@ -25,6 +30,8 @@ final class NativeSceneView: NSView {
     }
 
     private var player: MetalScenePlayer?
+    /// The scene's player, for the editor, which asks it where things are.
+    var scenePlayer: MetalScenePlayer? { player }
     private let sceneView = NSView()
     /// A picture of the scene, the library's own, seen until the scene has drawn itself.
     private let backdropView = NSView()
@@ -69,7 +76,7 @@ final class NativeSceneView: NSView {
 
     /// Plays the scene in the folder. False if this Mac cannot: then nothing is shown.
     @discardableResult
-    func show(folder: URL, backdrop: NSImage? = nil) -> Bool {
+    func show(folder: URL, backdrop: NSImage? = nil, watchingForChanges: Bool = true) -> Bool {
         unload()
         self.folder = folder
         backdropView.layer?.contents = backdrop
@@ -77,8 +84,10 @@ final class NativeSceneView: NSView {
         // Scenes made by an older version of the app get the current player.
         _ = try? SceneProject.refreshGeneratedFiles(in: folder)
         guard start() else { return false }
-        watcher = FolderWatcher(folder: folder) { [weak self] paths in
-            self?.filesDidChange(paths)
+        if watchingForChanges {
+            watcher = FolderWatcher(folder: folder) { [weak self] paths in
+                self?.filesDidChange(paths)
+            }
         }
         generation += 1
         let generation = generation
@@ -101,6 +110,7 @@ final class NativeSceneView: NSView {
             player.layer.backgroundColor = Self.color(scene.background.color)
         }
         player.frameRate = frameRate
+        player.rendersStill = rendersStill
         player.videoFiles = WallpaperEngineProjectFolder.nativeVideos(scene: folder)
         player.setPlaying(isPlaying, rate: Double(rate))
         player.setAudio(muted: isMuted, volume: volume)
@@ -114,7 +124,23 @@ final class NativeSceneView: NSView {
             Log.playback.info("Scene \(folder.lastPathComponent, privacy: .public): \(note, privacy: .public)")
         }
         updateListening()
+        onRestart?()
         return true
+    }
+
+    // MARK: - Other screens
+
+    /// A layer for another screen that shows this scene as drawn here; see `MetalScenePlayer.makeMirror`.
+    func makeMirror() -> CALayer? { player?.makeMirror() }
+    func setMirrorSize(_ layer: CALayer, _ size: CGSize, scale: CGFloat) { player?.setMirrorSize(layer, size, scale: scale) }
+    func removeMirror(_ layer: CALayer) { player?.removeMirror(layer) }
+    var mirroredFrames: Int { player?.mirroredFrames ?? 0 }
+
+    /// Tells the scene what the mouse did over another screen showing it; the point is in
+    /// that screen's view of `size`, and is placed here as the scene lies there.
+    func pointer(_ kind: PointerForwarder.Kind, at point: CGPoint, inViewOf size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        pointer(kind, at: CGPoint(x: point.x / size.width * bounds.width, y: point.y / size.height * bounds.height))
     }
 
     func unload() {

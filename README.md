@@ -5,7 +5,7 @@ Live wallpapers for macOS: videos, GIFs and pictures on your desktop — beneath
 
 ## Installation
 
-Build the app on your Mac. You need Xcode or its Command Line Tools (`xcode-select --install`) and macOS 13 Ventura or later. The first build downloads Chromium, which draws web wallpapers, the app's own scenes and the editor's preview (about 130 MB for each processor), and builds the video encoders; later builds reuse them.
+Build the app on your Mac. You need Xcode or its Command Line Tools (`xcode-select --install`) and macOS 13 Ventura or later. The first build downloads Chromium, which draws web pages among the wallpapers and the app's own scenes, and starts only when one of them is shown (about 130 MB for each processor), and builds the video encoders; later builds reuse them.
 
 ```bash
 git clone https://github.com/M1nata1/WallAero-Engine.git
