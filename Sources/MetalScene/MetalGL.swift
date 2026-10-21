@@ -552,10 +552,14 @@ final class MetalGL {
             }
             if member.columns > 1 {
                 // A matrix, column by column, each column at the matrix's stride.
-                let rows = member.vecsize
-                for c in 0..<member.columns {
-                    for r in 0..<rows where c * rows + r < values.count {
-                        put(values[c * rows + r], at: member.offset + c * member.matrixStride + r * 4)
+                // An array of matrices: one after another, each at the array's stride.
+                let rows = member.vecsize, each = member.columns * rows
+                let stride = member.arrayStride > 0 ? member.arrayStride : member.columns * member.matrixStride
+                for element in 0..<max(1, member.count) where element * each < values.count {
+                    for c in 0..<member.columns {
+                        for r in 0..<rows where element * each + c * rows + r < values.count {
+                            put(values[element * each + c * rows + r], at: member.offset + element * stride + c * member.matrixStride + r * 4)
+                        }
                     }
                 }
                 return

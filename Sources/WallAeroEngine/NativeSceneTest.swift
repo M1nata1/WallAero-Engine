@@ -55,6 +55,11 @@ enum NativeSceneTest {
             guard let moment = Double(arguments[index + 1]), let x = Double(arguments[index + 2]), let y = Double(arguments[index + 3]) else { continue }
             DispatchQueue.main.asyncAfter(deadline: .now() + moment) { player.pointer("move", x: x, y: y) }
         }
+        // `--press-at <seconds> <x> <y>`: the button goes down there then, and stays down.
+        for (index, argument) in arguments.enumerated() where argument == "--press-at" && index + 3 < arguments.count {
+            guard let moment = Double(arguments[index + 1]), let x = Double(arguments[index + 2]), let y = Double(arguments[index + 3]) else { continue }
+            DispatchQueue.main.asyncAfter(deadline: .now() + moment) { player.pointer("down", x: x, y: y) }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
             if let image = player.snapshot() {
                 let bitmap = NSBitmapImageRep(cgImage: image)
