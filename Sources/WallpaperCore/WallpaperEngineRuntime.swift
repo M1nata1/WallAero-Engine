@@ -7066,6 +7066,10 @@ public enum WallpaperEngineRuntime {
           '}'
         ].join('\n'), 'the player\'s own shader');
         var FLOATS = 16; // to a particle, for the shader
+        // A particle's size is the corner to corner of its square, not its side: so many times
+        // smaller each side is drawn. Measured on Wallpaper Engine's own videos of three scenes —
+        // a circle of runes, petals, drops on glass — whatever the scene's own size for them.
+        var PARTICLE_SIDE = Math.SQRT1_2;
         // Particles drawn as a rope: one band through them all, in the order they were made, as
         // wide as each is large. The picture is laid across the band, and along it where the band
         // is the tail of one particle.
@@ -8092,7 +8096,12 @@ public enum WallpaperEngineRuntime {
             particle.vx *= system.speedBy;
             particle.vy *= system.speedBy;
             particle.vz *= system.speedBy;
-            particle.life *= system.lifeBy;
+            // The scene's lifetime for its particles: as many times as long for the system it names;
+            // the systems that come with it — a glow round each spark, a ring that grows out of a
+            // circle — live as many times shorter. Measured on Wallpaper Engine's own video of
+            // "Zoltraak": its growing ring comes back every 2 / 0.48 seconds, not 2 × 0.48.
+            if (entry) particle.life /= Math.max(0.01, system.lifeBy);
+            else particle.life *= system.lifeBy;
             system.particles.push(particle);
             instance.alive++;
             tell('eventspawn', particle);
@@ -8221,7 +8230,7 @@ public enum WallpaperEngineRuntime {
               }
               data[at] = x;
               data[at + 1] = y;
-              data[at + 2] = particle.size * particle.sizeNow * system.sizeBy * near;
+              data[at + 2] = particle.size * particle.sizeNow * system.sizeBy * near * PARTICLE_SIDE;
               data[at + 3] = turned;
               var shade = system.colorOf(particle, state);
               data[at + 4] = shade[0];
