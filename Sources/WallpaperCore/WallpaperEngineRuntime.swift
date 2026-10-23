@@ -6066,15 +6066,26 @@ public enum WallpaperEngineRuntime {
 
           // The layers of animation, each with its clock.
           var animations = mesh.animations || [];
-          var layers = (object.animationlayers || []).map(function (config) {
+          // How fast it plays, how much of it shows and whether it plays at all may each be a
+          // script's — a run that gives way to a ball while the model is in the air — so they are
+          // kept with the model's own values and read every frame.
+          var layers = (object.animationlayers || []).map(function (config, number_) {
             var wanted = number(plain(config.animation), -1);
             var animation = animations.filter(function (each) { return each.id === wanted; })[0];
             if (!animation) return null;
+            function kept(name, raw, fallback, kind) {
+              var value = live(raw === undefined ? fallback : raw, kind === 'flag' ? 0 : 1, fallback, thing, kind);
+              also(thing, 'layer' + number_ + ':' + name, value);
+              return value;
+            }
             return { frames: numbersOf(animation.frames, Float32Array), frameCount: animation.frameCount, length: animation.length,
-                     fps: animation.fps || 30, mode: animation.mode, speed: number(plain(config.rate), 1),
-                     adds: flag(config.additive, false), blend: Math.max(0, Math.min(1, number(plain(config.blend), 1))),
-                     visible: plain(config.visible) !== false, frame: 0 };
+                     fps: animation.fps || 30, mode: animation.mode, adds: flag(config.additive, false), frame: 0,
+                     rate: kept('rate', config.rate, 1), weight: kept('blend', config.blend, 1),
+                     shows: kept('visible', config.visible, true, 'flag') };
           }).filter(Boolean);
+          function speedOf(layer) { return number((layer.rate.now || [1])[0], 1); }
+          function weightOf(layer) { return Math.max(0, Math.min(1, number((layer.weight.now || [1])[0], 1))); }
+          function showing(layer) { return layer.shows.now !== false; }
           function sample(layer, index) {
             var at = layer.frame, length = Math.max(1, layer.length);
             if (layer.mode === 'mirror') { at = at % (length * 2); if (at > length) at = length * 2 - at; }
@@ -6097,16 +6108,27 @@ public enum WallpaperEngineRuntime {
           function pose() {
             if (posed === frames) return;
             posed = frames;
-            var base = layers.filter(function (layer) { return layer.visible && !layer.adds; })[0];
+            // The layers in their order, each over what those before it made, as much as it
+            // shows: one that shows whole takes the bone over; one that adds moves it on from
+            // where it is by how far its animation is from the bone at rest.
+            var playing = layers.filter(function (layer) { return showing(layer) && layer.frameCount > 0 && weightOf(layer) > 0; });
             var world = [];
             for (var index = 0; index < count; index++) {
               var bone = bones[index];
-              var p = base && base.frameCount > 0 ? sample(base, index) : bone.still.slice();
-              layers.forEach(function (layer) {
-                if (!layer.visible || !layer.adds || !(layer.frameCount > 0)) return;
-                var q = sample(layer, index);
-                for (var k = 0; k < 6; k++) p[k] += (q[k] - bone.still[k]) * layer.blend;
-                for (var s = 6; s < 9; s++) p[s] *= 1 + (q[s] / (bone.still[s] || 1) - 1) * layer.blend;
+              var p = bone.still.slice();
+              playing.forEach(function (layer) {
+                var q = sample(layer, index), share = weightOf(layer);
+                if (layer.adds) {
+                  for (var k = 0; k < 6; k++) p[k] += (q[k] - bone.still[k]) * share;
+                  for (var s = 6; s < 9; s++) p[s] *= 1 + (q[s] / (bone.still[s] || 1) - 1) * share;
+                  return;
+                }
+                for (var j = 0; j < 9; j++) {
+                  var to = q[j];
+                  // A turn takes the short way round.
+                  if (j >= 3 && j < 6) { while (to - p[j] > Math.PI) to -= Math.PI * 2; while (p[j] - to > Math.PI) to += Math.PI * 2; }
+                  p[j] += (to - p[j]) * share;
+                }
               });
               var local = m4pose(p);
               world[index] = bone.parent >= 0 && bone.parent < index ? m4mul(world[bone.parent], local)
@@ -6127,7 +6149,7 @@ public enum WallpaperEngineRuntime {
             return (point.matrix || []).length >= 16 ? m4mul(bone, point.matrix) : bone;
           };
           thing.step = function (passed) {
-            layers.forEach(function (layer) { if (layer.visible) layer.frame += passed * layer.fps * layer.speed; });
+            layers.forEach(function (layer) { if (showing(layer)) layer.frame += passed * layer.fps * speedOf(layer); });
           };
           thing.moving = layers.length > 0;
 
