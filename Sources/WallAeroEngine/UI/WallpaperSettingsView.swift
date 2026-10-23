@@ -120,9 +120,12 @@ struct WallpaperSettingsView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous))
         LabeledContent("Name") {
-            Text(verbatim: item.name)
-                .lineLimit(1)
+            // A long name wraps; the runs of spaces some names are padded with count as one.
+            Text(verbatim: item.name.split(whereSeparator: \.isWhitespace).joined(separator: " "))
+                .lineLimit(4)
                 .truncationMode(.middle)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
         }
         LabeledContent("Kind") {
             Text(kindTitle(of: item))

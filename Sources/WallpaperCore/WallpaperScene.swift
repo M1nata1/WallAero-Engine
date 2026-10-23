@@ -502,6 +502,13 @@ extension WallpaperScene {
         public var minimum: Double
         public var maximum: Double
         public var step: Double
+
+        /// A number kept within the variable's limits, which a slider may give the other way
+        /// round (from 0 down to −1).
+        public func clamped(_ value: Double) -> Double {
+            min(max(value, min(minimum, maximum)), max(minimum, maximum))
+        }
+
         public var isOn: Bool
         /// The text, or the chosen one of `options` for a choice.
         public var text: String
