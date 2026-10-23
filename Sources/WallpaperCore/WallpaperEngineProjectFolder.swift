@@ -276,7 +276,7 @@ extension WallpaperEngineProjectFolder {
             var kept = variable
             kept.id = before.id
             kept.color = before.color
-            kept.number = min(max(before.number, variable.minimum), variable.maximum)
+            kept.number = variable.clamped(before.number)
             kept.isOn = before.isOn
             kept.text = variable.kind == .choice && !variable.options.contains(before.text) ? variable.text : before.text
             return kept

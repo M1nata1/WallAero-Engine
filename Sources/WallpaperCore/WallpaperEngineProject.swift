@@ -168,7 +168,7 @@ public struct WallpaperEngineProject: Equatable, Sendable {
             case (.color, .text(let text)):
                 variable.color = Self.hexColor(text) ?? variable.color
             case (.number, .number(let number)):
-                variable.number = min(max(number, variable.minimum), variable.maximum)
+                variable.number = variable.clamped(number)
             case (.toggle, .flag(let flag)):
                 variable.isOn = flag
             case (.toggle, .number(let number)):
