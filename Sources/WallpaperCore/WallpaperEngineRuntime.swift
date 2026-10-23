@@ -2580,7 +2580,13 @@ public enum WallpaperEngineRuntime {
           case 'particle/beam/beam_1':
             return { width: 32, height: 128, clamp: true, pixels: whiteShape(32, 128, function (u, v) { return Math.exp(-Math.pow((u - 0.5) / 0.22, 2)) * Math.min(1, Math.min(v, 1 - v) * 4); }) };
           case 'particle/beam/beam_2_fade':
-            return { width: 32, height: 128, clamp: true, pixels: whiteShape(32, 128, function (u, v) { var a = Math.abs(u - 0.5); return Math.max(1 - smooth01(0.02, 0.05, a), 0.35 * Math.exp(-a * 14)) * Math.pow(1 - v, 1.2); }) };
+            // Measured on Wallpaper Engine's own (32×128, luminance and alpha): a core two texels
+            // wide, a faint glow either side fading straight to nothing at the edges, all of it
+            // brightest halfway along and fading to both ends.
+            return { width: 32, height: 128, clamp: true, pixels: whiteShape(32, 128, function (u, v) {
+              var a = Math.abs(u - 0.5);
+              var across = a < 0.031 ? 1 : 0.172 * Math.max(0, 1 - (a - 0.031) / 0.45);
+              return across * Math.exp(-Math.pow((v - 0.51) / 0.25, 2)); }) };
           case 'particle/beam/beam_flower_0':
             return bandMask(128, 512, function () { return [0.5, 0.42]; }, function (u, v) { return smooth01(0.3, 0.7, fbm(u * 6, v * 24, 4, 223)); });
           case 'particle/beam/beam_flower_0_normal': return tubeFacing(128, 512, function () { return [0.5, 0.42]; });
@@ -7758,6 +7764,55 @@ public enum WallpaperEngineRuntime {
           '}'
         ].join('\n'), 'the player\'s own shader');
 
+        // Particles in a scene in three dimensions: each corner already where Wallpaper Engine's
+        // own particle shader puts it in the system's space, then through the model, the view
+        // and the lens at once, as there.
+        var deepParticleProgram = link([
+          '#version 300 es',
+          'in vec3 a_Position;',
+          'in vec2 a_TexCoord;',
+          'in vec4 a_Color;',
+          'uniform mat4 u_Matrix;',
+          'out vec2 v_Uv;',
+          'out vec4 v_Color;',
+          'void main() {',
+          '  gl_Position = u_Matrix * vec4(a_Position, 1.0);',
+          '  v_Uv = a_TexCoord;',
+          '  v_Color = a_Color;',
+          '}'
+        ].join('\n'), [
+          '#version 300 es',
+          'precision highp float;',
+          'in vec2 v_Uv;',
+          'in vec4 v_Color;',
+          'uniform sampler2D u_Texture;',
+          'uniform int u_Channels;',
+          'uniform float u_Bright;',
+          'out vec4 color;',
+          'void main() {',
+          '  vec4 c = texture(u_Texture, v_Uv);',
+          '  if (u_Channels == 1) c = vec4(1.0, 1.0, 1.0, c.r);',
+          '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
+          '  color = vec4(c.rgb * v_Color.rgb * u_Bright, c.a * v_Color.a);',
+          '}'
+        ].join('\n'), 'the player\'s own shader');
+        var deepParticleBuffer = null, deepParticleShape = null, deepParticleData = new Float32Array(0);
+
+        // Which way the eye's right and up are, and where it is, in the scene.
+        function eyeBasis() {
+          var eye = eyePlace(), shot = activeCamera();
+          if (shot) {
+            var m = standing(shot, true).matrix;
+            return { right: [m[0], m[1], m[2]], up: [m[4], m[5], m[6]], eye: eye };
+          }
+          var said = description.camera || {};
+          var centre = numbers(said.center, 3, 0), up = numbers(said.up, 3, 0);
+          if (!said.eye) { centre = [0, 0, 0]; }
+          if (!(up[0] || up[1] || up[2])) up = [0, 1, 0];
+          var view = Mat4.lookAt(new Vec3(eye[0], eye[1], eye[2]), new Vec3(centre[0], centre[1], centre[2]), new Vec3(up[0], up[1], up[2])).m;
+          return { right: [view[0], view[4], view[8]], up: [view[1], view[5], view[9]], eye: eye };
+        }
+
         function mix(from, to, share) {
           return from + (to - from) * share;
         }
@@ -8498,6 +8553,8 @@ public enum WallpaperEngineRuntime {
             system.picture = texture('materials/particle/water/rain_drops_sheet');
           }
           system.additive = key(material.blending || 'translucent') === 'additive';
+          // Hidden behind models in a scene in three dimensions, unless its material says not.
+          system.depthTest = key(String(material.depthtest || 'enabled')) !== 'disabled';
           system.bright = number((material.constantshadervalues || {}).ui_editor_properties_overbright, 1);
           // Further away is smaller: the particles have depth, and are drawn as seen by an eye.
           system.perspective = (number(said.flags, 0) & 4) !== 0;
@@ -8653,7 +8710,11 @@ public enum WallpaperEngineRuntime {
             } else if (kind === 'ropetrail') {
               // A tail behind each particle, through where it has been in the last seconds.
               system.tails = Math.max(0.02, number(renderer.length, 1));
-            } else if (kind !== 'sprite') {
+            } else if (kind === 'sprite') {
+              // Which way a sprite lies in a scene in three dimensions: turned to the eye (screen),
+              // standing up and turned to it about the up axis (upright), or lying flat (fixed).
+              system.orientation = key(String(plain(renderer.orientation) || 'screen'));
+            } else {
               note('“' + name + '”: particles drawn as “' + renderer.name + '” are drawn as plain sprites');
             }
           });
@@ -8833,7 +8894,7 @@ public enum WallpaperEngineRuntime {
                 // Where it has been, a few times a tail's length, the oldest first.
                 var path = particle.path || (particle.path = []);
                 if (!path.length || system.age - path[path.length - 1][2] >= system.tails / 16) {
-                  path.push([particle.x + particle.shiftX, particle.y + particle.shiftY, system.age]);
+                  path.push([particle.x + particle.shiftX, particle.y + particle.shiftY, system.age, particle.z]);
                 }
                 while (path.length && system.age - path[0][2] > system.tails) path.shift();
               }
@@ -8845,7 +8906,135 @@ public enum WallpaperEngineRuntime {
           // How far the eye is from the scene, for particles with depth.
           var away = (sceneHeight / 2) / Math.tan(number(general.perspectiveoverridefov, number(general.fov, 50)) * Math.PI / 360);
 
+          // In a scene in three dimensions, as Wallpaper Engine's particle shaders do it: a sprite
+          // is a square about the particle in the system's own space — along its axes, or turned
+          // to the eye — or, for a trail, stretched along its way; a rope trail is a band through
+          // where the particle has been, turned to the eye. All of it then goes through the
+          // system's whole matrix, its scale on each axis with it, and is hidden behind models.
+          function drawDeep() {
+            var stands = placement();
+            if (!stands.visible || !system.particles.length || !deepParticleProgram) return;
+            var model = stands.matrix;
+            var back = m4invert(model);
+            function inward(v) { return [back[0] * v[0] + back[4] * v[1] + back[8] * v[2], back[1] * v[0] + back[5] * v[1] + back[9] * v[2], back[2] * v[0] + back[6] * v[1] + back[10] * v[2]]; }
+            var basis = eyeBasis();
+            var viewRight = inward(basis.right), viewUp = inward(basis.up), viewAhead = inward(cross(basis.up, basis.right));
+            var eye = basis.eye, eyeHere = [back[0] * eye[0] + back[4] * eye[1] + back[8] * eye[2] + back[12],
+                                            back[1] * eye[0] + back[5] * eye[1] + back[9] * eye[2] + back[13],
+                                            back[2] * eye[0] + back[6] * eye[1] + back[10] * eye[2] + back[14]];
+            function unit(v) { var l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
+            function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+            var see = system.alphaBy * stands.alpha, state = system.state;
+            var frames = sheetFrames(system.picture);
+            var layer = system.picture.layers[0];
+            var ratio = frames && frames[0] ? (frames[0][3] * (layer.height || 1)) / Math.max(1e-6, frames[0][2] * (layer.width || 1))
+                                            : (layer.height || 1) / Math.max(1, layer.width || 1);
+            var out = [];
+            function corner(p, u, v, cell, tint) {
+              out.push(p[0], p[1], p[2], cell ? cell[0] + u * cell[2] : u, cell ? cell[1] + v * cell[3] : v, tint[0], tint[1], tint[2], tint[3]);
+            }
+            system.particles.slice(0, system.most).forEach(function (particle) {
+              var tint = system.colorOf(particle, state).concat([Math.max(0, Math.min(1, particle.alpha * particle.alphaNow * see))]);
+              if (!(tint[3] > 0.001)) return;
+              var here = [particle.x + particle.shiftX, particle.y + particle.shiftY, particle.z];
+              var size = particle.size * particle.sizeNow * system.sizeBy * PARTICLE_SIDE;
+              var cell = frames ? frames[system.randomFrame
+                ? Math.floor(hash(particle.id, 3, 11) * frames.length) % frames.length
+                : Math.min(frames.length - 1, Math.floor((((particle.age / particle.life) * system.frameRuns) % 1) * frames.length))] : null;
+              if (system.tails) {
+                var spots = (particle.path || []).map(function (spot) { return [spot[0], spot[1], spot[3] || 0]; });
+                spots.push(here);
+                if (spots.length < 2) return;
+                var rows = [];
+                spots.forEach(function (spot, index) {
+                  var before = spots[Math.max(0, index - 1)], after = spots[Math.min(spots.length - 1, index + 1)];
+                  var along = [after[0] - before[0], after[1] - before[1], after[2] - before[2]];
+                  // As Wallpaper Engine's rope shader: across the way it goes and the way the eye
+                  // looks, both in the system's own space, as wide as twice the particle.
+                  var across = unit(cross(viewAhead, along));
+                  var v = 1 - index / (spots.length - 1);
+                  var half = particle.size * particle.sizeNow * system.sizeBy;
+                  rows.push([[spot[0] - across[0] * half, spot[1] - across[1] * half, spot[2] - across[2] * half], 0, v],
+                            [[spot[0] + across[0] * half, spot[1] + across[1] * half, spot[2] + across[2] * half], 1, v]);
+                });
+                for (var r = 0; r + 1 < rows.length / 2; r++) {
+                  var a = rows[r * 2], b = rows[r * 2 + 1], c = rows[r * 2 + 2], d = rows[r * 2 + 3];
+                  [a, b, c, b, d, c].forEach(function (point) { corner(point[0], point[1], point[2], cell, tint); });
+                }
+                return;
+              }
+              var right, up;
+              if (system.trail) {
+                var speed = [particle.vx, particle.vy, particle.vz || 0];
+                var length = Math.hypot(speed[0], speed[1], speed[2]);
+                if (length < 1e-6) return;
+                right = unit(cross([here[0] - eyeHere[0], here[1] - eyeHere[1], here[2] - eyeHere[2]], speed));
+                var long = Math.max(system.trail.least, Math.min(system.trail.most, length * system.trail.by));
+                up = [speed[0] / length * long, speed[1] / length * long, speed[2] / length * long];
+              } else {
+                var c0 = Math.cos(particle.angle || 0), s0 = Math.sin(particle.angle || 0);
+                // Flat is along the system's x and z — measured on Wallpaper Engine's video of
+                // Sonic AKIBA, whose speed lines are flat sprites that point at the far end of the
+                // street; upright keeps the system's y up.
+                var axisX = viewRight, axisY = viewUp;
+                if (system.orientation === 'fixed') { axisX = [1, 0, 0]; axisY = [0, 0, 1]; }
+                else if (system.orientation === 'upright') { axisY = [0, 1, 0]; axisX = unit([viewRight[0], 0, viewRight[2]]); }
+                right = [axisX[0] * c0 + axisY[0] * s0, axisX[1] * c0 + axisY[1] * s0, axisX[2] * c0 + axisY[2] * s0];
+                up = [axisY[0] * c0 - axisX[0] * s0, axisY[1] * c0 - axisX[1] * s0, axisY[2] * c0 - axisX[2] * s0];
+              }
+              function at(u, v) {
+                var a = size * (u - 0.5), b = size * (v - 0.5) * ratio;
+                return [here[0] + right[0] * a - up[0] * b, here[1] + right[1] * a - up[1] * b, here[2] + right[2] * a - up[2] * b];
+              }
+              [[0, 0], [1, 0], [0, 1], [1, 0], [1, 1], [0, 1]].forEach(function (uv) { corner(at(uv[0], uv[1]), uv[0], uv[1], cell, tint); });
+            });
+            var count = out.length / 9;
+            if (!count) return;
+            if (!deepParticleBuffer) {
+              deepParticleBuffer = gl.createBuffer();
+              deepParticleShape = gl.createVertexArray();
+              gl.bindVertexArray(deepParticleShape);
+              gl.bindBuffer(gl.ARRAY_BUFFER, deepParticleBuffer);
+              gl.enableVertexAttribArray(0);
+              gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 36, 0);
+              gl.enableVertexAttribArray(1);
+              gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 36, 12);
+              gl.enableVertexAttribArray(3);
+              gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 36, 20);
+              gl.bindVertexArray(null);
+            }
+            if (deepParticleData.length < out.length) deepParticleData = new Float32Array(out.length * 2);
+            deepParticleData.set(out);
+            var program = deepParticleProgram;
+            function slot(name) { var uniform = program.uniforms[name]; return uniform ? uniform.location : null; }
+            var target = surface.target;
+            depthOf(target);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+            gl.viewport(0, 0, target.width, target.height);
+            gl.useProgram(program.program);
+            gl.uniformMatrix4fv(slot('u_Matrix'), false, new Float32Array(times4(viewProjection(), model)));
+            gl.enable(gl.BLEND);
+            if (system.additive) gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
+            else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+            if (system.depthTest) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.depthMask(false);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, layer.texture);
+            gl.uniform1i(slot('u_Texture'), 0);
+            gl.uniform1i(slot('u_Channels'), CHANNELS[system.picture.channels] || 0);
+            gl.uniform1f(slot('u_Bright'), system.bright);
+            gl.bindVertexArray(deepParticleShape);
+            gl.bindBuffer(gl.ARRAY_BUFFER, deepParticleBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, deepParticleData.subarray(0, out.length), gl.DYNAMIC_DRAW);
+            gl.drawArrays(gl.TRIANGLES, 0, count);
+            gl.bindVertexArray(null);
+            gl.disable(gl.DEPTH_TEST);
+            gl.depthMask(true);
+          }
+
           system.draw = function () {
+            if (inDepth) return drawDeep();
             if (!particleProgram || !system.particles.length) return;
             var stands = placement();
             if (!stands.visible) return;
@@ -9040,6 +9229,7 @@ public enum WallpaperEngineRuntime {
             gl.vertexAttribPointer(3, 4, gl.FLOAT, false, 32, 16);
             gl.bindVertexArray(null);
             system.draw = function () {
+              if (inDepth) return drawDeep();
               var stands = placement();
               if (!stands.visible || !system.particles.length) return;
               var state = system.state;
