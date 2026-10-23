@@ -8956,7 +8956,8 @@ public enum WallpaperEngineRuntime {
             var back = m4invert(model);
             function inward(v) { return [back[0] * v[0] + back[4] * v[1] + back[8] * v[2], back[1] * v[0] + back[5] * v[1] + back[9] * v[2], back[2] * v[0] + back[6] * v[1] + back[10] * v[2]]; }
             var basis = eyeBasis();
-            var viewRight = inward(basis.right), viewUp = inward(basis.up), viewAhead = inward(cross(basis.up, basis.right));
+            var viewRight = inward(basis.right), viewUp = inward(basis.up);
+            var wholeScale = Math.cbrt(Math.abs(model[0] * (model[5] * model[10] - model[6] * model[9]) - model[4] * (model[1] * model[10] - model[2] * model[9]) + model[8] * (model[1] * model[6] - model[2] * model[5]))) || 1;
             var eye = basis.eye, eyeHere = [back[0] * eye[0] + back[4] * eye[1] + back[8] * eye[2] + back[12],
                                             back[1] * eye[0] + back[5] * eye[1] + back[9] * eye[2] + back[13],
                                             back[2] * eye[0] + back[6] * eye[1] + back[10] * eye[2] + back[14]];
@@ -8980,18 +8981,23 @@ public enum WallpaperEngineRuntime {
                 ? Math.floor(hash(particle.id, 3, 11) * frames.length) % frames.length
                 : Math.min(frames.length - 1, Math.floor((((particle.age / particle.life) * system.frameRuns) % 1) * frames.length))] : null;
               if (system.tails) {
+                // As the rope trails of flat scenes, measured on Wallpaper Engine's previews: as
+                // wide as the particle times the system's scale taken whole (not stretched along
+                // any one axis), across the way it goes and the way the eye looks — laid in the
+                // scene's own space, so the band is drawn without the system's matrix.
                 var spots = (particle.path || []).map(function (spot) { return [spot[0], spot[1], spot[3] || 0]; });
                 spots.push(here);
                 if (spots.length < 2) return;
+                spots = spots.map(function (spot) { return [model[0] * spot[0] + model[4] * spot[1] + model[8] * spot[2] + model[12],
+                                                             model[1] * spot[0] + model[5] * spot[1] + model[9] * spot[2] + model[13],
+                                                             model[2] * spot[0] + model[6] * spot[1] + model[10] * spot[2] + model[14]]; });
                 var rows = [];
+                var half = particle.size * particle.sizeNow * system.sizeBy * wholeScale / 2;
                 spots.forEach(function (spot, index) {
                   var before = spots[Math.max(0, index - 1)], after = spots[Math.min(spots.length - 1, index + 1)];
                   var along = [after[0] - before[0], after[1] - before[1], after[2] - before[2]];
-                  // As Wallpaper Engine's rope shader: across the way it goes and the way the eye
-                  // looks, both in the system's own space, as wide as twice the particle.
-                  var across = unit(cross(viewAhead, along));
+                  var across = unit(cross([spot[0] - eye[0], spot[1] - eye[1], spot[2] - eye[2]], along));
                   var v = 1 - index / (spots.length - 1);
-                  var half = particle.size * particle.sizeNow * system.sizeBy;
                   rows.push([[spot[0] - across[0] * half, spot[1] - across[1] * half, spot[2] - across[2] * half], 0, v],
                             [[spot[0] + across[0] * half, spot[1] + across[1] * half, spot[2] + across[2] * half], 1, v]);
                 });
@@ -9050,7 +9056,7 @@ public enum WallpaperEngineRuntime {
             gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
             gl.viewport(0, 0, target.width, target.height);
             gl.useProgram(program.program);
-            gl.uniformMatrix4fv(slot('u_Matrix'), false, new Float32Array(times4(viewProjection(), model)));
+            gl.uniformMatrix4fv(slot('u_Matrix'), false, new Float32Array(system.tails ? viewProjection() : times4(viewProjection(), model)));
             gl.enable(gl.BLEND);
             if (system.additive) gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
             else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
