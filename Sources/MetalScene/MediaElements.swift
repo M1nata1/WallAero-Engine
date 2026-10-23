@@ -26,6 +26,9 @@ final class MediaElement {
     private var output: AVPlayerItemVideoOutput?
     private var observers: [NSObjectProtocol] = []
     private var statusObservation: NSKeyValueObservation?
+    /// A sound played round and round with no gap between the end and the start, as a page's own.
+    private var looper: AVPlayerLooper?
+    private var source = ""
     private var loop = false, muted = false, volume: Float = 1, rate: Float = 1, wantsPlay = false
     private var ready = false
     private var suspended = false
@@ -57,7 +60,12 @@ final class MediaElement {
     func set(_ name: String, _ value: Any?) {
         switch name {
         case "src": load(value as? String ?? "")
-        case "loop": loop = (value as? NSNumber)?.boolValue ?? false
+        case "loop":
+            let wanted = (value as? NSNumber)?.boolValue ?? false
+            guard wanted != loop else { return }
+            loop = wanted
+            // A sound already loaded is loaded again, to loop without a gap or to stop looping.
+            if kind == .audio, player != nil { load(source) }
         case "muted": muted = (value as? NSNumber)?.boolValue ?? false; player?.isMuted = muted || kind == .video
         case "volume": volume = Float((value as? NSNumber)?.doubleValue ?? 1); player?.volume = volume
         case "playbackRate":
@@ -110,6 +118,7 @@ final class MediaElement {
         case "remove":
             wantsPlay = false
             player?.pause()
+            looper = nil
             player = nil
         default: break
         }
@@ -119,6 +128,7 @@ final class MediaElement {
 
     private func load(_ source: String) {
         guard !source.isEmpty else { return }
+        self.source = source
         let address = url(of: source)
         switch kind {
         case .image:
@@ -144,13 +154,42 @@ final class MediaElement {
                 item.add(output)
                 self.output = output
             }
-            let player = AVPlayer(playerItem: item)
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            player?.pause()
+            looper = nil
+            ready = false
+            ended = false
+            // A looping sound is played by a looper, which queues the next round before this one
+            // ends: seeking back to the start at the end leaves a gap, every round of a short one.
+            let player: AVPlayer
+            if kind == .audio, loop {
+                let queue = AVQueuePlayer()
+                looper = AVPlayerLooper(player: queue, templateItem: item)
+                player = queue
+            } else {
+                player = AVPlayer(playerItem: item)
+            }
             player.isMuted = muted || kind == .video
             player.volume = volume
             player.preventsDisplaySleepDuringVideoPlayback = false
             player.allowsExternalPlayback = false
             self.player = player
-            statusObservation = item.observe(\.status) { [weak self] item, _ in
+            // The looper plays copies of the item, so a looping sound is ready when its player is.
+            statusObservation = looper != nil ? player.observe(\.status) { [weak self] player, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if player.status == .readyToPlay, !self.ready {
+                        self.ready = true
+                        self.event("loadedmetadata")
+                        self.event("loadeddata")
+                        self.event("canplay")
+                        if self.wantsPlay, !self.suspended { player.rate = self.rate }
+                    } else if player.status == .failed {
+                        self.event("error")
+                    }
+                }
+            } : item.observe(\.status) { [weak self] item, _ in
                 DispatchQueue.main.async {
                     guard let self else { return }
                     if item.status == .readyToPlay, !self.ready {
