@@ -6226,7 +6226,12 @@ public enum WallpaperEngineRuntime {
             });
           };
           var white = null;
-          thing.draw = function () {
+          thing.isModel = true;
+          // Which of the two passes of a scene in three dimensions it has parts for.
+          var showsThrough = parts.some(function (part) { return part.blending === 'additive' || part.blending === 'translucent'; });
+          var hides = parts.some(function (part) { return part.blending !== 'additive' && part.blending !== 'translucent'; });
+          thing.draw = function (pass) {
+            if (inDepth && !(pass === 'through' ? showsThrough : hides)) return;
             var stands = standing(thing);
             if (!stands.visible || !skinnedProgram) return;
             pose();
@@ -6267,6 +6272,9 @@ public enum WallpaperEngineRuntime {
             gl.activeTexture(gl.TEXTURE0);
             gl.uniform1i(at('u_Texture'), 0);
             parts.forEach(function (part) {
+              // In a scene in three dimensions, the parts that show through are drawn on the second pass.
+              var through = part.blending === 'additive' || part.blending === 'translucent';
+              if (inDepth && through !== (pass === 'through')) return;
               gl.uniform1f(at('u_Metallic'), part.metallic);
               gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
               gl.uniform1f(at('u_Roughness'), part.roughness);
@@ -6374,7 +6382,12 @@ public enum WallpaperEngineRuntime {
             });
           };
           var white = null;
-          thing.draw = function () {
+          thing.isModel = true;
+          // Which of the two passes of a scene in three dimensions it has parts for.
+          var showsThrough = parts.some(function (part) { return part.blending === 'additive' || part.blending === 'translucent'; });
+          var hides = parts.some(function (part) { return part.blending !== 'additive' && part.blending !== 'translucent'; });
+          thing.draw = function (pass) {
+            if (inDepth && !(pass === 'through' ? showsThrough : hides)) return;
             var stands = standing(thing);
             if (!stands.visible) return;
             ensureShadows();
@@ -6415,6 +6428,9 @@ public enum WallpaperEngineRuntime {
             gl.activeTexture(gl.TEXTURE0);
             gl.uniform1i(at('u_Texture'), 0);
             parts.forEach(function (part) {
+              // In a scene in three dimensions, the parts that show through are drawn on the second pass.
+              var through = part.blending === 'additive' || part.blending === 'translucent';
+              if (inDepth && through !== (pass === 'through')) return;
               gl.uniform1f(at('u_Metallic'), part.metallic);
               gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
               gl.uniform1f(at('u_Roughness'), part.roughness);
@@ -8503,11 +8519,28 @@ public enum WallpaperEngineRuntime {
         // with: where that one is, with what the scene changes of it. A child either makes its
         // particles alongside its parent, or goes with each of the parent's particles: follows
         // it, or makes its particles where one is made or where one dies.
+        function firstOf(value) { return Array.isArray(value) ? value[0] : value; }
+
         function particleSystem(fileName, system, thing, entry, depth) {
           var said = json(fileName);
           var name = system.name;
           var material = ((json(said.material) || {}).passes || [])[0] || {};
           var over = thing.said.instanceoverride || {};
+          // What the scene changes of the particles may be a script's — more of them while the
+          // button is held, none but on a birthday — kept with the object's values and read
+          // every frame, once for the object however many systems it has.
+          if (!depth) {
+            ['count', 'rate', 'size', 'alpha', 'lifetime', 'speed', 'colorn'].forEach(function (name) {
+              var raw = over[name];
+              if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+              also(thing, 'instance:' + name, live(raw, name === 'colorn' ? 3 : 1, 1, thing));
+            });
+          }
+          // A value of the scene's change: as a script or a setting has it now, else as said.
+          function overNow(name) {
+            var now = thing.state['instance:' + name];
+            return now !== undefined ? now : over[name];
+          }
           var kind = entry ? key(String(plain(entry.type) || 'static')) : 'static';
           if (['static', 'eventfollow', 'eventspawn', 'eventdeath'].indexOf(kind) < 0) kind = 'static';
           system.kind = kind;
@@ -8562,18 +8595,20 @@ public enum WallpaperEngineRuntime {
           // wallpaper may stand behind each, and the editor may change each.
           system.settle = function () {
             over = thing.said.instanceoverride || {};
-            system.each = Math.max(1, Math.min(20000, Math.round(ownMost * number(over.count, 1))));
+            // None at all when the scene says so.
+            system.each = Math.max(0, Math.min(20000, Math.round(ownMost * number(firstOf(overNow('count')), 1))));
             system.most = kind === 'static' ? system.each : Math.min(20000, system.each * Math.max(1, system.owner ? system.owner.most : 1));
-            system.rate = number(over.rate, 1);
-            system.sizeBy = number(over.size, 1);
-            system.alphaBy = number(over.alpha, 1);
-            system.speedBy = number(over.speed, 1);
-            system.lifeBy = number(over.lifetime, 1);
+            system.rate = number(firstOf(overNow('rate')), 1);
+            system.sizeBy = number(firstOf(overNow('size')), 1);
+            system.alphaBy = number(firstOf(overNow('alpha')), 1);
+            system.speedBy = number(firstOf(overNow('speed')), 1);
+            system.lifeBy = number(firstOf(overNow('lifetime')), 1);
             system.tint = [1, 1, 1];
             // The color the scene gives is the particles' color, whatever the system would have
             // given them and however it would have changed it as they live: a fire that burns
             // from yellow to red, given violet by the scene, is violet throughout.
-            system.recolor = over.colorn !== undefined ? color(over.colorn, 1) : (over.color !== undefined ? color(over.color, 255) : null);
+            var colorn = overNow('colorn');
+            system.recolor = colorn !== undefined ? (Array.isArray(colorn) ? colorn.slice(0, 3) : color(colorn, 1)) : (over.color !== undefined ? color(over.color, 255) : null);
           };
           // The color of a particle as it is drawn.
           system.colorOf = function (particle, state) {
@@ -8834,7 +8869,10 @@ public enum WallpaperEngineRuntime {
             }
             dirty = true;
           };
+          var steered = ['count', 'rate', 'size', 'alpha', 'lifetime', 'speed', 'colorn'].some(function (name) { return thing.lives['instance:' + name]; });
           system.step = function (seconds) {
+            // What scripts make of the scene's change, taken up as it comes.
+            if (steered) system.settle();
             system.age += seconds;
             if (points.length) measurePoints(seconds);
             if (points.some(function (point) { return point.follows; })) findPointer();
@@ -9962,12 +10000,20 @@ public enum WallpaperEngineRuntime {
             gl.clear(gl.COLOR_BUFFER_BIT);
           }
           surface = { target: sceneTarget, copy: copyTarget, width: sceneWidth, height: sceneHeight, left: 0, bottom: 0 };
-          objects.slice().forEach(function (object) {
-            // What a layer holds is drawn by that layer.
-            if (object.heldBy) return;
-            gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
-            gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
-            object.draw();
+          // In a scene in three dimensions, as Wallpaper Engine sorts it: first every model's parts
+          // that hide what is behind them, then everything in the scene's order with the models'
+          // parts that show through — else a glow drawn early hides, by its depth, the street
+          // drawn after it.
+          var passes = inDepth ? ['solid', 'through'] : [null];
+          passes.forEach(function (pass) {
+            objects.slice().forEach(function (object) {
+              // What a layer holds is drawn by that layer.
+              if (object.heldBy) return;
+              if (pass === 'solid' && !object.isModel) return;
+              gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+              gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+              object.draw(pass);
+            });
           });
           if (flag(general.bloom, false)) glow();
           // Onto the canvas, turned over: the scene is kept with its top row first.
