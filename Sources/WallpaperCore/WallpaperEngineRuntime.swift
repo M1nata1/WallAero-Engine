@@ -5605,7 +5605,7 @@ public enum WallpaperEngineRuntime {
         // much as is left of it at that distance, with a shine as sharp as the material is smooth
         // and of the picture's own color as far as it is metal.
 
-        var MAX_LIGHTS = 8;
+        var MAX_LIGHTS = 32;
         // How a model in three dimensions is shaded, whether its corners stand still or hang on bones.
         var modelFragment = [
           '#version 300 es',
@@ -5622,10 +5622,12 @@ public enum WallpaperEngineRuntime {
           'uniform float u_Metallic;',
           'uniform float u_Roughness;',
           'uniform int u_Lit;',             // 0: the material takes no light, and shows its own colors
+          'uniform float u_Cutoff;',        // over 0: what is clearer than this is not drawn, the rest is whole
           'uniform int u_LightCount;',
           'uniform vec4 u_LightPlace[' + MAX_LIGHTS + '];', // where (w 1), or which way it shines (w 0)
           'uniform vec4 u_LightColor[' + MAX_LIGHTS + '];', // color times strength, and how far it reaches
           'uniform vec4 u_LightAim[' + MAX_LIGHTS + '];',   // which way a spot points, and how fast it fades
+          'uniform vec4 u_LightEnd[' + MAX_LIGHTS + '];',   // a tube's other end (w 1): it shines from the nearest point between
           // The sun's shadows: where each point is as the light sees it, and how near to the
           // light the nearest thing there is, kept in four bytes.
           'uniform int u_Shadows;',
@@ -5669,6 +5671,8 @@ public enum WallpaperEngineRuntime {
           '  if (u_Channels == 1) base = vec4(1.0, 1.0, 1.0, base.r);',
           '  if (u_Channels == 2) base = vec4(base.rrr, base.g);',
           '  base *= u_Tint;',
+          // Alpha to coverage, as Wallpaper Engine draws it with no samples to spare: a cut.
+          '  if (u_Cutoff > 0.0) { if (base.a < u_Cutoff) discard; base.a = 1.0; }',
           '  if (u_Lit == 0) { color = base; return; }',
           '  vec3 n = normalize(v_Normal);',
           '  if (!gl_FrontFacing) n = -n;',
@@ -5683,7 +5687,12 @@ public enum WallpaperEngineRuntime {
           '    vec3 toLight;',
           '    float left = 1.0;',
           '    if (u_LightPlace[i].w > 0.5) {',
-          '      vec3 way = u_LightPlace[i].xyz - v_World;',
+          '      vec3 from = u_LightPlace[i].xyz;',
+          '      if (u_LightEnd[i].w > 0.5) {',
+          '        vec3 along = u_LightEnd[i].xyz - from;',
+          '        from += along * clamp(dot(v_World - from, along) / max(dot(along, along), 0.000001), 0.0, 1.0);',
+          '      }',
+          '      vec3 way = from - v_World;',
           '      float far = length(way);',
           '      toLight = way / max(far, 0.0001);',
           '      float reach = u_LightColor[i].w;',
@@ -5872,8 +5881,13 @@ public enum WallpaperEngineRuntime {
             var aim = thing.lightKind === 'directional' ? [m[0], m[1], m[2]] : [-m[8], -m[9], -m[10]];
             var length = Math.sqrt(aim[0] * aim[0] + aim[1] * aim[1] + aim[2] * aim[2]) || 1;
             aim = aim.map(function (part) { return part / length; });
+            var reach = thing.lightKind === 'tube' ? thing.tubeReach : [0, 0, 0];
+            var half = [m[0] * reach[0] + m[4] * reach[1] + m[8] * reach[2], m[1] * reach[0] + m[5] * reach[1] + m[9] * reach[2],
+                        m[2] * reach[0] + m[6] * reach[1] + m[10] * reach[2]];
             list.push({
-              place: thing.lightKind === 'directional' ? [aim[0], aim[1], aim[2], 0] : [m[12], m[13], m[14], 1],
+              place: thing.lightKind === 'directional' ? [aim[0], aim[1], aim[2], 0]
+                   : [m[12] - half[0], m[13] - half[1], m[14] - half[2], 1],
+              end: thing.lightKind === 'tube' ? [m[12] + half[0], m[13] + half[1], m[14] + half[2], 1] : [0, 0, 0, 0],
               color: [shade[0] * strength, shade[1] * strength, shade[2] * strength, number((thing.state.radius || [])[0], 0)],
               aim: thing.lightKind === 'spot' ? [aim[0], aim[1], aim[2], number((thing.state.exponent || [])[0], 1)] : [0, 0, 0, number((thing.state.exponent || [])[0], 1)],
               strength: strength
@@ -6041,6 +6055,16 @@ public enum WallpaperEngineRuntime {
             }
             thing.boneWorld = world;
           }
+          // Where a point of the model is now, in the model's own space: the bone it hangs on as
+          // the animation has it, then the point's own place on that bone.
+          thing.attachmentMatrix = function (name) {
+            var point = (mesh.attachments || []).filter(function (each) { return each.name === name; })[0];
+            if (!point) return null;
+            pose();
+            var bone = thing.boneWorld && thing.boneWorld[number(point.bone, -1)];
+            if (!bone) return null;
+            return (point.matrix || []).length >= 16 ? m4mul(bone, point.matrix) : bone;
+          };
           thing.step = function (passed) {
             layers.forEach(function (layer) { if (layer.visible) layer.frame += passed * layer.fps * layer.speed; });
           };
@@ -6085,7 +6109,10 @@ public enum WallpaperEngineRuntime {
               lit: number((pass.combos || {}).LIGHTING, 1) !== 0,
               // How much it shows, as its material says: a number, or what a script makes of it —
               // a flame that shows only while the button is held.
-              alpha: constants.alpha === undefined ? null : live(constants.alpha, 1, 1, thing)
+              alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
+              // The color the material lays over its picture, which a script may change — a sky
+              // that darkens at night.
+              color: constants.color === undefined ? null : materialLive(thing, number_, 'color', constants.color, 3)
             };
           }).filter(Boolean);
           if (!parts.length) return null;
@@ -6138,8 +6165,9 @@ public enum WallpaperEngineRuntime {
             var lights = sceneLights();
             gl.uniform1i(at('u_LightCount'), lights.length);
             if (lights.length) {
-              var places = [], shades = [], aims = [];
-              lights.forEach(function (light) { places.push.apply(places, light.place); shades.push.apply(shades, light.color); aims.push.apply(aims, light.aim); });
+              var places = [], shades = [], aims = [], ends = [];
+              lights.forEach(function (light) { places.push.apply(places, light.place); shades.push.apply(shades, light.color); aims.push.apply(aims, light.aim); ends.push.apply(ends, light.end); });
+              gl.uniform4fv(at('u_LightEnd'), new Float32Array(ends));
               gl.uniform4fv(at('u_LightPlace'), new Float32Array(places));
               gl.uniform4fv(at('u_LightColor'), new Float32Array(shades));
               gl.uniform4fv(at('u_LightAim'), new Float32Array(aims));
@@ -6153,9 +6181,11 @@ public enum WallpaperEngineRuntime {
               gl.uniform1f(at('u_Metallic'), part.metallic);
               gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
               gl.uniform1f(at('u_Roughness'), part.roughness);
+              gl.uniform1f(at('u_Cutoff'), part.blending === 'alphatocoverage' ? 0.5 : 0);
               var shown = part.alpha ? Math.max(0, Math.min(1, number((part.alpha.now || [1])[0], 1))) : 1;
               if (!(shown > 0.001)) return;
-              gl.uniform4f(at('u_Tint'), tint[0], tint[1], tint[2], stands.alpha * shown);
+              var shade = part.color ? part.color.now || [1, 1, 1] : [1, 1, 1];
+              gl.uniform4f(at('u_Tint'), tint[0] * number(shade[0], 1), tint[1] * number(shade[1], 1), tint[2] * number(shade[2], 1), stands.alpha * shown);
               var layer = part.picture && part.picture.ready !== false ? part.picture.layers[0] : null;
               if (!layer) white = white || flat(255, 255, 255, 255);
               gl.bindTexture(gl.TEXTURE_2D, (layer || white.layers[0]).texture);
@@ -6190,7 +6220,7 @@ public enum WallpaperEngineRuntime {
           var given = [{ solid: mesh.solid, triangles: mesh.triangles, material: object.material || mesh.material }]
             .concat((mesh.pieces || []).map(function (piece) { return { solid: piece.solid, triangles: piece.triangles, material: piece.material }; }));
           var low = [Infinity, Infinity, Infinity], high = [-Infinity, -Infinity, -Infinity];
-          var parts = given.map(function (piece) {
+          var parts = given.map(function (piece, number_) {
             var corners = numbersOf(piece.solid, Float32Array);
             var triangles = numbersOf(piece.triangles, Uint16Array);
             var count = Math.floor(corners.length / 8);
@@ -6227,7 +6257,11 @@ public enum WallpaperEngineRuntime {
               blending: key(String(pass.blending || 'normal')),
               metallic: number(plain(constants.metallic), 0), roughness: number(plain(constants.roughness), 0.5),
               // Lit unless the material says not: a model's material is, in Wallpaper Engine.
-              lit: number((pass.combos || {}).LIGHTING, 1) !== 0
+              lit: number((pass.combos || {}).LIGHTING, 1) !== 0,
+              // How much it shows and the color laid over its picture, as its material says —
+              // numbers, or what scripts make of them: a sky that darkens at night.
+              alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
+              color: constants.color === undefined ? null : materialLive(thing, number_, 'color', constants.color, 3)
             };
           }).filter(Boolean);
           if (!parts.length) return null;
@@ -6278,8 +6312,9 @@ public enum WallpaperEngineRuntime {
             var lights = sceneLights();
             gl.uniform1i(at('u_LightCount'), lights.length);
             if (lights.length) {
-              var places = [], shades = [], aims = [];
-              lights.forEach(function (light) { places.push.apply(places, light.place); shades.push.apply(shades, light.color); aims.push.apply(aims, light.aim); });
+              var places = [], shades = [], aims = [], ends = [];
+              lights.forEach(function (light) { places.push.apply(places, light.place); shades.push.apply(shades, light.color); aims.push.apply(aims, light.aim); ends.push.apply(ends, light.end); });
+              gl.uniform4fv(at('u_LightEnd'), new Float32Array(ends));
               gl.uniform4fv(at('u_LightPlace'), new Float32Array(places));
               gl.uniform4fv(at('u_LightColor'), new Float32Array(shades));
               gl.uniform4fv(at('u_LightAim'), new Float32Array(aims));
@@ -6294,6 +6329,11 @@ public enum WallpaperEngineRuntime {
               gl.uniform1f(at('u_Metallic'), part.metallic);
               gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
               gl.uniform1f(at('u_Roughness'), part.roughness);
+              gl.uniform1f(at('u_Cutoff'), part.blending === 'alphatocoverage' ? 0.5 : 0);
+              var shown = part.alpha ? Math.max(0, Math.min(1, number((part.alpha.now || [1])[0], 1))) : 1;
+              if (!(shown > 0.001)) return;
+              var shade = part.color ? part.color.now || [1, 1, 1] : [1, 1, 1];
+              gl.uniform4f(at('u_Tint'), tint[0] * number(shade[0], 1), tint[1] * number(shade[1], 1), tint[2] * number(shade[2], 1), stands.alpha * shown);
               var layer = part.picture && part.picture.ready !== false ? part.picture.layers[0] : null;
               if (!layer) white = white || flat(255, 255, 255, 255);
               gl.bindTexture(gl.TEXTURE_2D, (layer || white.layers[0]).texture);
@@ -6315,11 +6355,22 @@ public enum WallpaperEngineRuntime {
           return thing;
         }
 
+        // A value of a model's material: kept with the model's own, so that what a script or an
+        // animation makes of it is read every frame.
+        function materialLive(thing, part, name, raw, count) {
+          var value = live(raw, count, 1, thing);
+          also(thing, 'material' + part + ':' + name, value);
+          return value;
+        }
+
         // A light: where it is, its color and strength, how far it reaches and how fast it fades
         // there. A light that shines from far away in one direction has no place, only a way.
         function buildLight(object, thing) {
           var kind = key(String(plain(object.light) || 'lpoint'));
-          thing.lightKind = /dir|sun/.test(kind) ? 'directional' : (/spot/.test(kind) ? 'spot' : 'point');
+          thing.lightKind = /dir|sun/.test(kind) ? 'directional' : (/spot/.test(kind) ? 'spot' : (/tube/.test(kind) ? 'tube' : 'point'));
+          // A tube reaches as far each way from its middle as its control point says, along the
+          // light's own axes.
+          thing.tubeReach = numbers(plain(object.controlpoint), 3, 0);
           also(thing, 'intensity', live(object.intensity === undefined ? 1 : object.intensity, 1, 1, thing));
           also(thing, 'radius', live(object.radius === undefined ? 0 : object.radius, 1, 0, thing));
           also(thing, 'exponent', live(object.exponent === undefined ? 1 : object.exponent, 1, 1, thing));
@@ -6473,6 +6524,10 @@ public enum WallpaperEngineRuntime {
             var name = thing.said ? plain(thing.said.attachment) : null;
             var point = typeof name === 'string' && name && parent.puppet && parent.puppet.attachment ? parent.puppet.attachment(name) : null;
             if (point) matrix = times([point[0], point[1], 0, 0, point[2], point[3], 0, 0, 0, 0, 1, 0, point[4], point[5], 0, 1], matrix);
+            // One that hangs on a point of a model in three dimensions — a bone the model's
+            // animation moves — goes with that bone.
+            var held = !point && typeof name === 'string' && name && parent.attachmentMatrix ? parent.attachmentMatrix(name) : null;
+            if (held) matrix = m4mul(held, matrix);
             // Drawn into the layer that holds it, an object is placed in that layer's own
             // coordinates; the layer's place is added when the layer is drawn.
             if (!parent.holds || whole) {
@@ -7242,7 +7297,11 @@ public enum WallpaperEngineRuntime {
           gl.uniform1i(at('u_LightCount'), lights.length);
           if (lights.length) {
             var places = [], shades = [], aims = [];
-            lights.forEach(function (light) { places.push.apply(places, light.place); shades.push.apply(shades, light.color); aims.push.apply(aims, light.aim); });
+            lights.forEach(function (light) {
+              // A tube, for a flat layer, shines from its middle.
+              var place = light.end[3] ? [0, 1, 2].map(function (k) { return (light.place[k] + light.end[k]) / 2; }).concat([1]) : light.place;
+              places.push.apply(places, place); shades.push.apply(shades, light.color); aims.push.apply(aims, light.aim);
+            });
             gl.uniform4fv(at('u_LightPlace'), new Float32Array(places));
             gl.uniform4fv(at('u_LightColor'), new Float32Array(shades));
             gl.uniform4fv(at('u_LightAim'), new Float32Array(aims));
