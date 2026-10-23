@@ -5630,22 +5630,51 @@ public enum WallpaperEngineRuntime {
           'uniform vec4 u_LightEnd[' + MAX_LIGHTS + '];',   // a tube's other end (w 1): it shines from the nearest point between
           // The sun's shadows: where each point is as the light sees it, and how near to the
           // light the nearest thing there is, kept in four bytes.
+          // The sun's shadows, as Wallpaper Engine casts them: up to three cascades, each a map of
+          // a piece of the scene round the eye as the sun sees it — the nearest the finest — with
+          // how near to the sun the nearest thing there is, kept in four bytes.
           'uniform int u_Shadows;',
-          'uniform mat4 u_ShadowMatrix;',
-          'uniform sampler2D u_ShadowMap;',
+          'uniform int u_ShadowCount;',
+          'uniform mat4 u_ShadowMatrix[3];',
+          'uniform sampler2D u_ShadowMap0;',
+          'uniform sampler2D u_ShadowMap1;',
+          'uniform sampler2D u_ShadowMap2;',
           'uniform vec2 u_ShadowTexel;',
           'float unpackDepth(vec4 c) { return dot(c, vec4(1.0, 1.0 / 255.0, 1.0 / 65025.0, 1.0 / 16581375.0)); }',
-          // As Wallpaper Engine does: nine samples around the point, each lit or not.
+          // Whether a point is lit, between texels: the four around compared and weighed by
+          // nearness, as the comparing sampler Wallpaper Engine reads its shadows with does.
+          'float litAt(sampler2D map, vec2 uv, float z) {',
+          '  vec2 t = uv / u_ShadowTexel - 0.5;',
+          '  vec2 f = fract(t);',
+          '  vec2 b = (floor(t) + 0.5) * u_ShadowTexel;',
+          '  float a = z <= unpackDepth(texture(map, b)) ? 1.0 : 0.0;',
+          '  float c = z <= unpackDepth(texture(map, b + vec2(u_ShadowTexel.x, 0.0))) ? 1.0 : 0.0;',
+          '  float d = z <= unpackDepth(texture(map, b + vec2(0.0, u_ShadowTexel.y))) ? 1.0 : 0.0;',
+          '  float e = z <= unpackDepth(texture(map, b + u_ShadowTexel)) ? 1.0 : 0.0;',
+          '  return mix(mix(a, c, f.x), mix(d, e, f.x), f.y);',
+          '}',
+          // Nine of those round the point, at Wallpaper Engine's own offsets.
+          'float soft(sampler2D map, vec3 at) {',
+          '  vec2 o = u_ShadowTexel * 1.02323;',
+          '  vec2 r = u_ShadowTexel * 0.81616;',
+          '  float z = at.z - 0.0015;',
+          '  return (litAt(map, at.xy - r, z) + litAt(map, at.xy + vec2(0.0, -o.y), z) + litAt(map, at.xy + vec2(r.x, -r.y), z) +',
+          '          litAt(map, at.xy + vec2(-o.x, 0.0), z) + litAt(map, at.xy, z) + litAt(map, at.xy + vec2(o.x, 0.0), z) +',
+          '          litAt(map, at.xy + vec2(-r.x, r.y), z) + litAt(map, at.xy + vec2(0.0, o.y), z) + litAt(map, at.xy + r, z)) / 9.0;',
+          '}',
+          // The finest cascade the point lies in; outside all of them it is lit.
           'float sunlit(vec3 world) {',
-          '  vec4 seen = u_ShadowMatrix * vec4(world, 1.0);',
-          '  vec3 at = seen.xyz / seen.w * 0.5 + 0.5;',
-          '  if (at.x <= 0.0 || at.x >= 1.0 || at.y <= 0.0 || at.y >= 1.0 || at.z >= 1.0) return 1.0;',
-          '  float lit = 0.0;',
-          '  for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {',
-          '    float nearest = unpackDepth(texture(u_ShadowMap, at.xy + vec2(float(dx), float(dy)) * u_ShadowTexel));',
-          '    lit += at.z - 0.0015 <= nearest ? 1.0 : 0.0;',
+          '  for (int i = 0; i < 3; i++) {',
+          '    if (i >= u_ShadowCount) break;',
+          '    vec4 seen = u_ShadowMatrix[i] * vec4(world, 1.0);',
+          '    vec3 at = seen.xyz / seen.w;',
+          '    if (abs(at.x) >= 0.99 || abs(at.y) >= 0.99 || abs(at.z) >= 0.99) continue;',
+          '    at = at * 0.5 + 0.5;',
+          '    if (i == 0) return soft(u_ShadowMap0, at);',
+          '    if (i == 1) return soft(u_ShadowMap1, at);',
+          '    return soft(u_ShadowMap2, at);',
           '  }',
-          '  return lit / 9.0;',
+          '  return 1.0;',
           '}',
           'out vec4 color;',
           'const float PI = 3.14159265;',
@@ -5791,7 +5820,7 @@ public enum WallpaperEngineRuntime {
           '  color = e - e.yzww * vec4(1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0, 0.0);',
           '}'
         ].join('\n'), 'the player\'s own shader');
-        var shadowMap = null, shadowFrame = -1, shadowState = null;
+        var shadowMaps = [], shadowFrame = -1, shadowState = null;
 
         // The light that casts shadows, if the scene has one that shows: the first sun.
         function shadowLight() {
@@ -5809,46 +5838,74 @@ public enum WallpaperEngineRuntime {
           shadowState = null;
           var sun = inDepth && shadowProgram ? shadowLight() : null;
           if (!sun) return null;
-          if (!shadowMap) {
-            shadowMap = { texture: newTexture(true, false), framebuffer: gl.createFramebuffer(), depth: gl.createRenderbuffer() };
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SHADOW_SIZE, SHADOW_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-            gl.bindRenderbuffer(gl.RENDERBUFFER, shadowMap.depth);
-            gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, SHADOW_SIZE, SHADOW_SIZE);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, shadowMap.framebuffer);
-            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, shadowMap.texture, 0);
-            gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, shadowMap.depth);
-          }
+          // The cascades the sun says, nearest first: each takes in the eye's view out to so far.
+          var distances = [0, 1, 2].map(function (index) { return number(plain(sun.said['cascadedistance' + index]), [25, 150, 650][index]); })
+            .filter(function (distance) { return distance > 0; });
           var m = standing(sun, true).matrix;
           var way = [m[0], m[1], m[2]], length = Math.hypot(way[0], way[1], way[2]) || 1;
           way = way.map(function (part) { return part / length; });
-          var reach = Math.max(1, number(plain(sun.said.cascadedistance1), number(plain(sun.said.cascadedistance0), 25)));
-          var centre = eyePlace();
-          var from = [centre[0] - way[0] * reach * 2, centre[1] - way[1] * reach * 2, centre[2] - way[2] * reach * 2];
           var up = Math.abs(way[1]) > 0.95 ? [0, 0, 1] : [0, 1, 0];
-          var look = Mat4.lookAt(new Vec3(from[0], from[1], from[2]), new Vec3(centre[0], centre[1], centre[2]), new Vec3(up[0], up[1], up[2])).m;
-          var far = reach * 4;
-          var box = [1 / reach, 0, 0, 0, 0, 1 / reach, 0, 0, 0, 0, -2 / far, 0, 0, 0, -1, 1];
-          var matrix = times4(box, look);
-          gl.bindFramebuffer(gl.FRAMEBUFFER, shadowMap.framebuffer);
-          gl.viewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
+          var eye = eyePlace();
+          var shot = activeCamera(), ahead;
+          if (shot) { var c = standing(shot, true).matrix; ahead = [-c[8], -c[9], -c[10]]; }
+          else {
+            var said = description.camera || {};
+            var centre0 = numbers(said.center, 3, 0);
+            ahead = said.eye ? [centre0[0] - eye[0], centre0[1] - eye[1], centre0[2] - eye[2]] : [0, 0, -1];
+          }
+          var aheadLength = Math.hypot(ahead[0], ahead[1], ahead[2]) || 1;
+          ahead = ahead.map(function (part) { return part / aheadLength; });
+          var tall = Math.tan(number(general.perspectiveoverridefov, number(general.fov, 50)) * Math.PI / 360);
+          var wide = tall * (surface.width / Math.max(1, surface.height));
+          var lookAtSun = Mat4.lookAt(new Vec3(0, 0, 0), new Vec3(way[0], way[1], way[2]), new Vec3(up[0], up[1], up[2])).m;
           gl.disable(gl.BLEND);
           gl.enable(gl.DEPTH_TEST);
           gl.depthFunc(gl.LEQUAL);
           gl.depthMask(true);
           gl.clearColor(1, 1, 1, 1);
-          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
           gl.useProgram(shadowProgram.program);
           function at(name) { var uniform = shadowProgram.uniforms[name]; return uniform ? uniform.location : null; }
-          gl.uniformMatrix4fv(at('u_LightViewProjection'), false, new Float32Array(matrix));
-          objects.forEach(function (thing) {
-            if (!thing.drawShadow || flag(plain(thing.said.castshadow), true) === false) return;
-            var stands = standing(thing);
-            if (!stands.visible) return;
-            thing.drawShadow(stands.matrix, at);
+          var matrices = [], textures = [];
+          distances.forEach(function (distance, index) {
+            var map = shadowMaps[index];
+            if (!map) {
+              map = shadowMaps[index] = { texture: newTexture(true, false), framebuffer: gl.createFramebuffer(), depth: gl.createRenderbuffer() };
+              gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SHADOW_SIZE, SHADOW_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+              gl.bindRenderbuffer(gl.RENDERBUFFER, map.depth);
+              gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, SHADOW_SIZE, SHADOW_SIZE);
+              gl.bindFramebuffer(gl.FRAMEBUFFER, map.framebuffer);
+              gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, map.texture, 0);
+              gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, map.depth);
+            }
+            // The ball round the piece of the view out to this far, its middle held still on the
+            // map's texels so that the shadows do not shimmer as the eye moves.
+            var reach = distance * Math.sqrt(0.25 + wide * wide + tall * tall);
+            var middle = [eye[0] + ahead[0] * distance / 2, eye[1] + ahead[1] * distance / 2, eye[2] + ahead[2] * distance / 2];
+            var texel = reach * 2 / SHADOW_SIZE;
+            var seen = [0, 1, 2].map(function (row) { return lookAtSun[row] * middle[0] + lookAtSun[4 + row] * middle[1] + lookAtSun[8 + row] * middle[2]; });
+            var snapped = [Math.round(seen[0] / texel) * texel, Math.round(seen[1] / texel) * texel, seen[2]];
+            var centre = [0, 1, 2].map(function (row) { return lookAtSun[row * 4] * snapped[0] + lookAtSun[row * 4 + 1] * snapped[1] + lookAtSun[row * 4 + 2] * snapped[2]; });
+            var from = [centre[0] - way[0] * reach * 2, centre[1] - way[1] * reach * 2, centre[2] - way[2] * reach * 2];
+            var look = Mat4.lookAt(new Vec3(from[0], from[1], from[2]), new Vec3(centre[0], centre[1], centre[2]), new Vec3(up[0], up[1], up[2])).m;
+            var far = reach * 4;
+            var box = [1 / reach, 0, 0, 0, 0, 1 / reach, 0, 0, 0, 0, -2 / far, 0, 0, 0, -1, 1];
+            var matrix = times4(box, look);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, map.framebuffer);
+            gl.viewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            gl.uniformMatrix4fv(at('u_LightViewProjection'), false, new Float32Array(matrix));
+            objects.forEach(function (thing) {
+              if (!thing.drawShadow || flag(plain(thing.said.castshadow), true) === false) return;
+              var stands = standing(thing);
+              if (!stands.visible) return;
+              thing.drawShadow(stands.matrix, at);
+            });
+            matrices.push.apply(matrices, matrix);
+            textures.push(map.texture);
           });
           gl.bindVertexArray(null);
           gl.disable(gl.DEPTH_TEST);
-          shadowState = { matrix: matrix, texture: shadowMap.texture };
+          shadowState = { matrices: matrices, textures: textures };
           return shadowState;
         }
         // Hands the shadows to a program that lights.
@@ -5856,11 +5913,15 @@ public enum WallpaperEngineRuntime {
           var shadows = shadowState;
           gl.uniform1i(at('u_Shadows'), shadows ? 1 : 0);
           if (!shadows) return;
-          gl.uniformMatrix4fv(at('u_ShadowMatrix'), false, new Float32Array(shadows.matrix));
+          gl.uniform1i(at('u_ShadowCount'), shadows.textures.length);
+          gl.uniformMatrix4fv(at('u_ShadowMatrix[0]') || at('u_ShadowMatrix'), false, new Float32Array(shadows.matrices));
           gl.uniform2f(at('u_ShadowTexel'), 1 / SHADOW_SIZE, 1 / SHADOW_SIZE);
-          gl.activeTexture(gl.TEXTURE0 + unit);
-          gl.bindTexture(gl.TEXTURE_2D, shadows.texture);
-          gl.uniform1i(at('u_ShadowMap'), unit);
+          // Every map's sampler has a texture, the cascades the sun lacks the nearest one's.
+          [0, 1, 2].forEach(function (index) {
+            gl.activeTexture(gl.TEXTURE0 + unit + index);
+            gl.bindTexture(gl.TEXTURE_2D, shadows.textures[Math.min(index, shadows.textures.length - 1)]);
+            gl.uniform1i(at('u_ShadowMap' + index), unit + index);
+          });
           gl.activeTexture(gl.TEXTURE0);
         }
 
