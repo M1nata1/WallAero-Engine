@@ -119,12 +119,12 @@ struct WallpaperSettingsView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous))
-        LabeledContent("Name") {
-            // A long name wraps; the runs of spaces some names are padded with count as one.
+        // The name goes under its label, as wide as the row, and wraps onto as many lines as it needs.
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Name")
             Text(verbatim: item.name.split(whereSeparator: \.isWhitespace).joined(separator: " "))
-                .lineLimit(4)
-                .truncationMode(.middle)
-                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
         LabeledContent("Kind") {
