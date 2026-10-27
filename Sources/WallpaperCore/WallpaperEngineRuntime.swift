@@ -350,11 +350,31 @@ public enum WallpaperEngineRuntime {
             });
             return ['#define ' + name + 'a(u, d) (' + sum + ')', '#define ' + name + '(u, d) ((' + sum + ').rgb)'];
           }
-          return [].concat(
+          // A blur around a middle point `c`: the picture looked at where `u` lands when turned
+          // about it by so much, or as far the other way along the line it moved, each place
+          // with a weight. `a` turns by a fortieth of a radian for each unit.
+          function radial(name, taps) {
+            var away = '((u) - (c))';
+            var sum = taps.map(function (tap) {
+              var moved = '(wallaeroTurn(' + away + ', ' + tap[0] + ' * (a) * 0.025) - ' + away + ')';
+              return 'texSample2D(g_Texture0, (u) ' + (tap[2] < 0 ? '- ' : '+ ') + moved + ') * ' + tap[1];
+            }).join(' + ');
+            return '#define ' + name + '(u, c, a) (' + sum + ')';
+          }
+          return [
+            'vec2 wallaeroTurn(vec2 v, float r) { return vec2(v.x * cos(r) - v.y * sin(r), v.x * sin(r) + v.y * cos(r)); }'
+          ].concat(
             blur('blur13', '0.1964825501511404', [['1.411764705882353', '0.2969069646728344'], ['3.2941176470588234', '0.09447039785044732'],
                                                   ['5.176470588235294', '0.010381362401148057']]),
             blur('blur7', '0.2270270270', [['1.3846153846', '0.3162162162'], ['3.2307692308', '0.0702702703']]),
-            blur('blur3', '0.29411764705882354', [['1.3333333333333333', '0.35294117647058826']])
+            blur('blur3', '0.29411764705882354', [['1.3333333333333333', '0.35294117647058826']]),
+            radial('blurRadial13a', [['0.0', '0.1976406528809576', 1],
+                                     ['1.4091998770852122', '0.2959855056006557', 1], ['1.4091998770852122', '0.2959855056006557', -1],
+                                     ['3.2979348079914822', '0.0935333619980593', 1], ['3.2979348079914822', '0.0935333619980593', -1],
+                                     ['5.2062900776825969', '0.0116608059608062', 1], ['5.2062900776825969', '0.0116608059608062', -1]]),
+            radial('blurRadial7a', [['2.3515644035337887', '0.2028175528299753', 1], ['0.469433779698372', '0.4044856614512112', 1],
+                                    ['-1.4091998770852121', '0.3213933537319605', 1], ['-3.0', '0.0713034319868530', 1]]),
+            radial('blurRadial3a', [['0.0', '0.5', 1], ['1.0', '0.25', 1], ['1.0', '0.25', -1]])
           ).join('\n');
         })()
       };
@@ -926,8 +946,44 @@ public enum WallpaperEngineRuntime {
         }
         // A function given vectors of different sizes.
         var call = /'(\w+)' : no matching overloaded function found/.exec(message);
+        if (call && !LENIENT[call[1]]) {
+          // One the shader or a header writes itself, `vec2 rotateVec2(vec2 v, float r)`: on that
+          // line, each value given it that may be larger is cut to what the function takes.
+          var heading = new RegExp('\\b(?:void|float|vec[234])\\s+' + call[1] + '\\s*\\(([^)]*)\\)\\s*\\{').exec(source);
+          if (!heading || !(line > 0) || row === undefined) return null;
+          var takes = heading[1].split(',').map(function (each) {
+            var typed = /\b(float|vec[234])\s+\w+\s*$/.exec(each.trim());
+            return typed ? typed[1] : null;
+          });
+          var sizes = declaredIn(source);
+          var opening = new RegExp('\\b' + call[1] + '\\s*\\(', 'g'), found, cutRow = row;
+          while ((found = opening.exec(cutRow))) {
+            var given = [], from = found.index + found[0].length, depth = 0, at = from;
+            for (; at < cutRow.length; at++) {
+              var letter = cutRow.charAt(at);
+              if (letter === '(' || letter === '[') depth++;
+              else if ((letter === ')' || letter === ']') && depth > 0) depth--;
+              else if ((letter === ',' || letter === ')') && depth === 0) {
+                given.push(cutRow.slice(from, at));
+                from = at + 1;
+                if (letter === ')') break;
+              }
+            }
+            if (at >= cutRow.length || given.length !== takes.length) continue;
+            var cut = given.map(function (value, index) {
+              var type = takes[index], size = type === 'float' ? 1 : (type ? Number(type.charAt(3)) : 0);
+              var has = sizeWritten(value, sizes);
+              return !type || (has !== 0 && has <= size) ? value : value.replace(/^(\s*)([\s\S]*?)(\s*)$/, '$1' + type + '($2)$3');
+            }).join(',');
+            cutRow = cutRow.slice(0, found.index + found[0].length) + cut + cutRow.slice(at);
+            opening.lastIndex = found.index + found[0].length + cut.length;
+          }
+          if (cutRow === row) return null;
+          rows[line - 1] = cutRow;
+          return rows.join('\n');
+        }
         if (call) {
-          if (!LENIENT[call[1]] || source.indexOf('wallaero_' + call[1] + '(') >= 0) return null;
+          if (source.indexOf('wallaero_' + call[1] + '(') >= 0) return null;
           var body = source.replace(new RegExp('\\b' + call[1] + '\\s*\\(', 'g'), 'wallaero_' + call[1] + '(');
           var mark = body.indexOf('\n#define log10(');
           if (mark < 0) return null;
@@ -969,7 +1025,19 @@ public enum WallpaperEngineRuntime {
             var sure = (first !== 0 ? 1 : 0) + (second !== 0 ? 1 : 0);
             if (!best || sure > best.sure) best = { sure: sure, before: before, behind: behind };
           }
-          if (!best) return null;
+          if (!best) {
+            // The larger side is more than one value — `v_TexCoord * 2.0 - 1.0 - center`, with
+            // `center` a vec2 — and Direct3D cuts it as a whole. Cutting each name of that size
+            // on the line, where it is taken whole, comes to the same, as the signs work part by part.
+            if (typeof left !== 'number' || typeof right !== 'number' || left === 1 || right === 1) return null;
+            var larger = Math.max(left, right), parts = '.' + 'xyzw'.slice(0, Math.min(left, right));
+            var trimmed = text.replace(/\b\w+\b(?!\s*[.\[(])/g, function (name, place) {
+              return declared[name] === larger && text.charAt(place - 1) !== '.' ? name + parts : name;
+            });
+            if (trimmed === text) return null;
+            lines[line - 1] = trimmed;
+            return lines.join('\n');
+          }
           var cut, where;
           if (left === 'bool' || right === 'bool') {
             cut = 'float';
@@ -1089,6 +1157,11 @@ public enum WallpaperEngineRuntime {
         } else {
           head.push('out vec4 wallaero_FragColor;');
         }
+        // A shader that writes one of those functions itself keeps its own: `float log10(float x)`.
+        var written = pieces.join('\n');
+        ['mul', 'saturate', 'fmod', 'log10'].forEach(function (name) {
+          if (new RegExp('\\b(?:float|vec[234]|mat[234])\\s+' + name + '\\s*\\(').test(written)) head.push('#undef ' + name);
+        });
         return head.concat(pieces, tail).join('\n') + '\n';
       }
 
@@ -6808,7 +6881,9 @@ public enum WallpaperEngineRuntime {
                   pass.inputs[slot] = slot === 0 ? { previous: true } : { picture: flat(255, 255, 255, 255) };
                 } else if (key(name) === 'previous') {
                   pass.inputs[slot] = { previous: true };
-                } else if (/^_rt_/.test(key(name))) {
+                } else if (/^_rt_/.test(key(name)) || built.targets.some(function (target) { return target.name === key(name); })) {
+                  // A target of Wallpaper Engine's, or one of the effect's own, whatever its name:
+                  // `_coc`, `render_target`.
                   pass.inputs[slot] = { target: key(name) };
                   // An effect that looks at the scene under its layer shows another picture
                   // whenever the scene does: what it made is not kept.

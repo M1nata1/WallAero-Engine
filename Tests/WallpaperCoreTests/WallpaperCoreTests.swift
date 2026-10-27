@@ -2188,6 +2188,38 @@ final class WallpaperEngineShaderTests: XCTestCase {
         XCTAssertNil(try mended(own, "ERROR: 0:4: 'assign' : l-value required (can't modify an input \"v_TexCoord\")", at: 4), "once is enough")
     }
 
+    func testVectorsTooLargeForWhatTakesThemAreCutAsDirect3DCutsThem() throws {
+        func mended(_ source: String, _ message: String, at line: Int) throws -> String? {
+            let result = try XCTUnwrap(try player("mend").call(withArguments: [source, [message], line]))
+            return result.isNull ? nil : result.toString()
+        }
+        // A function the shader writes itself, given a larger vector than it takes (3680252478's shimmer).
+        let called = "vec2 rotateVec2(vec2 v, float r) {\n  return v;\n}\nin vec4 v_TexCoord;\nvoid main() {\n  vec2 at = rotateVec2(v_TexCoord, -u_direction + 1.5) * u_scale;\n}"
+        let refused = "ERROR: 0:6: 'rotateVec2' : no matching overloaded function found"
+        let cut = try XCTUnwrap(try mended(called, refused, at: 6))
+        XCTAssertEqual(cut.components(separatedBy: "\n")[5], "  vec2 at = rotateVec2(vec2(v_TexCoord), float(-u_direction + 1.5)) * u_scale;")
+        XCTAssertNil(try mended(cut, refused, at: 6), "once is enough")
+
+        // A sum whose larger side is more than one value (2902406982's clipping mask): each name
+        // of that size on the line is cut where it is taken whole.
+        let summed = "in vec4 v_TexCoord;\nuniform vec2 u_center;\n#define center (u_center * 2.0 - 1.0)\nvoid main() {\n  vec2 uv = (v_TexCoord * 2.0 - 1.0 - center) / 2.0 + v_TexCoord.zw;\n}"
+        let joined = "ERROR: 0:5: '-' : wrong operand types - no operation '-' exists that takes a left-hand operand of type ' temp highp 4-component vector of float' and a right operand of type ' temp highp 2-component vector of float' (or there is no acceptable conversion)"
+        XCTAssertEqual(try mended(summed, joined, at: 5)?.components(separatedBy: "\n")[4], "  vec2 uv = (v_TexCoord.xy * 2.0 - 1.0 - center) / 2.0 + v_TexCoord.zw;")
+    }
+
+    func testAShaderKeepsItsOwnLog10AndHasTheRadialBlurs() throws {
+        // A shader that writes `log10` itself is not given the one every shader has.
+        let own = try whole("#define logOf10 2.302585092994\nfloat log10(float x) { return log(x) / logOf10; }\nvoid main() {\n  gl_FragColor = vec4(log10(2.0));\n}")
+        XCTAssertTrue(own.contains("#undef log10"))
+        XCTAssertFalse(try whole("void main() {\n  gl_FragColor = vec4(log10(2.0));\n}").contains("#undef log10"))
+        // Blurs around a point, from Wallpaper Engine's header of blurs.
+        let blurred = try translate("#include \"common_blur.h\"\nuniform sampler2D g_Texture0;\nvoid main() {\n  gl_FragColor = blurRadial13a(vec2(0.5), vec2(0.4), 2.0);\n}")
+        XCTAssertTrue(blurred.contains("#define blurRadial13a(u, c, a)"))
+        XCTAssertTrue(blurred.contains("#define blurRadial7a(u, c, a)"))
+        XCTAssertTrue(blurred.contains("#define blurRadial3a(u, c, a)"))
+        XCTAssertTrue(blurred.contains("vec2 wallaeroTurn(vec2 v, float r)"))
+    }
+
     func testWhatWallpaperEngineKeepsToItselfForEffectsIsThere() throws {
         // A declaration with parts named after its value is that value whole.
         let declared = try translate("varying vec4 v_Size.xy; // xy = size\nvoid main() {\n  gl_FragColor = v_Size;\n}")
