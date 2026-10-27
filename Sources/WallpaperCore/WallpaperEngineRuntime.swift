@@ -6808,7 +6808,9 @@ public enum WallpaperEngineRuntime {
                   pass.inputs[slot] = slot === 0 ? { previous: true } : { picture: flat(255, 255, 255, 255) };
                 } else if (key(name) === 'previous') {
                   pass.inputs[slot] = { previous: true };
-                } else if (/^_rt_/.test(key(name))) {
+                } else if (/^_rt_/.test(key(name)) || built.targets.some(function (target) { return target.name === key(name); })) {
+                  // A target of Wallpaper Engine's, or one of the effect's own, whatever its name:
+                  // `_coc`, `render_target`.
                   pass.inputs[slot] = { target: key(name) };
                   // An effect that looks at the scene under its layer shows another picture
                   // whenever the scene does: what it made is not kept.
