@@ -1335,8 +1335,7 @@ final class WallpaperEngineSceneTests: XCTestCase {
     }
 
     func testTheNewestKindOfTextureIsRead() throws {
-        // The fourth version of the container is the third with a number more, which says
-        // whether a video stands in place of the picture.
+        // The fourth version of the container is the third with a number more.
         let pixels = Data([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 9, 9, 9, 255])
         let plain = texture(pixels: pixels, format: 0, width: 2, height: 2, canvas: 2, version: 4, packed: true)
         let image = try XCTUnwrap(WallpaperEngineTexture.image(from: plain))
@@ -1348,8 +1347,17 @@ final class WallpaperEngineSceneTests: XCTestCase {
         try TestMedia.writePNG(to: png, size: CGSize(width: 8, height: 8))
         let file = texture(pixels: try Data(contentsOf: png), format: 0, width: 8, height: 8, canvas: 8, version: 4, pictureFile: true)
         XCTAssertEqual(WallpaperEngineTexture.image(from: file)?.width, 8)
-        // A video is not a picture.
-        XCTAssertNil(WallpaperEngineTexture.image(from: texture(pixels: pixels, format: 0, width: 2, height: 2, canvas: 2, version: 4, video: true)))
+        // A video, said by the flag, is not a picture.
+        XCTAssertNil(WallpaperEngineTexture.image(from: texture(pixels: pixels, format: 0, width: 2, height: 2, canvas: 2, version: 4, flags: 2 | 32)))
+        // The number more counts conditions on the wallpaper's settings, written before the
+        // picture (3737268876's Link).
+        var marked = Data()
+        let head = texture(pixels: pixels, format: 0, width: 2, height: 2, canvas: 2, version: 4, packed: true)
+        let place = try XCTUnwrap(head.range(of: Data("TEXB0004\0".utf8))).upperBound + 8
+        marked += head[..<place] + number(1) + number(1) + number(1) + number(0)
+        marked += Data("{\"condition\":{\"condition\":\"3\",\"name\":\"tuniccolor\"}}\0".utf8) + head[(place + 4)...]
+        let conditional = try XCTUnwrap(WallpaperEngineTexture.image(from: marked))
+        XCTAssertEqual(try pixel(conditional, 1, 0), [0, 255, 0, 255])
     }
 
     /// An MP4 file: a row of parts, each with its length and a name of four letters.

@@ -98,10 +98,21 @@ enum WallpaperEngineTexture {
         // animation, 32 for a video.
         var holdsVideo = flags & 32 != 0
         if version >= 4 {
-            // The fourth version is the third with one more number, which also says that a
-            // video stands in place of the picture.
-            guard let isVideo = reader.int32() else { return nil }
-            holdsVideo = holdsVideo || isVideo != 0
+            // The fourth version is the third with one more number: how many entries follow,
+            // each a few numbers and a text, JSON — when a setting of the wallpaper has a value
+            // (`1, 1, 0, {"condition":{"condition":"3","name":"tuniccolor"}}` in 3737268876's Link,
+            // `1, 2, {}` before a video). The picture or the video comes after them.
+            guard let entries = reader.int32(), (0...64).contains(entries) else { return nil }
+            for _ in 0..<entries {
+                var numbers = 0
+                while numbers < 4, reader.offset < data.count, data[data.startIndex + reader.offset] != UInt8(ascii: "{") {
+                    guard reader.int32() != nil else { return nil }
+                    numbers += 1
+                }
+                guard let said = reader.textToZero(atMost: 4096), said.hasPrefix("{") else { return nil }
+            }
+            // A video stands there in place of the picture without the flag, too.
+            holdsVideo = holdsVideo || (entries > 0 && movie(in: data, from: reader.offset) != nil)
         }
         let sides = 1...longestSide
         if holdsVideo {

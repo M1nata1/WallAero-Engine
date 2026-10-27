@@ -3945,6 +3945,7 @@ public enum WallpaperEngineRuntime {
           // `bound`: a setting of the wallpaper stands behind it.
           var value = { raw: raw, changes: !!curve, motion: motion, script: script, bound: !!(behind && behind.user !== undefined && behind.user !== null) };
           value.now = base();
+          if (script) script.value = value;
           value.read = function () {
             // A script carries on from what the value is; anything else starts from what the
             // scene says.
@@ -4005,9 +4006,10 @@ public enum WallpaperEngineRuntime {
           }
         }
 
-        // Makes a script ready the first time its value is wanted — by then every object of the
-        // scene is there for it to ask about — and gives its value for this frame.
-        function runScript(script, current) {
+        // Makes a script ready: it is read, and its `init` run. All of them are made ready as the
+        // scene starts, in the scene's order and before any of them is run for a frame — one may
+        // keep in `shared` what others then use (3737268876's camera, `shared.camera`).
+        function readyScript(script, current) {
           if (script.made === undefined) {
             script.made = null;
             try {
@@ -4031,6 +4033,12 @@ public enum WallpaperEngineRuntime {
               call(script, 'applyUserProperties', engineObject.userProperties);
             }
           }
+          return current;
+        }
+
+        // Gives a script's value for this frame.
+        function runScript(script, current) {
+          current = readyScript(script, current);
           if (script.made && script.made.update) {
             var answer = call(script, 'update', toScript(script, current));
             // One that gives nothing back has done its work on the scene by itself.
@@ -4465,7 +4473,9 @@ public enum WallpaperEngineRuntime {
         // Parts of an object a script may steer that are not played — the animation of a puppet,
         // a video — take what they are told and do nothing with it.
         function unsteered() {
-          return lenient({ visible: true, rate: 1, isPlaying: function () { return true; }, getFrame: function () { return 0; } });
+          var nothing = lenient({ visible: true, rate: 1, isPlaying: function () { return true; }, getFrame: function () { return 0; },
+                                  getAnimation: function () { return nothing; } });
+          return nothing;
         }
 
         // The animation of one of an object's values that goes by a name; with no name, its first.
@@ -4594,11 +4604,26 @@ public enum WallpaperEngineRuntime {
           },
           // Where the camera looks and how near: a script may move it about the scene and zoom in.
           getCameraTransforms: function () {
+            if (inDepth) {
+              var look = cameraLook();
+              return { eye: new Vec3(look.eye[0], look.eye[1], look.eye[2]), center: new Vec3(look.center[0], look.center[1], look.center[2]),
+                       up: new Vec3(look.up[0], look.up[1], look.up[2]), zoom: camera.zoom };
+            }
             var x = sceneWidth / 2 + camera.x, y = sceneHeight / 2 + camera.y;
             return { eye: new Vec3(x, y, 1), center: new Vec3(x, y, 0), up: new Vec3(0, 1, 0), zoom: camera.zoom };
           },
           setCameraTransforms: function (transforms) {
             var said = transforms || {};
+            if (inDepth) {
+              // In three dimensions the eye is put where the script says, looking where it says.
+              var now = cameraLook();
+              function three(value, before) {
+                return value && isFinite(value.x) && isFinite(value.y) && isFinite(value.z) ? [Number(value.x), Number(value.y), Number(value.z)] : before;
+              }
+              scriptedLook = { eye: three(said.eye, now.eye), center: three(said.center, now.center), up: three(said.up, now.up) };
+              dirty = true;
+              return;
+            }
             var at = said.center || said.eye;
             if (at && typeof at.x === 'number') {
               camera.x = at.x - sceneWidth / 2;
@@ -5409,6 +5434,8 @@ public enum WallpaperEngineRuntime {
                   changed();
                 },
                 isPlaying: function () { return layer.playing; },
+                // The layer's animation, which it plays: the layer itself steers it.
+                getAnimation: function () { return layer.forScripts; },
                 // Where in the animation it is, its repeats left out.
                 getFrame: function () {
                   var length = layer.length > 0 ? layer.length : 1;
@@ -6070,7 +6097,10 @@ public enum WallpaperEngineRuntime {
           var near = Math.max(0.0001, number(general.nearz, 0.01)), f = 1 / Math.tan(fov / 2), aspect = w / h;
           var lens = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
           var look;
-          if (shot) {
+          if (scriptedLook) {
+            var put = scriptedLook;
+            look = Mat4.lookAt(new Vec3(put.eye[0], put.eye[1], put.eye[2]), new Vec3(put.center[0], put.center[1], put.center[2]), new Vec3(put.up[0], put.up[1], put.up[2])).m;
+          } else if (shot) {
             look = m4invert(standing(shot, true).matrix);
           } else {
             var eyeSaid = (description.camera || {});
@@ -6653,7 +6683,25 @@ public enum WallpaperEngineRuntime {
         // The camera object the scene is seen through: the last one that shows.
         // Where the eye is, for how light glints: the camera of a scene in three dimensions, or in
         // front of the middle of a flat one.
+        // Where the eye of a scene in three dimensions is, what it looks at and which way is up:
+        // as a script has put it (`setCameraTransforms`), else its camera object's, else the
+        // scene's own.
+        var scriptedLook = null;
+        function cameraLook() {
+          if (scriptedLook) return scriptedLook;
+          var shot = activeCamera();
+          if (shot) {
+            var m = standing(shot, true).matrix;
+            return { eye: [m[12], m[13], m[14]], center: [m[12] - m[8], m[13] - m[9], m[14] - m[10]], up: [m[4], m[5], m[6]] };
+          }
+          var said = description.camera || {};
+          var eye = numbers(said.eye, 3, 0), center = numbers(said.center, 3, 0), up = numbers(said.up, 3, 0);
+          if (!said.eye) { eye = [0, 0, 1]; center = [0, 0, 0]; }
+          if (!(up[0] || up[1] || up[2])) up = [0, 1, 0];
+          return { eye: eye, center: center, up: up };
+        }
         function eyePlace() {
+          if (inDepth && scriptedLook) return scriptedLook.eye;
           if (inDepth) {
             var shot = activeCamera();
             if (shot) { var m = standing(shot, true).matrix; return [m[12], m[13], m[14]]; }
@@ -7988,14 +8036,12 @@ public enum WallpaperEngineRuntime {
         // Which way the eye's right and up are, and where it is, in the scene.
         function eyeBasis() {
           var eye = eyePlace(), shot = activeCamera();
-          if (shot) {
+          if (shot && !scriptedLook) {
             var m = standing(shot, true).matrix;
             return { right: [m[0], m[1], m[2]], up: [m[4], m[5], m[6]], eye: eye };
           }
-          var said = description.camera || {};
-          var centre = numbers(said.center, 3, 0), up = numbers(said.up, 3, 0);
-          if (!said.eye) { centre = [0, 0, 0]; }
-          if (!(up[0] || up[1] || up[2])) up = [0, 1, 0];
+          var said = cameraLook();
+          var centre = said.center, up = said.up;
           var view = Mat4.lookAt(new Vec3(eye[0], eye[1], eye[2]), new Vec3(centre[0], centre[1], centre[2]), new Vec3(up[0], up[1], up[2])).m;
           return { right: [view[0], view[4], view[8]], up: [view[1], view[5], view[9]], eye: eye };
         }
@@ -10245,7 +10291,9 @@ public enum WallpaperEngineRuntime {
           var host = window.__wallaeroHost;
           var passed = before ? Math.min(0.1, Math.max(0, (now - before) / 1000)) * ((host && host.rate) || 1) : 0;
           before = now;
-          frameTime = passed;
+          // Never nought for scripts, as in Wallpaper Engine: the first frame takes the one before
+          // as long as a sixtieth (3737268876's camera works out `frametime * (1 / frametime)`).
+          if (passed > 0) frameTime = passed;
           time += passed;
           resize();
           serveScripts();
@@ -10359,6 +10407,10 @@ public enum WallpaperEngineRuntime {
         canvas.addEventListener('webglcontextrestored', restored);
 
         resize();
+        // Every script made ready, in the scene's order, once the screen has its size.
+        scripts.slice().forEach(function (script) {
+          if (script.value) script.value.now = readyScript(script, script.value.now);
+        });
         wake();
 
         var player = {
