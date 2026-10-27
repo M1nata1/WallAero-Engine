@@ -6646,7 +6646,11 @@ public enum WallpaperEngineRuntime {
           thing.solid = flag(object.solid, true);
           var given = numbers(object.size, 2, 0);
           if (given[0] > 0 && given[1] > 0) thing.size = given;
-          thing.lives.origin = live(object.origin, 3, hangs ? 0 : [sceneWidth / 2, sceneHeight / 2, 0], thing);
+          // One the scene does not place is at the middle of the scene; a model in three dimensions
+          // at nought (3737268876's sky and courtyard were far off at the middle). A picture there
+          // stays at the middle: a layer over the whole screen (3706286085's blur).
+          var atNought = hangs || (inDepth && !!object.model);
+          thing.lives.origin = live(object.origin, 3, atNought ? 0 : [sceneWidth / 2, sceneHeight / 2, 0], thing);
           thing.lives.scale = live(object.scale, 3, 1, thing);
           thing.lives.angles = live(object.angles, 3, 0, thing, 'numbers', 'degrees');
           thing.lives.alpha = live(object.alpha, 1, 1, thing);
@@ -9754,7 +9758,7 @@ public enum WallpaperEngineRuntime {
           if (window.wallaeroStill && change.showsOnLockScreen === false) put('visible', false);
           if (isSet(change.x) || isSet(change.y)) {
             var hangs = object.parent !== undefined && object.parent !== null;
-            var origin = numbers(object.origin, 3, hangs ? 0 : [sceneWidth / 2, sceneHeight / 2, 0]);
+            var origin = numbers(object.origin, 3, hangs || (inDepth && !!object.model) ? 0 : [sceneWidth / 2, sceneHeight / 2, 0]);
             if (isSet(change.x)) origin[0] = Number(change.x);
             if (isSet(change.y)) origin[1] = Number(change.y);
             put('origin', origin.join(' '));
@@ -10588,7 +10592,7 @@ public enum WallpaperEngineRuntime {
                      (isSet(object.text) ? 'text' : (object.model ? 'model' : (object.light ? 'light' : 'group')))));
           var file = String(plain(object.image) || plain(object.particle) || '');
           var hangs = isSet(object.parent);
-          var origin = numbers(object.origin, 3, hangs ? 0 : [sceneWidth / 2, sceneHeight / 2, 0]);
+          var origin = numbers(object.origin, 3, hangs || (inDepth && !!object.model) ? 0 : [sceneWidth / 2, sceneHeight / 2, 0]);
           var scale = numbers(object.scale, 3, 1);
           var angles = numbers(object.angles, 3, 0);
           var result = {
