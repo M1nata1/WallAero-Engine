@@ -495,6 +495,30 @@ final class WallpaperEngineModelPartsTests: XCTestCase {
         XCTAssertEqual(read.pieces.first?.triangles, [0, 1, 2])
         XCTAssertEqual((read.table["pieces"] as? [[String: Any]])?.count, 1)
     }
+
+    func testAModelOfMoreCornersThanTwoBytesCountIsRead() throws {
+        // A planet (3509243656's Earth): the lowest bit after the material says the triangles
+        // count their corners in four bytes.
+        func int(_ value: UInt32) -> Data { withUnsafeBytes(of: value.littleEndian) { Data($0) } }
+        func float(_ value: Float) -> Data { withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) } }
+        var file = Data("MDLV0023\0".utf8) + int(0xF) + int(1) + int(1) + Data("materials/models/earth/surface.json\0".utf8) + int(1)
+        for value in [-1, -1, -1, 1, 1, 1] as [Float] { file += float(value) }
+        file += int(0xF)
+        let count = 65_541
+        var corners = Data(capacity: count * 48)
+        for index in 0..<count {
+            let corner: [Float] = [Float(index % 100) / 100, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0.5, 0.5]
+            corner.forEach { corners += float($0) }
+        }
+        file += int(UInt32(corners.count)) + corners + int(12) + int(0) + int(65_539) + int(65_540) + Data(count: 7)
+
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: file))
+        XCTAssertEqual(read.solid?.count, count * 8)
+        XCTAssertEqual(read.wideTriangles, [0, 65_539, 65_540])
+        XCTAssertEqual(read.triangles, [])
+        XCTAssertNotNil(read.table["wideTriangles"] as? String)
+        XCTAssertEqual(read.table["corners"] as? String, "", "not handed on a second time as a picture that bends")
+    }
 }
 
 /// Not a test: with WALLAERO_CHOOSE_DEMO set to "<scene folder>|<setting>|<picture>", keeps the

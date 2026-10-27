@@ -3284,6 +3284,20 @@ public enum WallpaperEngineRuntime {
         var loading = 0;       // pictures still on their way
         var textureCache = {};
 
+        // The finished picture of a layer — what it shows after its effects — as others take it
+        // by name, `_rt_imageLayerComposite_<id>_a`: a planet's surface, a picture in a frame. It
+        // stands empty until the layer is first drawn; the layer then keeps it up to date.
+        var composites = {};
+        function compositeNamed(name) {
+          var made = /_rt_imagelayercomposite_(\d+)_[ab]$/.exec(key(name));
+          if (!made) return null;
+          if (!composites[made[1]]) {
+            var empty = flat(0, 0, 0, 0);
+            composites[made[1]] = { layers: [empty.layers[0]], width: 1, height: 1, channels: 'rgba', ready: true };
+          }
+          return composites[made[1]];
+        }
+
         function newTexture(clamp, smooth) {
           var texture = gl.createTexture();
           gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -3468,6 +3482,7 @@ public enum WallpaperEngineRuntime {
           var id = key(name);
           if (id === '$mediathumbnail') return covers.now;
           if (id === '$mediapreviousthumbnail') return covers.before;
+          if (compositeNamed(id)) return compositeNamed(id);
           if (textureCache[id]) return textureCache[id];
           var entry = pictures[id] || pictures['materials/' + id];
           var result, builtin;
@@ -6387,12 +6402,15 @@ public enum WallpaperEngineRuntime {
           }
           // A model may be made of several parts, each drawn with a material of its own: a body,
           // a face, hair. The first is the file's own; the scene may name another material for it.
-          var given = [{ solid: mesh.solid, triangles: mesh.triangles, material: object.material || mesh.material }]
-            .concat((mesh.pieces || []).map(function (piece) { return { solid: piece.solid, triangles: piece.triangles, material: piece.material }; }));
+          var given = [{ solid: mesh.solid, triangles: mesh.triangles, wideTriangles: mesh.wideTriangles, material: object.material || mesh.material }]
+            .concat((mesh.pieces || []).map(function (piece) {
+              return { solid: piece.solid, triangles: piece.triangles, wideTriangles: piece.wideTriangles, material: piece.material };
+            }));
           var low = [Infinity, Infinity, Infinity], high = [-Infinity, -Infinity, -Infinity];
           var parts = given.map(function (piece, number_) {
             var corners = numbersOf(piece.solid, Float32Array);
-            var triangles = numbersOf(piece.triangles, Uint16Array);
+            // A part of more than 65 536 corners counts them in four bytes.
+            var triangles = piece.wideTriangles ? numbersOf(piece.wideTriangles, Uint32Array) : numbersOf(piece.triangles, Uint16Array);
             var count = Math.floor(corners.length / 8);
             if (!count || !triangles.length) return null;
             for (var corner = 0; corner < count; corner++) {
@@ -6420,6 +6438,7 @@ public enum WallpaperEngineRuntime {
             gl.bindVertexArray(null);
             return {
               corners: corners, count: count, shape: shape, length: triangles.length,
+              counted: piece.wideTriangles ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
               picture: (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null,
               culls: key(String(pass.cullmode || 'normal')) !== 'nocull',
               tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
@@ -6451,7 +6470,7 @@ public enum WallpaperEngineRuntime {
             parts.forEach(function (part) {
               if (part.blending === 'additive' || !part.writes) return;
               gl.bindVertexArray(part.shape);
-              gl.drawElements(gl.TRIANGLES, part.length, gl.UNSIGNED_SHORT, 0);
+              gl.drawElements(gl.TRIANGLES, part.length, part.counted, 0);
             });
           };
           var white = null;
@@ -6522,7 +6541,7 @@ public enum WallpaperEngineRuntime {
               if (part.blending === 'additive') gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE);
               else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
               gl.bindVertexArray(part.shape);
-              gl.drawElements(gl.TRIANGLES, part.length, gl.UNSIGNED_SHORT, 0);
+              gl.drawElements(gl.TRIANGLES, part.length, part.counted, 0);
             });
             gl.bindVertexArray(null);
             gl.disable(gl.DEPTH_TEST);
@@ -6881,6 +6900,8 @@ public enum WallpaperEngineRuntime {
                   pass.inputs[slot] = slot === 0 ? { previous: true } : { picture: flat(255, 255, 255, 255) };
                 } else if (key(name) === 'previous') {
                   pass.inputs[slot] = { previous: true };
+                } else if (compositeNamed(name)) {
+                  pass.inputs[slot] = { picture: compositeNamed(name) };
                 } else if (/^_rt_/.test(key(name)) || built.targets.some(function (target) { return target.name === key(name); })) {
                   // A target of Wallpaper Engine's, or one of the effect's own, whatever its name:
                   // `_coc`, `render_target`.
@@ -6930,6 +6951,9 @@ public enum WallpaperEngineRuntime {
           // color, which a scene may also bring as a model of its own.
           if (/composelayer|fullscreenlayer|projectlayer/.test(key(modelName))) {
             // Told not to copy the background, it starts empty, and its effects make all it shows.
+            // One that holds layers starts, unless told not to, with what the scene shows under it,
+            // and they are drawn over that (2902406982's triangles show it through their clip).
+            if (layer.holds) layer.copiesBackground = flag(object.copybackground, true) !== false;
             if (!layer.holds && flag(object.copybackground, true) === false) {
               layer.picture = flat(0, 0, 0, 0);
               layer.plain = true;
@@ -7017,6 +7041,9 @@ public enum WallpaperEngineRuntime {
           // What takes the scene under it changes whenever anything under it does.
           if (layer.takesScene) layer.moving = true;
           layer.draw = function () { drawImage(layer); };
+          // Made ahead of the rest of the frame when others take its finished picture.
+          // One that shows what lies under it is made in its turn: ahead, there is nothing under it yet.
+          if (layer.composite && !layer.takesScene && !layer.copiesBackground) layer.makeComposite = function () { drawImage(layer, true); };
           return layer;
         }
 
@@ -7499,10 +7526,20 @@ public enum WallpaperEngineRuntime {
           return { texture: lit.target.texture, resolution: source.resolution };
         }
 
-        function drawImage(layer) {
+        // `ahead`: only its finished picture is made, for others to take (`layer.composite`); it is
+        // then put on the scene from that, later in the frame, if it shows.
+        function drawImage(layer, ahead) {
           var state = layer.state;
           var stands = standing(layer);
-          if (!stands.visible) return;
+          var shows = stands.visible && !ahead;
+          if (layer.composite && !ahead && layer.composite.frame === frames && layer.composite.target) {
+            if (shows) {
+              var already = layer.shift ? nudged(stands.matrix, layer.shift[0], layer.shift[1]) : stands.matrix;
+              drawComposite(layer, already, stands);
+            }
+            return;
+          }
+          if (!shows && !(ahead && layer.composite)) return;
           var nominal = layer.size;
           var matrix = layer.shift ? nudged(stands.matrix, layer.shift[0], layer.shift[1]) : stands.matrix;
           // The layer's effects are worked out no finer than the layer shows on the screen: one
@@ -7513,7 +7550,9 @@ public enum WallpaperEngineRuntime {
             var shown = Math.sqrt(x * x + y * y);
             return Math.max(1 / 16, Math.min(1, Math.ceil(shown * 16) / 16));
           };
-          var width = nominal[0] * scale * finer(matrix[0], matrix[1]), height = nominal[1] * scale * finer(matrix[4], matrix[5]);
+          // One others take as a picture is made whole, however small it shows.
+          var width = nominal[0] * scale * (layer.composite ? 1 : finer(matrix[0], matrix[1]));
+          var height = nominal[1] * scale * (layer.composite ? 1 : finer(matrix[4], matrix[5]));
           var bright = layer.brightness;
           if (layer.materialAlpha !== undefined) stands = { matrix: stands.matrix, alpha: stands.alpha * layer.materialAlpha, above: stands.above, visible: stands.visible };
           var tint = layer.ownColor ? [1, 1, 1, stands.alpha]
@@ -7541,7 +7580,7 @@ public enum WallpaperEngineRuntime {
                        resolution: layer.plain ? [nominal[0], nominal[1], nominal[0], nominal[1]] : [first.width, first.height, first.width, first.height] };
           }
           if (source && layer.lit && litProgramNow()) source = litPicture(layer, source, matrix, nominal, width, height);
-          if (!effects.length && source) {
+          if (!effects.length && source && !layer.composite) {
             put(withLooks(source, layer), place, tint, how, mesh);
             return;
           }
@@ -7551,7 +7590,8 @@ public enum WallpaperEngineRuntime {
             layer.kept = null;
           }
           if (layer.kept) {
-            put(withLooks({ texture: layer.kept.texture }, layer), place, tint, how, mesh);
+            if (layer.composite) keepComposite(layer, layer.kept, width, height);
+            if (shows) put(withLooks({ texture: layer.kept.texture }, layer), place, tint, how, mesh);
             return;
           }
 
@@ -7591,6 +7631,15 @@ public enum WallpaperEngineRuntime {
             gl.disable(gl.BLEND);
             gl.clearColor(0, 0, 0, 0);
             gl.clear(gl.COLOR_BUFFER_BIT);
+            if (layer.copiesBackground && grabProgram) {
+              gl.useProgram(grabProgram.program);
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, onto.target.texture);
+              gl.uniform1i(grabProgram.uniforms.u_Texture.location, 0);
+              gl.uniformMatrix3fv(grabProgram.uniforms.u_Place.location, false, place);
+              gl.bindVertexArray(passShape);
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            }
             layer.held.forEach(function (child) {
               gl.bindFramebuffer(gl.FRAMEBUFFER, inside.framebuffer);
               gl.viewport(0, 0, inside.width, inside.height);
@@ -7690,9 +7739,10 @@ public enum WallpaperEngineRuntime {
             });
           });
 
+          if (layer.composite) keepComposite(layer, previous, width, height);
           gl.bindFramebuffer(gl.FRAMEBUFFER, onto.target.framebuffer);
           gl.viewport(0, 0, onto.target.width, onto.target.height);
-          put(withLooks({ texture: previous.texture }, layer), place, tint, how, mesh);
+          if (shows) put(withLooks({ texture: previous.texture }, layer), place, tint, how, mesh);
           // What holds other layers is another picture whenever one of them is.
           if (!layer.moving && !layer.holds && held && loading === 0) {
             layer.kept = held;
@@ -7700,6 +7750,52 @@ public enum WallpaperEngineRuntime {
           } else {
             spare.forEach(release);
           }
+        }
+
+        // The finished picture of a layer copied into one of its own, which no other drawing
+        // takes, for those that take it by name; marked as made in this frame.
+        function keepComposite(layer, made, width, height) {
+          var wide = Math.max(1, Math.round(width)), high = Math.max(1, Math.round(height));
+          var target = layer.composite.target;
+          if (!target || target.width !== wide || target.height !== high) {
+            if (target) release(target);
+            target = layer.composite.target = acquire(wide, high);
+          }
+          gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+          gl.viewport(0, 0, target.width, target.height);
+          gl.disable(gl.BLEND);
+          if (straightProgram) {
+            gl.useProgram(straightProgram.program);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, made.texture);
+            gl.uniform1i(straightProgram.uniforms.u_Texture.location, 0);
+            gl.bindVertexArray(passShape);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          }
+          layer.composite.layers[0] = { texture: target.texture, width: target.width, height: target.height };
+          layer.composite.width = target.width;
+          layer.composite.height = target.height;
+          layer.composite.frame = frames;
+          gl.bindFramebuffer(gl.FRAMEBUFFER, surface.target.framebuffer);
+          gl.viewport(0, 0, surface.target.width, surface.target.height);
+        }
+
+        // A layer whose finished picture was made ahead in this frame, put on the scene from it.
+        function drawComposite(layer, matrix, stands) {
+          var state = layer.state, bright = layer.brightness;
+          var alpha = stands.alpha * (layer.materialAlpha !== undefined ? layer.materialAlpha : 1);
+          var tint = layer.ownColor ? [1, 1, 1, alpha] : [state.color[0] * bright, state.color[1] * bright, state.color[2] * bright, alpha];
+          var how = layer.blendMode > 0 && layer.blendMode !== 9 ? layer.blendMode :
+                    (layer.blendMode === 9 || layer.blending === 'additive' ? 'additive' : (layer.blending === 'normal' ? 'normal' : 'translucent'));
+          var mesh = layer.puppet || null;
+          var place = placeOf(matrix, layer.size);
+          if (mesh) {
+            mesh.pose(time, matrix);
+            place = placeOf(matrix, [1, 1]);
+          }
+          gl.bindFramebuffer(gl.FRAMEBUFFER, surface.target.framebuffer);
+          gl.viewport(0, 0, surface.target.width, surface.target.height);
+          put(withLooks({ texture: layer.composite.target.texture }, layer), place, tint, how, mesh);
         }
 
         // --- Particles --------------------------------------------------------
@@ -9536,6 +9632,12 @@ public enum WallpaperEngineRuntime {
         }
 
         var all = (description.objects || []).filter(function (object) { return object && typeof object === 'object'; });
+        if (!(sceneWidth > 0 && sceneHeight > 0) && inDepth && window.innerWidth > 0 && window.innerHeight > 0) {
+          // A scene in three dimensions is seen through the screen, whatever its pictures: a
+          // first one of 32 by 32 made 3509243656 a blur.
+          sceneWidth = 1920;
+          sceneHeight = Math.round(1920 * window.innerHeight / window.innerWidth);
+        }
         if (!(sceneWidth > 0 && sceneHeight > 0)) {
           // A scene may leave its size to its first picture.
           var first = all.filter(function (object) { return object.image; })[0];
@@ -9785,6 +9887,16 @@ public enum WallpaperEngineRuntime {
         // Objects others make use of — a picture particles are made over, say — are made even
         // when hidden.
         var usedByOthers = {};
+        // The layers others take the finished picture of, by name — in the scene, or in the
+        // materials of its models: made even while hidden.
+        var composited = {};
+        [JSON.stringify(description)].concat(Object.keys(files).filter(function (name) { return /\.json$/.test(name); }).map(function (name) { return files[name]; }))
+          .forEach(function (text) {
+            String(text).replace(/_rt_imagelayercomposite_(\d+)_[ab]/gi, function (whole, id) {
+              composited[id] = usedByOthers[id] = true;
+              return whole;
+            });
+          });
         all.forEach(function (object) {
           if (object.parent !== undefined && object.parent !== null) hasChildren[String(object.parent)] = true;
           (Array.isArray(object.dependencies) ? object.dependencies : []).forEach(function (need) {
@@ -9802,6 +9914,7 @@ public enum WallpaperEngineRuntime {
                                             (object.light ? 'light' : (object.sound ? 'sound' : (make ? 'text' : 'group')))));
           thing.draw = idle;
           objects.push(thing);
+          if (composited[String(object.id)] && object.image) thing.composite = compositeNamed('_rt_imagelayercomposite_' + object.id + '_a');
           // A layer made to put effects over others either takes what the scene shows under it or
           // holds the layers that hang on it, which are then drawn into it. The scene says which;
           // where it does not, the layer holds what hangs on it if anything does.
@@ -10055,6 +10168,13 @@ public enum WallpaperEngineRuntime {
             }
           });
           [sceneTarget, copyTarget].forEach(release);
+          // So do the finished pictures kept for others; they show nothing until made again.
+          Object.keys(composites).forEach(function (id) {
+            var kept = composites[id];
+            if (kept.target) release(kept.target);
+            kept.target = null;
+            kept.layers[0] = flat(0, 0, 0, 0).layers[0];
+          });
           forgetTargets();
           sceneTarget = acquire(width, height);
           copyTarget = acquire(width, height);
@@ -10086,6 +10206,13 @@ public enum WallpaperEngineRuntime {
           // parts that show through — else a glow drawn early hides, by its depth, the street
           // drawn after it.
           var passes = inDepth ? ['solid', 'through'] : [null];
+          // What others take as a picture is made first: a planet's surface, a face in a frame.
+          objects.forEach(function (object) {
+            if (!object.makeComposite) return;
+            object.makeComposite();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+            gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+          });
           passes.forEach(function (pass) {
             objects.slice().forEach(function (object) {
               // What a layer holds is drawn by that layer.

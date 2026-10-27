@@ -92,8 +92,12 @@ struct WallpaperEnginePuppet {
     struct Piece: Equatable {
         var material: String
         var solid: [Float]
-        var triangles: [UInt16]
+        var triangles: [UInt32]
     }
+    /// The triangles of the first part of a model in three dimensions whose file counts its
+    /// corners in four bytes — a part of more than 65 536 corners, a planet; `triangles` is
+    /// then empty. Nil for any other.
+    var wideTriangles: [UInt32]?
     /// A model in three dimensions whose corners hang on bones — a character that walks, a
     /// stage — every part of it: nil for anything else.
     var skinned: [SkinnedPiece]?
@@ -134,9 +138,15 @@ struct WallpaperEnginePuppet {
         self.material = material.isEmpty ? nil : material
         guard let bonesAt = Self.place(of: "MDLS", in: data, from: reader.offset) else {
             // No bones: the picture hangs whole on one that stays where it is.
-            guard let mesh = Self.mesh(in: data, from: reader.offset, before: data.count, onBones: false) else { return nil }
+            guard let mesh = Self.mesh(in: data, from: reader.offset, before: data.count, onBones: false,
+                                       wide: Self.countsInFourBytes(data, at: reader.offset)) else { return nil }
             corners = mesh.corners
-            triangles = mesh.triangles
+            if mesh.triangles.contains(where: { $0 > UInt32(UInt16.max) }) {
+                triangles = []
+                wideTriangles = mesh.triangles
+            } else {
+                triangles = mesh.triangles.map { UInt16($0) }
+            }
             solid = mesh.solid
             bones = [Bone(parent: -1, matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])]
             // A model of several parts: each after the one before, with the material it is
@@ -154,7 +164,7 @@ struct WallpaperEnginePuppet {
             animations = []
             return
         }
-        guard let mesh = Self.mesh(in: data, from: reader.offset, before: bonesAt, onBones: true) else { return nil }
+        guard let mesh = Self.mesh(in: data, from: reader.offset, before: bonesAt, onBones: true, wide: false) else { return nil }
         solid = nil
         let cornerCount = mesh.corners.count / Self.floatsPerCorner
 
@@ -189,7 +199,7 @@ struct WallpaperEnginePuppet {
         }
 
         corners = mesh.corners
-        triangles = mesh.triangles
+        triangles = mesh.triangles.map { UInt16($0) }
         self.bones = bones
         (parts, clips) = Self.layout(in: data, from: mesh.end, before: bonesAt, indexCount: mesh.triangles.count)
         attachments = Self.attachments(in: data, from: reader.offset, boneCount: Int(boneCount))
@@ -344,6 +354,12 @@ struct WallpaperEnginePuppet {
         return found.lowerBound - data.startIndex
     }
 
+    /// Whether a part of a model counts the corners of its triangles in four bytes: the lowest
+    /// bit of the number right after its material's name, as with the parts that hang on bones.
+    private static func countsInFourBytes(_ data: Data, at place: Int) -> Bool {
+        (number(in: data, at: place) ?? 0) & 1 == 1
+    }
+
     private static func number(in data: Data, at place: Int) -> Int? {
         guard place >= 0, place + 4 <= data.count else { return nil }
         let from = data.startIndex + place
@@ -356,20 +372,22 @@ struct WallpaperEnginePuppet {
     /// triangles of those very corners, all of it before the bones — and where every corner
     /// then reads as one: on a few bones, by weights that are shares. Of the lengths a corner
     /// may have, the one by which the triangles use every corner is tried first.
-    private static func mesh(in data: Data, from start: Int, before end: Int, onBones: Bool)
-        -> (corners: [Float], triangles: [UInt16], end: Int, solid: [Float]?)? {
+    /// `wide`: the file counts the corners of the triangles in four bytes, not two.
+    private static func mesh(in data: Data, from start: Int, before end: Int, onBones: Bool, wide: Bool)
+        -> (corners: [Float], triangles: [UInt32], end: Int, solid: [Float]?)? {
         guard start >= 0, end <= data.count, start < end else { return nil }
         for place in start..<min(start + 512, end - 8) {
-            guard let cornerBytes = number(in: data, at: place), cornerBytes > 0, cornerBytes <= 16 * 1024 * 1024,
+            guard let cornerBytes = number(in: data, at: place), cornerBytes > 0, cornerBytes <= 256 * 1024 * 1024,
                   place + 4 + cornerBytes + 4 <= end,
-                  let triangleBytes = number(in: data, at: place + 4 + cornerBytes), triangleBytes > 0, triangleBytes % 6 == 0,
+                  let triangleBytes = number(in: data, at: place + 4 + cornerBytes), triangleBytes > 0, triangleBytes % (wide ? 12 : 6) == 0,
                   place + 4 + cornerBytes + 4 + triangleBytes <= end
             else {
                 continue
             }
             let trianglesAt = data.startIndex + place + 4 + cornerBytes + 4
-            let triangles = data.subdata(in: trianglesAt..<(trianglesAt + triangleBytes)).withUnsafeBytes { raw in
-                (0..<(triangleBytes / 2)).map { UInt16(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self)) }
+            let triangles = data.subdata(in: trianglesAt..<(trianglesAt + triangleBytes)).withUnsafeBytes { raw -> [UInt32] in
+                wide ? (0..<(triangleBytes / 4)).map { UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self)) }
+                     : (0..<(triangleBytes / 2)).map { UInt32(UInt16(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self))) }
             }
             let packed = data.subdata(in: (data.startIndex + place + 4)..<(data.startIndex + place + 4 + cornerBytes))
             let last = Int(triangles.max() ?? 0)
@@ -391,7 +409,8 @@ struct WallpaperEnginePuppet {
         guard let name = place(of: "materials/", in: data, from: start), name - start <= 64 else { return nil }
         var reader = BinaryReader(data)
         guard reader.seek(to: name), let material = reader.textToZero(atMost: 1024),
-              let mesh = mesh(in: data, from: reader.offset, before: data.count, onBones: false), let solid = mesh.solid
+              let mesh = mesh(in: data, from: reader.offset, before: data.count, onBones: false, wide: countsInFourBytes(data, at: reader.offset)),
+              let solid = mesh.solid
         else {
             return nil
         }
@@ -538,7 +557,9 @@ struct WallpaperEnginePuppet {
             withUnsafeBytes(of: corner.littleEndian) { triangleData.append(contentsOf: $0) }
         }
         var table: [String: Any] = [
-            "corners": packed(corners),
+            // A model too large to be a picture that bends is not given as one too: those corners
+            // would only double what is handed to the player.
+            "corners": wideTriangles == nil ? packed(corners) : "",
             "triangles": triangleData.base64EncodedString(),
             "bones": bones.map { bone in
                 var entry: [String: Any] = ["name": bone.name, "parent": bone.parent, "matrix": bone.matrix.map(Double.init)]
@@ -553,8 +574,17 @@ struct WallpaperEnginePuppet {
                  "frameCount": $0.frameCount, "frames": packed($0.frames)] as [String: Any]
             },
         ]
+        // Corners counted in four bytes, for a part too large for two.
+        func wide(_ triangles: [UInt32]) -> String {
+            var data = Data(capacity: triangles.count * 4)
+            for corner in triangles {
+                withUnsafeBytes(of: corner.littleEndian) { data.append(contentsOf: $0) }
+            }
+            return data.base64EncodedString()
+        }
         // A model in three dimensions, and the material its file names.
         if let solid { table["solid"] = packed(solid) }
+        if let wideTriangles { table["wideTriangles"] = wide(wideTriangles) }
         if let material { table["material"] = material }
         if let skinned {
             table["skinned"] = skinned.map { piece -> [String: Any] in
@@ -567,9 +597,12 @@ struct WallpaperEnginePuppet {
         }
         if !pieces.isEmpty {
             table["pieces"] = pieces.map { piece -> [String: Any] in
+                if piece.triangles.contains(where: { $0 > UInt32(UInt16.max) }) {
+                    return ["material": piece.material, "solid": packed(piece.solid), "wideTriangles": wide(piece.triangles)]
+                }
                 var triangleData = Data(capacity: piece.triangles.count * 2)
                 for corner in piece.triangles {
-                    withUnsafeBytes(of: corner.littleEndian) { triangleData.append(contentsOf: $0) }
+                    withUnsafeBytes(of: UInt16(corner).littleEndian) { triangleData.append(contentsOf: $0) }
                 }
                 return ["material": piece.material, "solid": packed(piece.solid), "triangles": triangleData.base64EncodedString()]
             }
