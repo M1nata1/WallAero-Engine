@@ -51,6 +51,9 @@ enum WallpaperEngineTexture {
         /// smoothed when stretched.
         var isClamped: Bool
         var isSmooth: Bool
+        /// For the masks of a model's surface: which maps it holds, a bit each — metal,
+        /// roughness, reflection, glow — from bits 20 to 23 of its flags.
+        var maps = 0
         var frames: [Frame]
         /// The video the texture holds in place of pictures, if it holds one.
         var video: Video?
@@ -185,6 +188,7 @@ enum WallpaperEngineTexture {
         default: channels = .color
         }
         return Texture(pictures: pictures, channels: channels, isClamped: flags & 2 != 0, isSmooth: flags & 1 == 0,
+                       maps: Int(UInt32(truncatingIfNeeded: flags) >> 20 & 0xF),
                        frames: onlyFirstPicture ? [] : frames(&reader, pictureCount: pictures.count), video: nil)
     }
 
