@@ -9836,11 +9836,11 @@ public enum WallpaperEngineRuntime {
         var listening = false;
 
         // How much an emitter that answers the sound makes, from nought to all its rate: Wallpaper
-        // Engine's audio response, which makes nothing while nothing plays. Its mode is none, the
-        // left channel, the right one or both; it hears the bands from `start` to `end` of
-        // sixteen, bass first, counted from the lower bound of how loud they are to the upper,
-        // raised to the exponent that keeps the quiet from counting much. Null for one that does
-        // not answer it.
+        // Engine's audio response, worked out as its own pulse effect does it, which makes nothing
+        // while nothing plays. Its mode is none, the left channel, the right one or both; it hears
+        // the mean of the bands from `start` to `end` of sixteen, bass first, eased from the lower
+        // bound of how loud they are to the upper, raised to the exponent that keeps the quiet
+        // from counting much. Null for one that does not answer it.
         function hearing(emitter) {
           var mode = number(plain(emitter.audioprocessingmode), 0);
           if (!(mode >= 1 && mode <= 3)) return null;
@@ -9857,8 +9857,8 @@ public enum WallpaperEngineRuntime {
               sum += mode === 1 ? left[band] : (mode === 2 ? right[band] : (left[band] + right[band]) / 2);
             }
             var level = sum / (end - start + 1);
-            var share = Math.max(0, Math.min(1, (level - bounds[0]) / Math.max(1e-6, bounds[1] - bounds[0])));
-            return Math.pow(share, Math.max(0.01, exponent));
+            var eased = bounds[1] > bounds[0] ? smooth01(bounds[0], bounds[1], level) : (level >= bounds[0] ? 1 : 0);
+            return Math.max(0, Math.min(1, Math.pow(eased, exponent)));
           };
         }
 
