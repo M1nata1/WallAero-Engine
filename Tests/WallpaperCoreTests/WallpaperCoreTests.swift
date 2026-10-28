@@ -1290,6 +1290,15 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertNil(read.data(named: "missing.json"))
     }
 
+    func testAFileIsFoundWhetherTheMarksOfItsLettersAreWrittenApartOrNot() throws {
+        // The Mac gives names of files with a letter's marks written apart (ブ as フ and ゛); a
+        // scene writes them as one (3660962877's song).
+        let apart = "sounds/ナブナ.mp3".decomposedStringWithCanonicalMapping
+        let read = try XCTUnwrap(WallpaperEnginePackage(data: package([("scene.json", Data("{}".utf8)), (apart, Data([7]))])))
+        XCTAssertEqual(read.data(named: "sounds/ナブナ.mp3".precomposedStringWithCanonicalMapping), Data([7]))
+        XCTAssertEqual(WallpaperEngineScene.key(apart), WallpaperEngineScene.key("sounds/ナブナ.mp3"))
+    }
+
     func testAPackageThatNamesPlacesPastItsEndIsNotRead() {
         XCTAssertNil(WallpaperEnginePackage(data: Data("not a package".utf8)))
         XCTAssertNil(WallpaperEnginePackage(data: text("PKGV0001") + number(1) + text("a.json") + number(0) + number(500)))

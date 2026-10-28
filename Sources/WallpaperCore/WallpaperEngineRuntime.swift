@@ -95,7 +95,8 @@ public enum WallpaperEngineRuntime {
       }
 
       function key(name) {
-        return String(name).replace(/\\/g, '/').toLowerCase();
+        var plain = String(name).replace(/\\/g, '/').toLowerCase();
+        return plain.normalize ? plain.normalize('NFC') : plain;
       }
 
       // ------------------------------------------------------------------ headers
@@ -899,7 +900,9 @@ public enum WallpaperEngineRuntime {
           var opened = /void\s+main\s*\(\s*(?:void)?\s*\)\s*\{/.exec(rest);
           if (!opened) return null;
           var at = opened.index + opened[0].length;
-          return source.slice(0, upTo) + ' ' + given[1] + ' ' + own + ';' + rest.slice(0, at) + ' ' + own + ' = ' + handed[1] + ';' + rest.slice(at);
+          // The copy is declared on a line of its own: where the two shaders do not agree on what
+          // is handed over, the line that takes it in is written anew (3701796900's sine wave).
+          return source.slice(0, upTo) + '\n' + given[1] + ' ' + own + ';' + rest.slice(0, at) + ' ' + own + ' = ' + handed[1] + ';' + rest.slice(at);
         }
         // A number where a yes or no is asked for, in "a ? b : c" or "if (a)": Direct3D takes
         // anything but nought for a yes.
@@ -3153,10 +3156,17 @@ public enum WallpaperEngineRuntime {
       function play(canvas, scene, settings, startingChanges) {
         properties = {};
         Object.keys(settings || {}).forEach(function (name) { properties[name] = settings[name]; });
-        var files = (scene && scene.files) || {};
-        var pictures = (scene && scene.textures) || {};
-        var soundFiles = (scene && scene.sounds) || {};
-        var puppets = (scene && scene.puppets) || {};
+        // The tables of a scene laid out before names were kept with their marks written as one
+        // have them as the Mac wrote them, apart: they are known by their names as `key` gives them.
+        function keyed(table) {
+          var result = {};
+          Object.keys(table || {}).forEach(function (name) { result[key(name)] = table[name]; });
+          return result;
+        }
+        var files = keyed(scene && scene.files);
+        var pictures = keyed(scene && scene.textures);
+        var soundFiles = keyed(scene && scene.sounds);
+        var puppets = keyed(scene && scene.puppets);
         var stopped = false;
         var gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false,
                                                premultipliedAlpha: false, preserveDrawingBuffer: false });
@@ -3721,6 +3731,26 @@ public enum WallpaperEngineRuntime {
         // Makes a pass ready to draw: its shader translated with the effect's switches, and for
         // every uniform where its value comes from. Null if the shader is not there or will not
         // compile; the effect is then left out.
+        // A value a shader's two halves both take, but each of a kind of its own — a pair of
+        // numbers to one, a number to the other (3660962877's frame builder, “Reference
+        // resolution”): Direct3D gives each half its own, GLSL will not link them. The fragment
+        // shader's is named apart, its description kept, and each is given the setting as its
+        // kind takes it.
+        function ownUniforms(vertex, fragment) {
+          var declared = /^[ \t]*uniform[ \t]+(?:(?:highp|mediump|lowp)[ \t]+)?(\w+)[ \t]+(\w+)[ \t]*(?:\[|;)/gm;
+          var kinds = {}, found;
+          while ((found = declared.exec(vertex))) kinds[found[2]] = found[1];
+          var clashing = [];
+          declared.lastIndex = 0;
+          while ((found = declared.exec(fragment))) {
+            if (kinds[found[2]] && kinds[found[2]] !== found[1] && clashing.indexOf(found[2]) < 0) clashing.push(found[2]);
+          }
+          clashing.forEach(function (name) {
+            fragment = fragment.replace(new RegExp('\\b' + name + '\\b', 'g'), name + '_wallaeroFragment');
+          });
+          return fragment;
+        }
+
         function buildPass(shaderName, combos, constants, slotTextures, what, owner) {
           var vertexSource = files['shaders/' + key(shaderName) + '.vert'];
           var fragmentSource = files['shaders/' + key(shaderName) + '.frag'];
@@ -3728,6 +3758,7 @@ public enum WallpaperEngineRuntime {
             note(what + ': the shader ' + shaderName + ' is not in the scene');
             return null;
           }
+          fragmentSource = ownUniforms(vertexSource, fragmentSource);
           var said = annotations(vertexSource + '\n' + fragmentSource + '\n' + headersOf(vertexSource + '\n' + fragmentSource, files));
           var defines = {};
           Object.keys(said.combos).forEach(function (name) { defines[name] = said.combos[name]; });
