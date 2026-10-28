@@ -68,8 +68,19 @@ public enum WebMediaConverter {
                 // was; a second copy of it is not kept.
                 let isLaidOut = relative.hasPrefix(WallpaperEngineScene.folderName + "/")
                     && files.fileExists(atPath: folder.appendingPathComponent(WallpaperEngineProjectFolder.folderName).path)
-                if isLaidOut {
+                // Save one: a video made of a picture the user chose for a setting, laid out by its
+                // number, is not in the project; the Mac's own player is given it from beside the
+                // scene (see `nativeVideos`).
+                let isChosen = isLaidOut && (file.deletingPathExtension().lastPathComponent).allSatisfy(\.isNumber)
+                if isLaidOut && !isChosen {
                     try files.removeItem(at: file)
+                } else if isChosen {
+                    let native = folder.appendingPathComponent(".native-videos").appendingPathComponent(file.lastPathComponent)
+                    try files.createDirectory(at: native.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if files.fileExists(atPath: native.path) {
+                        try files.removeItem(at: native)
+                    }
+                    try files.moveItem(at: file, to: native)
                 } else {
                     try files.createDirectory(at: original.deletingLastPathComponent(), withIntermediateDirectories: true)
                     if files.fileExists(atPath: original.path) {

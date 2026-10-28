@@ -38,6 +38,21 @@ extension WallpaperEngineProjectFolder {
                 result[address] = original
                 continue
             }
+            // A picture the user chose for a setting (`user/<setting>`) is played from what was
+            // chosen: a video as it is, a picture that moves made a video of once more — what the
+            // page plays was made WebM (3154017672's three GIFs).
+            if key.lowercased().hasPrefix("user/"), let picked = chosenPictures(scene: folder)[String(key.dropFirst(5))] {
+                if ["mp4", "m4v", "mov"].contains(picked.pathExtension.lowercased()),
+                   let head = try? FileHandle(forReadingFrom: picked).read(upToCount: 12), head.count == 12, head[4..<8] == Data("ftyp".utf8) {
+                    result[address] = picked
+                    continue
+                }
+                try? files.createDirectory(at: originals, withIntermediateDirectories: true)
+                if (try? AnimatedImageConverter.convertSynchronously(source: picked, to: original, enlarging: false, progress: { _ in })) != nil {
+                    result[address] = original
+                }
+                continue
+            }
             guard let source = projectTextures[key.lowercased()], let data = try? Data(contentsOf: source),
                   let video = WallpaperEngineTexture.texture(from: data)?.video else { continue }
             try? files.createDirectory(at: originals, withIntermediateDirectories: true)
