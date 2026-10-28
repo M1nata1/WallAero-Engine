@@ -3625,6 +3625,19 @@ public enum WallpaperEngineRuntime {
         var projection = general.orthogonalprojection || {};
         var sceneWidth = number(projection.width, 0);
         var sceneHeight = number(projection.height, 0);
+        // Where an object the scene does not place is: one that hangs on another, where that one
+        // is; else the middle of the scene. In three dimensions, where the scene has no middle
+        // but its world, at nought: a model (3737268876's sky and courtyard), a group, which
+        // places what hangs on it in the world's units (3662790108's whole solar system), a
+        // picture. A layer of the whole screen stays at its middle (3706286085's blur).
+        function unplaced(object) {
+          if (isSet(object.parent) || (inDepth && !screenLayer(object))) return 0;
+          return [sceneWidth / 2, sceneHeight / 2, 0];
+        }
+        // A layer Wallpaper Engine lays over the whole screen, to put effects over what is under it.
+        function screenLayer(object) {
+          return /composelayer|fullscreenlayer|projectlayer/.test(key(String(plain(object.image) || '')));
+        }
         var clear = numbers(general.clearcolor, 3, 0);
         var scale = 1;          // pixels drawn to a unit of the scene
         var sceneTarget = null; // the whole scene, as drawn so far
@@ -4796,11 +4809,14 @@ public enum WallpaperEngineRuntime {
           'in vec3 a_Position;',
           'in vec2 a_TexCoord;',
           'uniform mat3 u_Place;',
+          // In a scene in three dimensions a picture stands in the world, seen through the camera.
+          'uniform mat4 u_World;',
+          'uniform int u_InWorld;',
           'out vec2 v_Uv;',
           'void main() {',
           '  v_Uv = a_TexCoord;',
           '  vec3 at = u_Place * vec3(a_TexCoord.x - 0.5, 0.5 - a_TexCoord.y, 1.0);',
-          '  gl_Position = vec4(at.xy, 0.0, 1.0);',
+          '  gl_Position = u_InWorld == 1 ? u_World * vec4(a_TexCoord.x - 0.5, 0.5 - a_TexCoord.y, 0.0, 1.0) : vec4(at.xy, 0.0, 1.0);',
           '}'
         ].join('\n');
         var sampleLines = [
@@ -4826,11 +4842,13 @@ public enum WallpaperEngineRuntime {
           'in vec2 a_Spot;',
           'in vec2 a_Uv;',
           'uniform mat3 u_Place;',
+          'uniform mat4 u_World;',
+          'uniform int u_InWorld;',
           'out vec2 v_Uv;',
           'void main() {',
           '  v_Uv = a_Uv;',
           '  vec3 at = u_Place * vec3(a_Spot, 1.0);',
-          '  gl_Position = vec4(at.xy, 0.0, 1.0);',
+          '  gl_Position = u_InWorld == 1 ? u_World * vec4(a_Spot, 0.0, 1.0) : vec4(at.xy, 0.0, 1.0);',
           '}'
         ].join('\n');
         // The part of the scene that lies under a rectangle of it, to fill a picture of its own.
@@ -4977,6 +4995,24 @@ public enum WallpaperEngineRuntime {
           ]);
         }
 
+        // Where a rectangle stands in a scene in three dimensions, as seen through the camera: a
+        // matrix of four by four from its own coordinates, from its middle with y up. `tests`:
+        // whether it is hidden behind what is nearer, as a material that tests depth asks.
+        function worldPlaceOf(matrix, size, tests) {
+          var sized = matrix.slice();
+          [0, 1, 2].forEach(function (index) { sized[index] *= size[0]; sized[4 + index] *= size[1]; });
+          var place = new Float32Array(times4(viewProjection(), sized));
+          place.tests = !!tests;
+          return place;
+        }
+        // Tells a program where to put what it draws: on the surface, or in the world.
+        function placeIn(program, place) {
+          var inWorld = place.length === 16;
+          if (program.uniforms.u_InWorld) gl.uniform1i(program.uniforms.u_InWorld.location, inWorld ? 1 : 0);
+          if (inWorld) gl.uniformMatrix4fv(program.uniforms.u_World.location, false, place);
+          else gl.uniformMatrix3fv(program.uniforms.u_Place.location, false, place);
+        }
+
         var CHANNELS = { rgba: 0, r8: 1, rg88: 2 };
 
         // The pixels of `onto` a rectangle placed by `place` covers, as x0, y0, x1, y1, with a
@@ -5012,7 +5048,7 @@ public enum WallpaperEngineRuntime {
             gl.bindFramebuffer(gl.READ_FRAMEBUFFER, onto.framebuffer);
             gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, surface.copy.framebuffer);
             // Only what lies under the picture: a small one copies a small part.
-            var under = mesh ? null : coveredBy(place, onto);
+            var under = mesh || place.length === 16 ? null : coveredBy(place, onto);
             if (under) gl.blitFramebuffer(under[0], under[1], under[2], under[3], under[0], under[1], under[2], under[3], gl.COLOR_BUFFER_BIT, gl.NEAREST);
             else gl.blitFramebuffer(0, 0, onto.width, onto.height, 0, 0, onto.width, onto.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
             gl.bindFramebuffer(gl.FRAMEBUFFER, onto.framebuffer);
@@ -5037,11 +5073,16 @@ public enum WallpaperEngineRuntime {
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, source.texture);
           gl.uniform1i(program.uniforms.u_Texture.location, 0);
-          gl.uniformMatrix3fv(program.uniforms.u_Place.location, false, place);
+          placeIn(program, place);
           gl.uniform4fv(program.uniforms.u_Tint.location, tint);
           gl.uniform4fv(program.uniforms.u_Frame.location, source.frame || [0, 0, 1, 1]);
           gl.uniform1i(program.uniforms.u_Channels.location, CHANNELS[source.channels] || 0);
           if (source.sampler) gl.bindSampler(0, source.sampler);
+          if (place.tests) {
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.depthMask(false);
+          }
           if (mesh) {
             gl.bindVertexArray(mesh.shape);
             gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
@@ -5049,6 +5090,10 @@ public enum WallpaperEngineRuntime {
           } else {
             gl.bindVertexArray(passShape);
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          }
+          if (place.tests) {
+            gl.disable(gl.DEPTH_TEST);
+            gl.depthMask(true);
           }
           if (source.sampler) gl.bindSampler(0, null);
         }
@@ -5066,7 +5111,7 @@ public enum WallpaperEngineRuntime {
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, source.texture);
             gl.uniform1i(program.uniforms.u_Texture.location, 0);
-            gl.uniformMatrix3fv(program.uniforms.u_Place.location, false, place);
+            placeIn(program, place);
             gl.uniform4fv(program.uniforms.u_Tint.location, tint);
             gl.uniform4fv(program.uniforms.u_Frame.location, source.frame || [0, 0, 1, 1]);
             gl.uniform1i(program.uniforms.u_Channels.location, CHANNELS[source.channels] || 0);
@@ -5104,7 +5149,7 @@ public enum WallpaperEngineRuntime {
             gl.bindTexture(gl.TEXTURE_2D, byPicture ? clip.picture.layers[0].texture : source.texture);
             gl.uniform1i(clipMaskProgram.uniforms.u_Texture.location, 0);
             gl.uniform1i(clipMaskProgram.uniforms.u_Alpha.location, byPicture ? 0 : 1);
-            gl.uniformMatrix3fv(clipMaskProgram.uniforms.u_Place.location, false, place);
+            placeIn(clipMaskProgram, place);
             gl.enable(gl.BLEND);
             gl.blendEquation(gl.MAX);
             clip.masks.forEach(drawPart);
@@ -6646,11 +6691,7 @@ public enum WallpaperEngineRuntime {
           thing.solid = flag(object.solid, true);
           var given = numbers(object.size, 2, 0);
           if (given[0] > 0 && given[1] > 0) thing.size = given;
-          // One the scene does not place is at the middle of the scene; a model in three dimensions
-          // at nought (3737268876's sky and courtyard were far off at the middle). A picture there
-          // stays at the middle: a layer over the whole screen (3706286085's blur).
-          var atNought = hangs || (inDepth && !!object.model);
-          thing.lives.origin = live(object.origin, 3, atNought ? 0 : [sceneWidth / 2, sceneHeight / 2, 0], thing);
+          thing.lives.origin = live(object.origin, 3, unplaced(object), thing);
           thing.lives.scale = live(object.scale, 3, 1, thing);
           thing.lives.angles = live(object.angles, 3, 0, thing, 'numbers', 'degrees');
           thing.lives.alpha = live(object.alpha, 1, 1, thing);
@@ -7022,6 +7063,12 @@ public enum WallpaperEngineRuntime {
           }
           var base = (model && (json(model.material) || {}).passes || [])[0] || {};
           layer.blending = key(base.blending || 'translucent');
+          // In a scene in three dimensions a picture stands in the world, as large in its units as
+          // it has pixels, and is seen through the camera; a layer of the whole screen stays on
+          // it. Hidden behind what is nearer only if its material tests depth, as Wallpaper
+          // Engine's solid layer that says so in its name does.
+          layer.inWorld = inDepth && !screenLayer(object);
+          layer.testsDepth = /depthtest/.test(key(modelName)) || key(String(base.depthtest || 'disabled')) === 'enabled';
           // An object may put pictures of its own in its material's slots, as an instance of it: a
           // square of one color given the cover of the music that plays.
           var instance = object.instance && typeof object.instance === 'object' ? object.instance : {};
@@ -7602,9 +7649,12 @@ public enum WallpaperEngineRuntime {
             var shown = Math.sqrt(x * x + y * y);
             return Math.max(1 / 16, Math.min(1, Math.ceil(shown * 16) / 16));
           };
-          // One others take as a picture is made at its own size, however small it shows.
-          var width = layer.composite ? nominal[0] : nominal[0] * scale * finer(matrix[0], matrix[1]);
-          var height = layer.composite ? nominal[1] : nominal[1] * scale * finer(matrix[4], matrix[5]);
+          // One others take as a picture is made at its own size, however small it shows; so is
+          // one in the world, whose size on the screen its matrix does not tell.
+          var world = layer.inWorld && !layer.takesScene && !layer.holds && surface.target === sceneTarget;
+          var whole = layer.composite || world;
+          var width = whole ? nominal[0] : nominal[0] * scale * finer(matrix[0], matrix[1]);
+          var height = whole ? nominal[1] : nominal[1] * scale * finer(matrix[4], matrix[5]);
           var bright = layer.brightness;
           if (layer.materialAlpha !== undefined) stands = { matrix: stands.matrix, alpha: stands.alpha * layer.materialAlpha, above: stands.above, visible: stands.visible };
           var tint = layer.ownColor ? [1, 1, 1, stands.alpha]
@@ -7612,14 +7662,14 @@ public enum WallpaperEngineRuntime {
           var how = layer.blendMode > 0 && layer.blendMode !== 9 ? layer.blendMode :
                     (layer.blendMode === 9 || layer.blending === 'additive' ? 'additive' : (layer.blending === 'normal' ? 'normal' : 'translucent'));
           var onto = surface;
-          var place = placeOf(matrix, nominal);
-          var onScreen = place;
+          var place = world ? worldPlaceOf(matrix, nominal, layer.testsDepth) : placeOf(matrix, nominal);
+          var onScreen = placeOf(matrix, nominal);
           // A picture that bends is drawn as its triangles, whose corners are counted in the
           // picture's own pixels from its middle.
           var mesh = layer.puppet || null;
           if (mesh) {
             mesh.pose(time, matrix);
-            place = placeOf(matrix, [1, 1]);
+            place = world ? worldPlaceOf(matrix, [1, 1], layer.testsDepth) : placeOf(matrix, [1, 1]);
           }
           var effects = layer.effects.filter(function (effect) { return effect.shown.now; });
 
@@ -7855,10 +7905,11 @@ public enum WallpaperEngineRuntime {
           var how = layer.blendMode > 0 && layer.blendMode !== 9 ? layer.blendMode :
                     (layer.blendMode === 9 || layer.blending === 'additive' ? 'additive' : (layer.blending === 'normal' ? 'normal' : 'translucent'));
           var mesh = layer.puppet || null;
-          var place = placeOf(matrix, layer.size);
+          var world = layer.inWorld && !layer.holds && surface.target === sceneTarget;
+          var place = world ? worldPlaceOf(matrix, layer.size, layer.testsDepth) : placeOf(matrix, layer.size);
           if (mesh) {
             mesh.pose(time, matrix);
-            place = placeOf(matrix, [1, 1]);
+            place = world ? worldPlaceOf(matrix, [1, 1], layer.testsDepth) : placeOf(matrix, [1, 1]);
           }
           gl.bindFramebuffer(gl.FRAMEBUFFER, surface.target.framebuffer);
           gl.viewport(0, 0, surface.target.width, surface.target.height);
@@ -9772,8 +9823,7 @@ public enum WallpaperEngineRuntime {
           // editor keeps out of that picture is hidden there.
           if (window.wallaeroStill && change.showsOnLockScreen === false) put('visible', false);
           if (isSet(change.x) || isSet(change.y)) {
-            var hangs = object.parent !== undefined && object.parent !== null;
-            var origin = numbers(object.origin, 3, hangs || (inDepth && !!object.model) ? 0 : [sceneWidth / 2, sceneHeight / 2, 0]);
+            var origin = numbers(object.origin, 3, unplaced(object));
             if (isSet(change.x)) origin[0] = Number(change.x);
             if (isSet(change.y)) origin[1] = Number(change.y);
             put('origin', origin.join(' '));
@@ -10610,7 +10660,7 @@ public enum WallpaperEngineRuntime {
                      (isSet(object.text) ? 'text' : (object.model ? 'model' : (object.light ? 'light' : 'group')))));
           var file = String(plain(object.image) || plain(object.particle) || '');
           var hangs = isSet(object.parent);
-          var origin = numbers(object.origin, 3, hangs || (inDepth && !!object.model) ? 0 : [sceneWidth / 2, sceneHeight / 2, 0]);
+          var origin = numbers(object.origin, 3, unplaced(object));
           var scale = numbers(object.scale, 3, 1);
           var angles = numbers(object.angles, 3, 0);
           var result = {
