@@ -7714,14 +7714,23 @@ public enum WallpaperEngineRuntime {
             put(withLooks(source, layer), place, tint, how, mesh);
             return;
           }
-          // One that does not move is drawn once and kept — at the size it is now shown at.
-          if (layer.kept && (layer.kept.width !== Math.max(1, Math.round(width)) || layer.kept.height !== Math.max(1, Math.round(height)))) {
+          // A layer's color and how see-through it is are its picture's, given before its effects,
+          // as Wallpaper Engine's own pass of the picture gives them: an effect that draws by
+          // itself shows on a layer not to be seen (3662790108's orbits), and its finished
+          // picture, taken by others, has them. What is put on the scene then is as it is.
+          var atBase = !!source && !layer.takesScene && !layer.holds;
+          var finished = atBase ? [1, 1, 1, 1] : tint;
+          layer.tintedAtBase = atBase;
+          // One that does not move is drawn once and kept — at the size it is now shown at, and
+          // of the color it had.
+          if (layer.kept && (layer.kept.width !== Math.max(1, Math.round(width)) || layer.kept.height !== Math.max(1, Math.round(height)) ||
+                             (atBase && !same(layer.keptTint, tint)))) {
             release(layer.kept);
             layer.kept = null;
           }
           if (layer.kept) {
             if (layer.composite) keepComposite(layer, layer.kept, width, height);
-            if (shows) put(withLooks({ texture: layer.kept.texture }, layer), place, tint, how, mesh);
+            if (shows) put(withLooks({ texture: layer.kept.texture }, layer), place, finished, how, mesh);
             return;
           }
 
@@ -7799,12 +7808,10 @@ public enum WallpaperEngineRuntime {
             source = { texture: held.texture, resolution: resolution };
           }
 
-          // In the world Wallpaper Engine draws a layer as its pictures do: its color and how
-          // see-through it is are its picture's, before the effects; the last pass of the last
-          // effect is drawn straight onto the scene, through the layer's place, at the scene's
-          // pixels. A layer seen through nought but its effects shows so (3662790108's orbits:
-          // layers of 10 by 10, not to be seen, whose effects draw lines a pixel wide over the
-          // screen).
+          // In the world the last pass of the last effect is drawn straight onto the scene, through
+          // the layer's place, at the scene's pixels, as Wallpaper Engine draws it: 3662790108's
+          // orbits are drawn by effects on layers of 10 by 10 in lines a pixel wide over the
+          // screen.
           var last = null;
           effects.forEach(function (effect) {
             if (effect.passes.length) last = effect.passes[effect.passes.length - 1];
@@ -7812,7 +7819,7 @@ public enum WallpaperEngineRuntime {
           var straight = world && shows && typeof how === 'string' && !mesh && !layer.composite && last && !last.copy && !last.target &&
                          last.program && last.program.uniforms.g_ModelViewProjectionMatrix
                        ? { onto: onto, place: place, how: how, tests: place.tests } : null;
-          if (straight && source) {
+          if (atBase && !same(tint, [1, 1, 1, 1])) {
             var tinted = next();
             gl.bindFramebuffer(gl.FRAMEBUFFER, tinted.framebuffer);
             gl.viewport(0, 0, tinted.width, tinted.height);
@@ -7898,10 +7905,11 @@ public enum WallpaperEngineRuntime {
           if (layer.composite) keepComposite(layer, previous, width, height);
           gl.bindFramebuffer(gl.FRAMEBUFFER, onto.target.framebuffer);
           gl.viewport(0, 0, onto.target.width, onto.target.height);
-          if (shows && !straight) put(withLooks({ texture: previous.texture }, layer), place, tint, how, mesh);
+          if (shows && !straight) put(withLooks({ texture: previous.texture }, layer), place, finished, how, mesh);
           // What holds other layers is another picture whenever one of them is.
           if (!layer.moving && !layer.holds && held && loading === 0 && !straight) {
             layer.kept = held;
+            layer.keptTint = tint.slice();
             release(spare[0] === held ? spare[1] : spare[0]);
           } else {
             spare.forEach(release);
@@ -7955,7 +7963,8 @@ public enum WallpaperEngineRuntime {
         function drawComposite(layer, matrix, stands) {
           var state = layer.state, bright = layer.brightness;
           var alpha = stands.alpha * (layer.materialAlpha !== undefined ? layer.materialAlpha : 1);
-          var tint = layer.ownColor ? [1, 1, 1, alpha] : [state.color[0] * bright, state.color[1] * bright, state.color[2] * bright, alpha];
+          var tint = layer.tintedAtBase ? [1, 1, 1, 1]
+                   : layer.ownColor ? [1, 1, 1, alpha] : [state.color[0] * bright, state.color[1] * bright, state.color[2] * bright, alpha];
           var how = layer.blendMode > 0 && layer.blendMode !== 9 ? layer.blendMode :
                     (layer.blendMode === 9 || layer.blending === 'additive' ? 'additive' : (layer.blending === 'normal' ? 'normal' : 'translucent'));
           var mesh = layer.puppet || null;
