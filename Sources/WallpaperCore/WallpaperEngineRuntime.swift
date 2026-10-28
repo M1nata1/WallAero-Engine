@@ -9351,7 +9351,11 @@ public enum WallpaperEngineRuntime {
             var back = m4invert(model);
             function inward(v) { return [back[0] * v[0] + back[4] * v[1] + back[8] * v[2], back[1] * v[0] + back[5] * v[1] + back[9] * v[2], back[2] * v[0] + back[6] * v[1] + back[10] * v[2]]; }
             var basis = eyeBasis();
-            var viewRight = inward(basis.right), viewUp = inward(basis.up);
+            // Which way the eye's right and up are in the system's own space, a unit long there,
+            // as Wallpaper Engine's particle shader takes them: what is drawn is then as much
+            // larger as the system is scaled (3737268876's fairy: a glow scaled 0.35 within one
+            // scaled 0.59).
+            var viewRight = unit(inward(basis.right)), viewUp = unit(inward(basis.up));
             var wholeScale = Math.cbrt(Math.abs(model[0] * (model[5] * model[10] - model[6] * model[9]) - model[4] * (model[1] * model[10] - model[2] * model[9]) + model[8] * (model[1] * model[6] - model[2] * model[5]))) || 1;
             var eye = basis.eye, eyeHere = [back[0] * eye[0] + back[4] * eye[1] + back[8] * eye[2] + back[12],
                                             back[1] * eye[0] + back[5] * eye[1] + back[9] * eye[2] + back[13],
