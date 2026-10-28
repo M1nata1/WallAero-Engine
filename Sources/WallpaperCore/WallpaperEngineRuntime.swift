@@ -7602,9 +7602,9 @@ public enum WallpaperEngineRuntime {
             var shown = Math.sqrt(x * x + y * y);
             return Math.max(1 / 16, Math.min(1, Math.ceil(shown * 16) / 16));
           };
-          // One others take as a picture is made whole, however small it shows.
-          var width = nominal[0] * scale * (layer.composite ? 1 : finer(matrix[0], matrix[1]));
-          var height = nominal[1] * scale * (layer.composite ? 1 : finer(matrix[4], matrix[5]));
+          // One others take as a picture is made at its own size, however small it shows.
+          var width = layer.composite ? nominal[0] : nominal[0] * scale * finer(matrix[0], matrix[1]);
+          var height = layer.composite ? nominal[1] : nominal[1] * scale * finer(matrix[4], matrix[5]);
           var bright = layer.brightness;
           if (layer.materialAlpha !== undefined) stands = { matrix: stands.matrix, alpha: stands.alpha * layer.materialAlpha, above: stands.above, visible: stands.visible };
           var tint = layer.ownColor ? [1, 1, 1, stands.alpha]
@@ -7810,8 +7810,15 @@ public enum WallpaperEngineRuntime {
           var wide = Math.max(1, Math.round(width)), high = Math.max(1, Math.round(height));
           var target = layer.composite.target;
           if (!target || target.width !== wide || target.height !== high) {
-            if (target) release(target);
+            if (target) releaseRepeated(target);
             target = layer.composite.target = acquire(wide, high);
+            // Taken by a model, it repeats past its edges unless the layer says not, as a picture
+            // does (3737268876's eyes reach past them).
+            if (!layer.clampsUvs) {
+              gl.bindTexture(gl.TEXTURE_2D, target.texture);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+            }
           }
           gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
           gl.viewport(0, 0, target.width, target.height);
@@ -7830,6 +7837,14 @@ public enum WallpaperEngineRuntime {
           layer.composite.frame = frames;
           gl.bindFramebuffer(gl.FRAMEBUFFER, surface.target.framebuffer);
           gl.viewport(0, 0, surface.target.width, surface.target.height);
+        }
+
+        // A target given back to the others as they had it: ending at its edges.
+        function releaseRepeated(target) {
+          gl.bindTexture(gl.TEXTURE_2D, target.texture);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          release(target);
         }
 
         // A layer whose finished picture was made ahead in this frame, put on the scene from it.
@@ -9964,7 +9979,10 @@ public enum WallpaperEngineRuntime {
                                             (object.light ? 'light' : (object.sound ? 'sound' : (make ? 'text' : 'group')))));
           thing.draw = idle;
           objects.push(thing);
-          if (composited[String(object.id)] && object.image) thing.composite = compositeNamed('_rt_imagelayercomposite_' + object.id + '_a');
+          if (composited[String(object.id)] && object.image) {
+            thing.composite = compositeNamed('_rt_imagelayercomposite_' + object.id + '_a');
+            thing.clampsUvs = flag(object.clampuvs, false);
+          }
           // A layer made to put effects over others either takes what the scene shows under it or
           // holds the layers that hang on it, which are then drawn into it. The scene says which;
           // where it does not, the layer holds what hangs on it if anything does.
@@ -10221,7 +10239,7 @@ public enum WallpaperEngineRuntime {
           // So do the finished pictures kept for others; they show nothing until made again.
           Object.keys(composites).forEach(function (id) {
             var kept = composites[id];
-            if (kept.target) release(kept.target);
+            if (kept.target) releaseRepeated(kept.target);
             kept.target = null;
             kept.layers[0] = flat(0, 0, 0, 0).layers[0];
           });
