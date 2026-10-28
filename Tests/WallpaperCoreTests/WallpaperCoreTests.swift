@@ -1307,6 +1307,22 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertNil(WallpaperEnginePackage(folder: root), "no scene here")
     }
 
+    func testASceneMadeFromATemplateIsReadUnderTheNameItsProjectGives() throws {
+        // Wallpaper Engine's GIF template keeps `gifscene.json` in `gifscene.pkg` (843532366).
+        try #"{"file": "gifscene.json", "type": "scene"}"#.write(to: wallpaper.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+        try package([("gifscene.json", Data(#"{"objects": [1]}"#.utf8)), ("models/a.json", Data("{}".utf8))])
+            .write(to: wallpaper.appendingPathComponent("gifscene.pkg"))
+        let read = try XCTUnwrap(WallpaperEnginePackage(folder: wallpaper))
+        XCTAssertEqual(read.names, ["scene.json", "models/a.json"])
+        XCTAssertEqual(read.json(named: "scene.json")?["objects"] as? [Int], [1])
+        // Laid out as loose files, the scene keeps its own name and is still found.
+        let project = root.appendingPathComponent("project", isDirectory: true)
+        try WallpaperEngineProjectFolder.unpack(wallpaper, to: project)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: project.appendingPathComponent("gifscene.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: project.appendingPathComponent("gifscene.pkg").path))
+        XCTAssertEqual(try XCTUnwrap(WallpaperEnginePackage(folder: project)).json(named: "scene.json")?["objects"] as? [Int], [1])
+    }
+
     // MARK: - Pictures
 
     func testAPictureIsUnpackedAndCutOutOfItsCanvas() throws {

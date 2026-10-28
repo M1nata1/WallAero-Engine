@@ -7153,8 +7153,10 @@ public enum WallpaperEngineRuntime {
           }
           var size = numbers(object.size, 2, 0);
           if (!(size[0] > 0 && size[1] > 0)) {
-            size = [number(model && model.width, 0) || (layer.picture && layer.picture.width > 1 ? layer.picture.width : sceneWidth),
-                    number(model && model.height, 0) || (layer.picture && layer.picture.height > 1 ? layer.picture.height : sceneHeight)];
+            // As large as its picture, or as a frame of it where it is a sheet of frames.
+            var sheet = layer.picture && layer.picture.frames && layer.picture.frames[0];
+            var own = sheet ? [sheet[4], sheet[7]] : layer.picture && layer.picture.width > 1 ? [layer.picture.width, layer.picture.height] : [sceneWidth, sceneHeight];
+            size = [number(model && model.width, 0) || own[0], number(model && model.height, 0) || own[1]];
           }
           layer.size = size;
           // Which point of the picture is at its place: its middle, the middle of a side, or a corner.
@@ -9929,6 +9931,17 @@ public enum WallpaperEngineRuntime {
           // A scene may leave its size to its first picture.
           var first = all.filter(function (object) { return object.image; })[0];
           var firstSize = first ? numbers(first.size, 2, 0) : [0, 0];
+          if (first && !(firstSize[0] > 0 && firstSize[1] > 0)) {
+            // One that is as large as its picture says so only in its picture: a frame of the GIF
+            // of Wallpaper Engine's template (843532366, 480 by 300, its middle at 240, 150), or,
+            // without a picture to tell, twice as far as the middle it is placed at.
+            var firstModel = json(String(plain(first.image) || '')) || {};
+            var firstPass = ((json(String(firstModel.material || '')) || {}).passes || [])[0] || {};
+            var firstPicture = (firstPass.textures || [])[0] ? texture('materials/' + firstPass.textures[0]) : null;
+            var firstFrame = firstPicture && firstPicture.frames && firstPicture.frames[0];
+            firstSize = firstFrame ? [firstFrame[4], firstFrame[7]] : firstPicture && firstPicture.width > 1 ? [firstPicture.width, firstPicture.height]
+                      : numbers(first.origin, 2, 0).map(function (part) { return part * 2; });
+          }
           sceneWidth = firstSize[0] > 0 ? firstSize[0] : 1920;
           sceneHeight = firstSize[1] > 0 ? firstSize[1] : 1080;
         }

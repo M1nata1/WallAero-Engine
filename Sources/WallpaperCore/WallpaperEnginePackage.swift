@@ -14,13 +14,62 @@ struct WallpaperEnginePackage {
     private let read: (String) -> Data?
 
     /// The scene of a wallpaper's folder; nil when the folder has none that can be read.
+    ///
+    /// The scene's own file need not be `scene.json`: the project names it, and the package is
+    /// named after it — a wallpaper made from Wallpaper Engine's GIF template has
+    /// `gifscene.json` in `gifscene.pkg` (843532366). It is given here as `scene.json`, the
+    /// name everything else looks for.
     init?(folder: URL) {
-        let packed = folder.appendingPathComponent(Self.fileName)
+        let named = Self.sceneFile(of: folder)
+        let packed = folder.appendingPathComponent(Self.packageName(in: folder))
+        let package: WallpaperEnginePackage?
         if let data = try? Data(contentsOf: packed, options: .mappedIfSafe) {
-            self.init(data: data)
+            package = WallpaperEnginePackage(data: data)
         } else {
-            self.init(looseFilesIn: folder)
+            package = WallpaperEnginePackage(looseFilesIn: folder, sceneFile: named)
         }
+        guard let package else { return nil }
+        self = package.naming(named, as: "scene.json")
+    }
+
+    /// The name of the package a wallpaper's folder keeps its scene in: named after the
+    /// scene's own file where there is one of that name, else `scene.pkg`.
+    static func packageName(in folder: URL) -> String {
+        let stem = (sceneFile(of: folder) as NSString).deletingPathExtension
+        let own = stem + ".pkg"
+        return FileManager.default.fileExists(atPath: folder.appendingPathComponent(own).path) ? own : fileName
+    }
+
+    /// The name of the scene's own file, as the folder's project says; `scene.json` when it
+    /// says none that is a plain name of a JSON file.
+    private static func sceneFile(of folder: URL) -> String {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent("project.json")),
+              let project = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let file = project["file"] as? String, file.lowercased().hasSuffix(".json"),
+              !file.contains("/"), !file.contains("\\"), Archive.staysInside(file)
+        else {
+            return "scene.json"
+        }
+        return file
+    }
+
+    private init(names: [String], read: @escaping (String) -> Data?) {
+        self.names = names
+        self.read = read
+    }
+
+    /// The same files, with `file` known by `name` instead — when it holds one and not already
+    /// a file of that name.
+    private func naming(_ file: String, as name: String) -> WallpaperEnginePackage {
+        let fileKey = Self.key(file), nameKey = Self.key(name)
+        guard fileKey != nameKey, names.contains(where: { Self.key($0) == fileKey }),
+              !names.contains(where: { Self.key($0) == nameKey })
+        else {
+            return self
+        }
+        let read = self.read
+        return WallpaperEnginePackage(names: names.map { Self.key($0) == fileKey ? name : $0 },
+                                      read: { Self.key($0) == nameKey ? read(file) : read($0) })
     }
 
     init?(data: Data) {
@@ -50,9 +99,9 @@ struct WallpaperEnginePackage {
         }
     }
 
-    private init?(looseFilesIn folder: URL) {
+    private init?(looseFilesIn folder: URL, sceneFile: String = "scene.json") {
         let files = FileManager.default
-        guard files.fileExists(atPath: folder.appendingPathComponent("scene.json").path) else { return nil }
+        guard files.fileExists(atPath: folder.appendingPathComponent(sceneFile).path) else { return nil }
         // Paths compared as they really are: a folder may be reached through a link.
         let root = folder.standardizedFileURL.resolvingSymlinksInPath().path
         names = (files.enumerator(at: folder, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? [])

@@ -86,11 +86,13 @@ public enum WallpaperEngineProjectFolder {
     }
 
     /// Lays a Wallpaper Engine project out in `destination` as loose files, the way its own
-    /// editor keeps one: the project's files as they are, and those of its `scene.pkg` taken
-    /// out of it. Names that would lead out of the folder are passed over.
+    /// editor keeps one: the project's files as they are, and those of its package — `scene.pkg`,
+    /// or one named after the scene's own file — taken out of it. Names that would lead out of
+    /// the folder are passed over.
     public static func unpack(_ source: URL, to destination: URL, progress: (Double) -> Void = { _ in }) throws {
         let files = FileManager.default
         try files.createDirectory(at: destination, withIntermediateDirectories: true)
+        let packageName = WallpaperEnginePackage.packageName(in: source)
         let root = source.standardizedFileURL.resolvingSymlinksInPath().path
         let walker = files.enumerator(at: source, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
         while let url = walker?.nextObject() as? URL {
@@ -98,13 +100,13 @@ public enum WallpaperEngineProjectFolder {
             let path = url.standardizedFileURL.resolvingSymlinksInPath().path
             guard path.hasPrefix(root + "/") else { continue }
             let name = String(path.dropFirst(root.count + 1))
-            if name == WallpaperEnginePackage.fileName { continue }
+            if name == packageName { continue }
             let target = destination.appendingPathComponent(name)
             try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             if files.fileExists(atPath: target.path) { try files.removeItem(at: target) }
             try files.copyItem(at: url, to: target)
         }
-        let packed = source.appendingPathComponent(WallpaperEnginePackage.fileName)
+        let packed = source.appendingPathComponent(packageName)
         guard let data = try? Data(contentsOf: packed, options: .mappedIfSafe), let package = WallpaperEnginePackage(data: data) else { return }
         for (index, name) in package.names.enumerated() {
             progress(Double(index) / Double(max(package.names.count, 1)))
