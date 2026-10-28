@@ -207,7 +207,7 @@ public struct WallpaperEngineDocument: Equatable, Sendable {
     }
 
     static func key(_ name: String) -> String {
-        name.replacingOccurrences(of: "\\", with: "/").lowercased()
+        name.replacingOccurrences(of: "\\", with: "/").lowercased().precomposedStringWithCanonicalMapping
     }
 
     /// The model a picture of the scene is drawn as, and the material of the model.

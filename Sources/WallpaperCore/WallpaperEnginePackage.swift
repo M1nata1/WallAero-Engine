@@ -126,8 +126,11 @@ struct WallpaperEnginePackage {
     }
 
     /// Wallpaper Engine is a Windows program: names differ neither by case nor by the slash.
+    /// Nor by how their letters are written: the Mac gives the names of files with marks
+    /// written apart from their letters, where the scene writes them as one (3660962877's
+    /// song, ナブナ).
     private static func key(_ name: String) -> String {
-        name.replacingOccurrences(of: "\\", with: "/").lowercased()
+        name.replacingOccurrences(of: "\\", with: "/").lowercased().precomposedStringWithCanonicalMapping
     }
 }
 

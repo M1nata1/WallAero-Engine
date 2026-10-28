@@ -303,9 +303,10 @@ public enum WallpaperEngineScene {
     }
 
     /// The name a file of the scene is known by: Wallpaper Engine is a Windows program, where
-    /// names differ neither by case nor by the slash.
+    /// names differ neither by case nor by the slash — nor, here, by whether a letter's marks
+    /// are written with it or apart, as the Mac writes the names of files.
     static func key(_ name: String) -> String {
-        name.replacingOccurrences(of: "\\", with: "/").lowercased()
+        name.replacingOccurrences(of: "\\", with: "/").lowercased().precomposedStringWithCanonicalMapping
     }
 
     // MARK: - Settings
