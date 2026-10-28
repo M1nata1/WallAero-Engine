@@ -2214,7 +2214,8 @@ final class WallpaperEngineShaderTests: XCTestCase {
         // A fragment shader may not change what it is handed; it changes a copy of its own.
         let handed = "in vec2 v_TexCoord;\nvec2 twice() { return v_TexCoord * 2.0; }\nvoid main() {\n  v_TexCoord = twice();\n}"
         let own = try XCTUnwrap(try mended(handed, "ERROR: 0:4: 'assign' : l-value required (can't modify an input \"v_TexCoord\")", at: 4))
-        XCTAssertTrue(own.hasPrefix("in vec2 v_TexCoord; vec2 wallaero_own_v_TexCoord;"))
+        // On a line of its own: the line that takes the value in may be written anew (3701796900).
+        XCTAssertTrue(own.hasPrefix("in vec2 v_TexCoord;\nvec2 wallaero_own_v_TexCoord;"))
         XCTAssertTrue(own.contains("return wallaero_own_v_TexCoord * 2.0;"))
         XCTAssertTrue(own.contains("void main() { wallaero_own_v_TexCoord = v_TexCoord;"))
         XCTAssertTrue(own.contains("  wallaero_own_v_TexCoord = twice();"))
