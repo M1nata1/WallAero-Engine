@@ -9079,7 +9079,8 @@ public enum WallpaperEngineRuntime {
               sign: numbers(emitter.sign, 3, 0),
               rate: number(emitter.rate, 5), burst: number(emitter.instantaneous, 0),
               speedLeast: number(emitter.speedmin, 0), speedMost: number(emitter.speedmax, 0),
-              lasts: number(emitter.duration, 0), waits: number(emitter.delay, 0), owed: 0
+              lasts: number(emitter.duration, 0), waits: number(emitter.delay, 0), owed: 0,
+              hears: hearing(emitter)
             };
           });
           system.initializers = (said.initializer || []).map(function (each) { return initializer(each, system); }).filter(Boolean);
@@ -9088,6 +9089,8 @@ public enum WallpaperEngineRuntime {
             var kind = key(renderer.name);
             if (kind === 'rope') {
               system.rope = true;
+              // So many points between two particles, on a curve through them.
+              system.subdivision = Math.max(0, Math.min(16, Math.round(number(plain(renderer.subdivision), 0))));
             } else if (kind === 'spritetrail') {
               // Stretched along its way: so many times its width to a unit of speed, within bounds.
               system.trail = { by: number(renderer.length, 0.05), least: Math.max(0, number(renderer.minlength, 0)),
@@ -9240,7 +9243,8 @@ public enum WallpaperEngineRuntime {
                   for (var first = 0; first < emitter.burst && room(instance); first++) make(emitter, instance);
                 }
                 if (emitter.lasts > 0 && instance.age > emitter.waits + emitter.lasts) return;
-                instance.owed[index] = (instance.owed[index] || 0) + emitter.rate * system.rate * seconds;
+                var loud = emitter.hears ? emitter.hears() : 1;
+                instance.owed[index] = (instance.owed[index] || 0) + emitter.rate * system.rate * loud * seconds;
                 while (instance.owed[index] >= 1) {
                   instance.owed[index] -= 1;
                   if (room(instance)) make(emitter, instance);
@@ -9553,8 +9557,10 @@ public enum WallpaperEngineRuntime {
               var count = Math.min(system.particles.length, system.most);
               var stands = placement();
               if (count < 2 || !stands.visible) return;
-              if (band.length < system.most * 16) {
-                band = new Float32Array(system.most * 16);
+              var between = system.subdivision || 0;
+              var total = (count - 1) * (between + 1) + 1;
+              if (band.length < total * 16) {
+                band = new Float32Array(total * 16);
                 gl.bindBuffer(gl.ARRAY_BUFFER, bandBuffer);
                 gl.bufferData(gl.ARRAY_BUFFER, band.byteLength, gl.DYNAMIC_DRAW);
               }
@@ -9570,24 +9576,54 @@ public enum WallpaperEngineRuntime {
                 spots.push([matrix[12] - surface.left + matrix[0] * localX + matrix[4] * localY,
                             matrix[13] - surface.bottom + matrix[1] * localX + matrix[5] * localY]);
               }
+              // Each point of the band: where it is, how large, its color and how see-through.
+              var points = [];
+              function pointOf(spot, each) {
+                var shade = system.colorOf(each, state);
+                return { spot: spot, size: each.size * each.sizeNow, shade: [shade[0], shade[1], shade[2]],
+                         alpha: Math.max(0, Math.min(1, each.alpha * each.alphaNow * see)) };
+              }
               for (i = 0; i < count; i++) {
-                var each = system.particles[i];
-                var before = spots[Math.max(0, i - 1)], after = spots[Math.min(count - 1, i + 1)];
-                var dx = after[0] - before[0], dy = after[1] - before[1];
+                var here = pointOf(spots[i], system.particles[i]);
+                points.push(here);
+                if (i === count - 1 || !between) continue;
+                // Between two particles the band follows Wallpaper Engine's curve: a cubic one from
+                // the first to the second, pulled the way the rope comes in and goes on, the points
+                // spaced closer at its ends.
+                var there = pointOf(spots[i + 1], system.particles[i + 1]);
+                var start = spots[i], end = spots[i + 1];
+                var before = spots[Math.max(0, i - 1)], after = spots[Math.min(count - 1, i + 2)];
+                var pull0 = [start[0] + 0.15 * (end[0] - before[0]), start[1] + 0.15 * (end[1] - before[1])];
+                var pull1 = [end[0] + 0.15 * (start[0] - after[0]), end[1] + 0.15 * (start[1] - after[1])];
+                for (var step = 1; step <= between; step++) {
+                  var s = smooth01(0, 1, step / (between + 1)), o = 1 - s;
+                  var b0 = o * o * o, b1 = 3 * s * o * o, b2 = 3 * s * s * o, b3 = s * s * s;
+                  points.push({
+                    spot: [b0 * start[0] + b1 * pull0[0] + b2 * pull1[0] + b3 * end[0], b0 * start[1] + b1 * pull0[1] + b2 * pull1[1] + b3 * end[1]],
+                    size: mix(here.size, there.size, s),
+                    shade: [mix(here.shade[0], there.shade[0], s), mix(here.shade[1], there.shade[1], s), mix(here.shade[2], there.shade[2], s)],
+                    alpha: mix(here.alpha, there.alpha, s)
+                  });
+                }
+              }
+              count = points.length;
+              for (i = 0; i < count; i++) {
+                var point = points[i];
+                var previous = points[Math.max(0, i - 1)].spot, next = points[Math.min(count - 1, i + 1)].spot;
+                var dx = next[0] - previous[0], dy = next[1] - previous[1];
                 var far = Math.sqrt(dx * dx + dy * dy);
                 // Where the band does not go on, it has no width: a rope lying in one spot is not seen.
-                var half = far > 0.0001 ? each.size * each.sizeNow * wide / 2 / far : 0;
+                var half = far > 0.0001 ? point.size * wide / 2 / far : 0;
                 for (var side = 0; side < 2; side++) {
                   var at = (i * 2 + side) * 8, turn = side ? 1 : -1;
-                  band[at] = spots[i][0] - dy * half * turn;
-                  band[at + 1] = spots[i][1] + dx * half * turn;
+                  band[at] = point.spot[0] - dy * half * turn;
+                  band[at + 1] = point.spot[1] + dx * half * turn;
                   band[at + 2] = side;
                   band[at + 3] = 0.5;
-                  var shade = system.colorOf(each, state);
-                  band[at + 4] = shade[0];
-                  band[at + 5] = shade[1];
-                  band[at + 6] = shade[2];
-                  band[at + 7] = Math.max(0, Math.min(1, each.alpha * each.alphaNow * see));
+                  band[at + 4] = point.shade[0];
+                  band[at + 5] = point.shade[1];
+                  band[at + 6] = point.shade[2];
+                  band[at + 7] = point.alpha;
                 }
               }
               gl.useProgram(ropeProgram.program);
@@ -9798,6 +9834,33 @@ public enum WallpaperEngineRuntime {
         // --- Building ---------------------------------------------------------
 
         var listening = false;
+
+        // How much an emitter that answers the sound makes, from nought to all its rate: Wallpaper
+        // Engine's audio response, which makes nothing while nothing plays. Its mode is none, the
+        // left channel, the right one or both; it hears the bands from `start` to `end` of
+        // sixteen, bass first, counted from the lower bound of how loud they are to the upper,
+        // raised to the exponent that keeps the quiet from counting much. Null for one that does
+        // not answer it.
+        function hearing(emitter) {
+          var mode = number(plain(emitter.audioprocessingmode), 0);
+          if (!(mode >= 1 && mode <= 3)) return null;
+          listen();
+          var bounds = numbers(plain(emitter.audioprocessingbounds), 2, 0);
+          if (!isSet(emitter.audioprocessingbounds)) bounds = [0.8, 1];
+          var exponent = number(plain(emitter.audioprocessingexponent), 2);
+          var start = Math.max(0, Math.min(15, Math.round(number(plain(emitter.audioprocessingfrequencystart), 0))));
+          var end = Math.max(start, Math.min(15, Math.round(number(plain(emitter.audioprocessingfrequencyend), 1))));
+          return function () {
+            if (!spectrum) return 0;
+            var left = bands(16, false), right = bands(16, true), sum = 0;
+            for (var band = start; band <= end; band++) {
+              sum += mode === 1 ? left[band] : (mode === 2 ? right[band] : (left[band] + right[band]) / 2);
+            }
+            var level = sum / (end - start + 1);
+            var share = Math.max(0, Math.min(1, (level - bounds[0]) / Math.max(1e-6, bounds[1] - bounds[0])));
+            return Math.pow(share, Math.max(0.01, exponent));
+          };
+        }
 
         // The sound the Mac plays, for the shaders and scripts that draw by it; asked for once one
         // of them wants it, and heard for as long as the canvas is on the page.
