@@ -3490,7 +3490,7 @@ public enum WallpaperEngineRuntime {
             result = film(entry);
           } else if (entry && entry.pictures && entry.pictures.length) {
             result = { layers: [], width: entry.pictures[0].width, height: entry.pictures[0].height,
-                       channels: entry.channels || 'rgba', frames: entry.frames || null, ready: false };
+                       channels: entry.channels || 'rgba', frames: entry.frames || null, maps: number(entry.maps, 0), ready: false };
             var waiting = entry.pictures.length;
             entry.pictures.forEach(function (picture, index) {
               var layer = { texture: newTexture(entry.clamp !== false, entry.smooth !== false), width: picture.width, height: picture.height };
@@ -5800,6 +5800,33 @@ public enum WallpaperEngineRuntime {
         // and of the picture's own color as far as it is metal.
 
         var MAX_LIGHTS = 32;
+
+        // What the third texture of a model's material says of its surface, as Wallpaper Engine's
+        // generic4 reads it: how metal it is, how rough, and where and how much it glows, each in
+        // a channel of its own when the material turns that map on. The material may say so, or
+        // the texture itself: bits 20 to 23 of its flags, in that order (3509243656's suns, the
+        // eyes of Sonic). `maps` is null when there is nothing to read.
+        function surfaceOf(pass, constants) {
+          var name = (pass.textures || [])[2];
+          var masks = typeof name === 'string' && name ? texture('materials/' + name) : null;
+          var combos = pass.combos || {}, given = masks ? masks.maps || 0 : 0;
+          var maps = ['METALLIC_MAP', 'ROUGHNESS_MAP', 'REFLECTION_MAP', 'EMISSIVE_MAP'].map(function (combo, index) {
+            return masks && (isSet(combos[combo]) ? number(combos[combo], 0) === 1 : (given >> index & 1) === 1) ? 1 : 0;
+          });
+          var glow = number(plain(constants.emissivebrightness), 1);
+          var emissive = numbers(plain(constants.emissivecolor), 3, 1).map(function (part) { return part * glow; });
+          return { masks: masks, maps: maps[0] || maps[1] || maps[3] ? maps : null, emissive: emissive };
+        }
+        // Tells the model shader of a part's surface; its masks go in the third texture unit.
+        function useSurface(at, surface) {
+          var layer = surface.maps && surface.masks && surface.masks.ready !== false ? surface.masks.layers[0] : null;
+          gl.uniform4f(at('u_Maps'), layer ? surface.maps[0] : 0, layer ? surface.maps[1] : 0, 0, layer ? surface.maps[3] : 0);
+          gl.uniform3f(at('u_Emissive'), surface.emissive[0], surface.emissive[1], surface.emissive[2]);
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, layer ? layer.texture : null);
+          gl.uniform1i(at('u_Masks'), 2);
+          gl.activeTexture(gl.TEXTURE0);
+        }
         // How a model in three dimensions is shaded, whether its corners stand still or hang on bones.
         var modelFragment = [
           '#version 300 es',
@@ -5816,6 +5843,9 @@ public enum WallpaperEngineRuntime {
           'uniform float u_Metallic;',
           'uniform float u_Roughness;',
           'uniform int u_Lit;',             // 0: the material takes no light, and shows its own colors
+          'uniform sampler2D u_Masks;',     // metal, roughness, -, glow; each read where u_Maps says
+          'uniform vec4 u_Maps;',
+          'uniform vec3 u_Emissive;',       // the color it glows in, times how bright
           'uniform float u_Cutoff;',        // over 0: what is clearer than this is not drawn, the rest is whole
           'uniform int u_LightCount;',
           'uniform vec4 u_LightPlace[' + MAX_LIGHTS + '];', // where (w 1), or which way it shines (w 0)
@@ -5896,15 +5926,20 @@ public enum WallpaperEngineRuntime {
           '  base *= u_Tint;',
           // Alpha to coverage, as Wallpaper Engine draws it with no samples to spare: a cut.
           '  if (u_Cutoff > 0.0) { if (base.a < u_Cutoff) discard; base.a = 1.0; }',
-          '  if (u_Lit == 0) { color = base; return; }',
+          '  vec4 masks = u_Maps == vec4(0.0) ? vec4(0.0) : texture(u_Masks, v_Uv);',
+          // What glows does so whatever light falls on it, at least as bright as its glow.
+          '  vec3 glow = u_Emissive * base.rgb * masks.a * u_Maps.w;',
+          '  if (u_Lit == 0) { color = vec4(base.rgb + glow, base.a); return; }',
           '  vec3 n = normalize(v_Normal);',
           '  if (!gl_FrontFacing) n = -n;',
           '  vec3 toEye = normalize(u_Eye - v_World);',
-          '  vec3 f0 = mix(vec3(0.04), base.rgb, u_Metallic);',
-          '  float rough = clamp(u_Roughness, 0.03, 1.0);',
+          '  float metal = mix(u_Metallic, masks.r, u_Maps.x);',
+          '  vec3 f0 = mix(vec3(0.04), base.rgb, metal);',
+          '  float rough = clamp(mix(u_Roughness, masks.g, u_Maps.y), 0.03, 1.0);',
           // As Wallpaper Engine's generic4: the sky's light from below blending into the ambient
           // light from above, by which way the surface faces.
-          '  vec3 lit = mix(u_Sky, u_Ambient, dot(n, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5) * base.rgb;',
+          '  vec3 around = mix(u_Sky, u_Ambient, dot(n, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5) * base.rgb;',
+          '  vec3 lit = vec3(0.0);',
           '  for (int i = 0; i < ' + MAX_LIGHTS + '; i++) {',
           '    if (i >= u_LightCount) break;',
           '    vec3 toLight;',
@@ -5927,9 +5962,9 @@ public enum WallpaperEngineRuntime {
           '    }',
           // A light's color times its strength is what reaches the surface, as in Wallpaper
           // Engine's lighting; the diffuse part is the albedo over pi of it.
-          '    lit += shade(n, toEye, toLight, base.rgb, u_LightColor[i].rgb * left, f0, rough, u_Metallic);',
+          '    lit += shade(n, toEye, toLight, base.rgb, u_LightColor[i].rgb * left, f0, rough, metal);',
           '  }',
-          '  color = vec4(lit, base.a);',
+          '  color = vec4(max(lit, glow) + around, base.a);',
           '}'
         ].join('\n');
         var modelProgram = link([
@@ -6387,6 +6422,7 @@ public enum WallpaperEngineRuntime {
               blending: key(String(pass.blending || 'normal')),
               metallic: number(plain(constants.metallic), 0), roughness: number(plain(constants.roughness), 0.5),
               lit: number((pass.combos || {}).LIGHTING, 1) !== 0,
+              surface: surfaceOf(pass, constants),
               // How much it shows, as its material says: a number, or what a script makes of it —
               // a flame that shows only while the button is held.
               alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
@@ -6469,6 +6505,7 @@ public enum WallpaperEngineRuntime {
               gl.uniform1f(at('u_Metallic'), part.metallic);
               gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
               gl.uniform1f(at('u_Roughness'), part.roughness);
+              useSurface(at, part.surface);
               gl.uniform1f(at('u_Cutoff'), part.blending === 'alphatocoverage' ? 0.5 : 0);
               var shown = part.alpha ? Math.max(0, Math.min(1, number((part.alpha.now || [1])[0], 1))) : 1;
               if (!(shown > 0.001)) return;
@@ -6550,6 +6587,7 @@ public enum WallpaperEngineRuntime {
               metallic: number(plain(constants.metallic), 0), roughness: number(plain(constants.roughness), 0.5),
               // Lit unless the material says not: a model's material is, in Wallpaper Engine.
               lit: number((pass.combos || {}).LIGHTING, 1) !== 0,
+              surface: surfaceOf(pass, constants),
               // How much it shows and the color laid over its picture, as its material says —
               // numbers, or what scripts make of them: a sky that darkens at night.
               alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
@@ -6629,6 +6667,7 @@ public enum WallpaperEngineRuntime {
               gl.uniform1f(at('u_Metallic'), part.metallic);
               gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
               gl.uniform1f(at('u_Roughness'), part.roughness);
+              useSurface(at, part.surface);
               gl.uniform1f(at('u_Cutoff'), part.blending === 'alphatocoverage' ? 0.5 : 0);
               var shown = part.alpha ? Math.max(0, Math.min(1, number((part.alpha.now || [1])[0], 1))) : 1;
               if (!(shown > 0.001)) return;
@@ -7248,6 +7287,8 @@ public enum WallpaperEngineRuntime {
           thing.brightness = 1;
           thing.blendMode = number(object.colorBlendMode, 0);
           thing.ownColor = true; // the color is in the picture already
+          // In a scene in three dimensions a text stands in the world, as a picture does.
+          thing.inWorld = inDepth;
           also(thing, 'text', live(object.text, 0, '', thing, 'text'));
           also(thing, 'pointsize', live(object.pointsize, 1, 32, thing));
           // What a script has told the text to look like, in place of what the scene says.
