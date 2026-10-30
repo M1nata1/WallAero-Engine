@@ -1955,14 +1955,23 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertTrue(files.fileExists(atPath: folder.appendingPathComponent(try XCTUnwrap(chosen["file"] as? String)).path))
         XCTAssertNil(textures["user/other"])
 
-        // Settings alone are no wallpaper, and say so.
+        // Chosen alone where Steam keeps them, each item in a folder named by its number, the
+        // settings take their wallpaper from the folder next to them.
+        let alone = try await library.importItem(at: settings, languages: ["en"])
+        XCTAssertEqual(alone.map(\.name), ["y2k"])
+        XCTAssertEqual(library.items.count, 2)
+
+        // Settings with no wallpaper of theirs anywhere near are no wallpaper, and say so.
+        let apart = root.appendingPathComponent("Apart/3154017672")
+        try files.createDirectory(at: apart.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try files.copyItem(at: settings, to: apart)
         do {
-            _ = try await library.importItem(at: settings)
+            _ = try await library.importItem(at: apart)
             XCTFail("settings without their wallpaper were taken")
         } catch {
             XCTAssertEqual(error as? ImportError, .settingsWithoutWallpaper)
         }
-        XCTAssertEqual(library.items.count, 1)
+        XCTAssertEqual(library.items.count, 2)
     }
 
     func testOnlyScenesThatHoldOneGetThePlayer() throws {
