@@ -2426,6 +2426,30 @@ final class WallpaperEngineShaderTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(made.objectForKeyedSubscript("cursorClick")).isNull)
     }
 
+    func testAScriptSqueezedOntoOneLineIsMadeReady() throws {
+        // As 3811154012 brings it: no room between the statements, nor in `import*as … from'…'`.
+        let source = "'use strict';import*as WEMath from'WEMath';var k=2;export function update(value){return WEMath.mix(0,value,0.5)*k;}"
+        let made = try XCTUnwrap(try player("script").call(withArguments: [source, ["engine"], [["runtime": 2]]]))
+        XCTAssertEqual(made.objectForKeyedSubscript("update")?.call(withArguments: [10])?.toDouble(), 10)
+    }
+
+    func testAShaderFunctionNamedAsOneOfGLSLsAndAConstantReturnAreMended() throws {
+        func mended(_ source: String, _ message: String, at line: Int) throws -> String? {
+            let result = try XCTUnwrap(try player("mend").call(withArguments: [source, [message], line]))
+            return result.isNull ? nil : result.toString()
+        }
+        // 3819066109's light pillar: Direct3D has `frac`, so `fract` is the shader's own.
+        let own = "const float fract(float x) {\n  return x - floor(x);\n}\nvoid main() {\n  float a = fract(0.5);\n}"
+        let constant = try XCTUnwrap(try mended(own, "ERROR: 0:1: 'const' : no qualifiers allowed for function return", at: 1))
+        XCTAssertTrue(constant.hasPrefix("float fract(float x) {"))
+        let renamed = try XCTUnwrap(try mended(constant, "ERROR: 0:1: 'redefinition of built-in function' : not supported with this profile: es", at: 1))
+        XCTAssertTrue(renamed.hasPrefix("float wallaero_fract(float x) {"))
+        XCTAssertTrue(renamed.contains("float a = wallaero_fract(0.5);"))
+        // Where a pixel shader reads the place it is drawn at, it is the fragment's.
+        let place = try XCTUnwrap(try mended("void main() {\n  float r = gl_Position.x;\n}", "ERROR: 0:2: 'gl_Position' : undeclared identifier", at: 2))
+        XCTAssertTrue(place.contains("float r = gl_FragCoord.x;"))
+    }
+
     func testWholeNumbersBecomeFractionsExceptWhereThingsAreCounted() throws {
         XCTAssertEqual(try translate("float x = 1; float y = 2.5f * 4 + .5 + 3. + 1e3 + 0x10;"),
                        "float x = 1.0; float y = 2.5 * 4.0 + 0.5 + 3.0 + 1e3 + 16.0;")
