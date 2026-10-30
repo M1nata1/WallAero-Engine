@@ -216,14 +216,30 @@ public struct WallpaperEngineProject: Equatable, Sendable {
     /// archive of a wallpaper has it in a folder, next to files of the site it came from, and
     /// may have more than one wallpaper, each in a folder of its own.
     public static func all(in folder: URL, languages: [String] = Locale.preferredLanguages) -> [WallpaperEngineProject] {
+        var projects: [WallpaperEngineProject]
         if let project = WallpaperEngineProject(folder: folder, languages: languages) {
-            return [project]
+            projects = [project]
+        } else {
+            let inside = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil,
+                                                                       options: [.skipsHiddenFiles])) ?? []
+            projects = inside
+                .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+                .compactMap { WallpaperEngineProject(folder: $0, languages: languages) }
         }
-        let inside = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil,
-                                                                   options: [.skipsHiddenFiles])) ?? []
-        return inside
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-            .compactMap { WallpaperEngineProject(folder: $0, languages: languages) }
+        // Steam keeps every item of the Workshop in a folder named by its number: the wallpaper
+        // settings are made for lies next to them, and is taken from there.
+        for preset in projects where preset.kind == .preset {
+            guard let dependency = preset.dependency, !dependency.isEmpty, dependency.allSatisfy(\.isNumber),
+                  !projects.contains(where: { $0.kind != .preset && ($0.folder.lastPathComponent == dependency || $0.workshopID == dependency) }),
+                  let base = WallpaperEngineProject(folder: preset.folder.deletingLastPathComponent().appendingPathComponent(dependency),
+                                                    languages: languages),
+                  base.kind != .preset
+            else {
+                continue
+            }
+            projects.append(base)
+        }
+        return projects
     }
 
     // MARK: - Tags
