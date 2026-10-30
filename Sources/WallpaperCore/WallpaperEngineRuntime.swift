@@ -3584,7 +3584,7 @@ public enum WallpaperEngineRuntime {
             result = film(entry);
           } else if (entry && entry.pictures && entry.pictures.length) {
             result = { layers: [], width: entry.pictures[0].width, height: entry.pictures[0].height,
-                       channels: entry.channels || 'rgba', frames: entry.frames || null, maps: number(entry.maps, 0), ready: false };
+                       channels: entry.channels || 'rgba', frames: entry.frames || null, maps: number(entry.maps, 0), compressed: !!entry.compressed, ready: false };
             var waiting = entry.pictures.length;
             entry.pictures.forEach(function (picture, index) {
               var layer = { texture: newTexture(entry.clamp !== false, entry.smooth !== false), width: picture.width, height: picture.height };
@@ -8251,6 +8251,7 @@ public enum WallpaperEngineRuntime {
           'uniform sampler2D u_Texture;',
           'uniform sampler2D u_Normal;',
           'uniform int u_NormalChannels;',
+          'uniform float u_NormalLevel;',
           'uniform sampler2D u_Behind;',
           'uniform vec2 u_BehindSize;',
           'uniform int u_Channels;',
@@ -8272,10 +8273,15 @@ public enum WallpaperEngineRuntime {
           // particle as far as it shows.
           // With a map of how the drop faces, as Wallpaper Engine bends it: by the map's two
           // directions along the particle's own, as much as the map's mask and the particle show.
+          // A scene's own map holds its directions in alpha and green and its mask in red, with
+          // its second direction downward; a sheet of drops has its shapes only there. Compressed,
+          // its level sits at u_NormalLevel. Those of the player's own making say x, y and mask.
           '  if (u_NormalChannels > 0) {',
           '    vec4 n = texture(u_Normal, v_Uv);',
-          '    vec2 facing = u_NormalChannels == 2 ? n.gr * 2.0 - 1.0 : n.xy * 2.0 - 1.0;',
-          '    float mask = u_NormalChannels == 2 ? 1.0 : n.a;',
+          '    vec2 facing = n.xy * 2.0 - 1.0;',
+          '    float mask = n.a;',
+          '    if (u_NormalChannels == 2) { facing = vec2(n.g, 1.0 - n.r) * 2.0 - 1.0; mask = 1.0; }',
+          '    if (u_NormalChannels == 3) { facing = vec2(n.a * 2.0 - u_NormalLevel, 1.0 - n.g * 2.0); mask = n.r; }',
           '    float c = cos(v_Turn), s = sin(v_Turn);',
           '    slope = vec2(facing.x * c - facing.y * s, facing.x * s + facing.y * c) * vec2(1.0, -1.0) * mask;',
           '  }',
@@ -9725,7 +9731,8 @@ public enum WallpaperEngineRuntime {
               gl.uniform1f(slot('u_Fill'), system.picture.fill || 1);
               // The map of how the particles face, if the material has one ready.
               var facing = system.normals && system.normals.ready !== false ? system.normals : null;
-              gl.uniform1i(slot('u_NormalChannels'), facing ? (CHANNELS[facing.channels] === 2 ? 2 : 1) : 0);
+              gl.uniform1i(slot('u_NormalChannels'), !facing ? 0 : facing.builtin ? 1 : CHANNELS[facing.channels] === 2 ? 2 : 3);
+              gl.uniform1f(slot('u_NormalLevel'), facing && facing.compressed ? 0.965 : 1);
               if (facing) {
                 gl.activeTexture(gl.TEXTURE2);
                 gl.bindTexture(gl.TEXTURE_2D, facing.layers[0].texture);

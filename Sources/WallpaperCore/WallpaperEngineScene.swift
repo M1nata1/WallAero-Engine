@@ -124,6 +124,7 @@ public enum WallpaperEngineScene {
                     "smooth": texture.isSmooth,
                 ]
                 if texture.maps != 0 { entry["maps"] = texture.maps }
+                if texture.isCompressed { entry["compressed"] = true }
                 if !texture.frames.isEmpty {
                     entry["frames"] = texture.frames.map {
                         [$0.picture, $0.duration, $0.x, $0.y, $0.width, $0.widthY, $0.heightX, $0.height] as [Any]

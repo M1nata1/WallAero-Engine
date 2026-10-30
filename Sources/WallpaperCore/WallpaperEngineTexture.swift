@@ -54,6 +54,9 @@ enum WallpaperEngineTexture {
         /// For the masks of a model's surface: which maps it holds, a bit each — metal,
         /// roughness, reflection, glow — from bits 20 to 23 of its flags.
         var maps = 0
+        /// Whether its pixels were stored compressed: a direction map's middle then sits a little
+        /// below half, and Wallpaper Engine's shaders allow for it.
+        var isCompressed = false
         var frames: [Frame]
         /// The video the texture holds in place of pictures, if it holds one.
         var video: Video?
@@ -189,6 +192,7 @@ enum WallpaperEngineTexture {
         }
         return Texture(pictures: pictures, channels: channels, isClamped: flags & 2 != 0, isSmooth: flags & 1 == 0,
                        maps: Int(UInt32(truncatingIfNeeded: flags) >> 20 & 0xF),
+                       isCompressed: !isPictureFile && [.dxt5, .dxt3, .dxt1].contains(Format(rawValue: format)),
                        frames: onlyFirstPicture ? [] : frames(&reader, pictureCount: pictures.count), video: nil)
     }
 
