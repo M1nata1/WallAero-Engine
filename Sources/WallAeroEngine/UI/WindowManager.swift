@@ -2,11 +2,17 @@ import AppKit
 import SwiftUI
 import WallpaperCore
 
-/// What the main window shows: the wallpaper selected in the library, and the settings at its
-/// side. Whether the settings are there is kept between launches; which of them, is not — the
+/// What the main window shows: the library or the Steam Workshop, the wallpaper selected in the
+/// library, and the settings at its side. Whether the settings are there is kept between launches; which of them, is not — the
 /// window opens on the wallpaper's own.
 @MainActor
 final class MainWindowState: ObservableObject {
+    /// The two parts of the window, switched between by the control in its toolbar.
+    enum Section: Hashable {
+        case library
+        case workshop
+    }
+
     /// The settings at the side of the window are of two kinds.
     enum SettingsTab: String {
         /// What the selected wallpaper lets be changed.
@@ -26,6 +32,17 @@ final class MainWindowState: ObservableObject {
         case deleteSelected
     }
 
+    /// Which part of the window is shown. It opens on the library every time.
+    @Published var section = Section.library {
+        didSet {
+            if section == .workshop {
+                hasOpenedWorkshop = true
+            }
+        }
+    }
+    /// Whether the Workshop has been opened in this window: until it is, nothing is asked of
+    /// Steam. From then on both parts stay in place, so each comes back where it was left.
+    @Published private(set) var hasOpenedWorkshop = false
     /// The wallpapers selected in the library: one, whose settings are at the side, or
     /// several, to be deleted together.
     @Published var picked = WallpaperSelection()
@@ -53,6 +70,16 @@ final class MainWindowState: ObservableObject {
         self.defaults = defaults
         // Until the user hides them, the settings are there, showing the wallpaper's own.
         showsSettings = defaults?.object(forKey: Self.showsSettingsKey) as? Bool ?? true
+    }
+
+    /// The window opens the way it was at first, whatever part of it was left open.
+    func windowClosed() {
+        section = .library
+        hasOpenedWorkshop = false
+        searchText = ""
+        selectedTags = []
+        showsTagFilter = false
+        settingsTab = .wallpaper
     }
 }
 
@@ -100,7 +127,8 @@ final class WindowManager: NSObject, NSWindowDelegate {
         present(window)
     }
 
-    func showLibrary() {
+    /// Opens the main window on what it shows already.
+    func showMainWindow() {
         let window = libraryWindow ?? makeWindow(
             title: "WallAero Engine",
             content: makeMainView(),
@@ -112,6 +140,18 @@ final class WindowManager: NSObject, NSWindowDelegate {
         present(window)
     }
 
+    /// Opens the main window on the library.
+    func showLibrary() {
+        showMainWindow()
+        state.section = .library
+    }
+
+    /// Opens the main window on the Steam Workshop.
+    func showWorkshop() {
+        showMainWindow()
+        state.section = .workshop
+    }
+
     /// Opens the app's own settings: the main window, with them at its side.
     func showSettings() {
         showLibrary()
@@ -119,11 +159,14 @@ final class WindowManager: NSObject, NSWindowDelegate {
         state.showsSettings = true
     }
 
-    /// Opens the main window with the cursor in its search field.
+    /// Opens the main window with the cursor in the search field of the part it shows.
     func showSearch() {
-        showLibrary()
+        showMainWindow()
         func searchField(in view: NSView) -> NSSearchField? {
-            (view as? NSSearchField) ?? view.subviews.lazy.compactMap(searchField(in:)).first
+            if let field = view as? NSSearchField, field.isEnabled {
+                return field
+            }
+            return view.subviews.lazy.compactMap(searchField(in:)).first
         }
         if let window = libraryWindow, let field = window.contentView.flatMap(searchField(in:)) {
             window.makeFirstResponder(field)
@@ -169,10 +212,7 @@ final class WindowManager: NSObject, NSWindowDelegate {
                 self.libraryWindow = nil
                 // The window opens on the whole library next time, not on what was searched for,
                 // and on the wallpaper's settings, not on the app's.
-                self.state.searchText = ""
-                self.state.selectedTags = []
-                self.state.showsTagFilter = false
-                self.state.settingsTab = .wallpaper
+                self.state.windowClosed()
             }
             if let id = self.editors.first(where: { $0.value.window === closing })?.key {
                 self.editors[id] = nil

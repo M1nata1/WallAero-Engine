@@ -36,6 +36,8 @@ public struct Wallpaper: Codable, Identifiable, Hashable, Sendable {
     public var settings: Settings?
     /// The tags the user gave it, once there are any; `tagList` is what to go by.
     public var tags: [String]?
+    /// The number of the Steam Workshop item it was downloaded from, if it was.
+    public var workshopID: String?
 
     /// What every wallpaper lets be set: how it fills the screen, how fast it plays and what
     /// music goes with it.
@@ -125,7 +127,8 @@ public struct Wallpaper: Codable, Identifiable, Hashable, Sendable {
         fileSize: Int64,
         dateAdded: Date = Date(),
         settings: Settings? = nil,
-        tags: [String]? = nil
+        tags: [String]? = nil,
+        workshopID: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -142,5 +145,6 @@ public struct Wallpaper: Codable, Identifiable, Hashable, Sendable {
         self.dateAdded = dateAdded
         self.settings = settings
         self.tags = tags
+        self.workshopID = workshopID
     }
 }

@@ -105,9 +105,12 @@ extension [TagGroup] {
 }
 
 /// The system's own search field: every version of macOS draws it its way, with its own
-/// placeholder and the button that clears it.
+/// placeholder and the button that clears it. With `onSubmit` the search waits for Return or for
+/// the clearing button, for a search that has to go and ask someone.
 struct SearchField: NSViewRepresentable {
     @Binding var text: String
+    var prompt: String?
+    var onSubmit: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text)
@@ -118,12 +121,18 @@ struct SearchField: NSViewRepresentable {
         field.delegate = context.coordinator
         // The action is what the clearing button sends; typing is told to the delegate.
         field.target = context.coordinator
-        field.action = #selector(Coordinator.changed(_:))
+        field.action = #selector(Coordinator.sent(_:))
+        field.sendsWholeSearchString = onSubmit != nil
+        if let prompt {
+            field.placeholderString = prompt
+        }
         return field
     }
 
     func updateNSView(_ field: NSSearchField, context: Context) {
         context.coordinator.text = $text
+        context.coordinator.onSubmit = onSubmit
+        field.isEnabled = context.environment.isEnabled
         if field.stringValue != text {
             field.stringValue = text
         }
@@ -131,6 +140,7 @@ struct SearchField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         var text: Binding<String>
+        var onSubmit: (() -> Void)?
 
         init(text: Binding<String>) {
             self.text = text
@@ -142,10 +152,15 @@ struct SearchField: NSViewRepresentable {
             }
         }
 
-        @objc func changed(_ field: NSSearchField) {
+        func changed(_ field: NSSearchField) {
             if text.wrappedValue != field.stringValue {
                 text.wrappedValue = field.stringValue
             }
+        }
+
+        @objc func sent(_ field: NSSearchField) {
+            changed(field)
+            onSubmit?()
         }
     }
 }

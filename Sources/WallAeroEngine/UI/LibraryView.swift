@@ -22,35 +22,93 @@ extension WallpaperLibrary {
     }
 }
 
-/// The app's main window: the library, with the settings at its side when they are asked for.
+/// The app's main window: the library or the Steam Workshop, with the settings of the library's
+/// wallpapers at its side when they are asked for.
 struct MainView: View {
     @EnvironmentObject private var state: MainWindowState
     let actions: LibraryActions
 
     var body: some View {
-        if #available(macOS 14.0, *) {
-            // The system's own side panel: it looks the way the Mac's version of macOS has them.
-            LibraryView(actions: actions)
-                .inspector(isPresented: $state.showsSettings) {
-                    SettingsPanel(edit: actions.edit)
-                        .inspectorColumnWidth(MainWindowState.settingsWidth)
-                        .toolbar {
-                            Spacer()
-                            SettingsToggle(isOn: $state.showsSettings)
-                        }
-                }
-        } else {
-            HStack(spacing: 0) {
-                LibraryView(actions: actions)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if state.showsSettings {
+        Group {
+            if #available(macOS 14.0, *) {
+                // The system's own side panel: it looks the way the Mac's version of macOS has them.
+                sections
+                    .inspector(isPresented: showsSettings) {
+                        SettingsPanel(edit: actions.edit)
+                            .inspectorColumnWidth(MainWindowState.settingsWidth)
+                            .toolbar {
+                                Spacer()
+                                if state.section == .library {
+                                    SettingsToggle(isOn: $state.showsSettings)
+                                }
+                            }
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .navigation) { sectionPicker }
+                    }
+                    .withoutWindowTitle()
+            } else {
+                VStack(spacing: 0) {
+                    sectionPicker
+                        .padding(.vertical, 8)
                     Divider()
-                    SettingsPanel(edit: actions.edit)
-                        .frame(width: MainWindowState.settingsWidth)
-                        .background(Color(nsColor: .windowBackgroundColor))
+                    HStack(spacing: 0) {
+                        sections
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        if showsSettings.wrappedValue {
+                            Divider()
+                            SettingsPanel(edit: actions.edit)
+                                .frame(width: MainWindowState.settingsWidth)
+                                .background(Color(nsColor: .windowBackgroundColor))
+                        }
+                    }
                 }
             }
         }
+        .onChange(of: state.section) { _ in
+            // The keys are not to stay in a search field that is no longer on show.
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
+    }
+
+    /// The settings are of the library's wallpapers, so the Workshop has the room to itself;
+    /// whether they are open comes back with the library.
+    private var showsSettings: Binding<Bool> {
+        Binding(
+            get: { state.showsSettings && state.section == .library },
+            set: { if state.section == .library { state.showsSettings = $0 } }
+        )
+    }
+
+    private var sectionPicker: some View {
+        Picker("Section", selection: $state.section) {
+            Text("Library").tag(MainWindowState.Section.library)
+            Text("Steam Workshop").tag(MainWindowState.Section.workshop)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    /// Both parts stay in place while one is shown, so that each comes back scrolled as it was
+    /// and with what was typed into it. The Workshop only joins once it is opened.
+    private var sections: some View {
+        ZStack {
+            section(.library) { LibraryView(actions: actions) }
+            if state.hasOpenedWorkshop {
+                section(.workshop) { WorkshopView() }
+            }
+        }
+    }
+
+    /// A part of the window, which takes neither the mouse nor the keys while it is not shown.
+    private func section<Content: View>(_ section: MainWindowState.Section, @ViewBuilder content: () -> Content) -> some View {
+        let isShown = state.section == section
+        return content()
+            .opacity(isShown ? 1 : 0)
+            .allowsHitTesting(isShown)
+            .disabled(!isShown)
+            .accessibilityHidden(!isShown)
     }
 }
 
@@ -198,13 +256,15 @@ struct LibraryView: View {
             filterable
                 .bottomBar { footer }
                 .toolbar {
-                    if manager.displays.count > 1 {
-                        ToolbarItem(placement: .navigation) { displayPicker }
-                    }
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        pauseButton
-                        newSceneButton
-                        addButton
+                    if state.section == .library {
+                        if manager.displays.count > 1 {
+                            ToolbarItem(placement: .navigation) { displayPicker }
+                        }
+                        ToolbarItemGroup(placement: .primaryAction) {
+                            pauseButton
+                            newSceneButton
+                            addButton
+                        }
                     }
                 }
         } else {
@@ -461,7 +521,7 @@ struct LibraryView: View {
     }
 
     private func importStatus(for job: ImportCoordinator.Job) -> String {
-        let name = job.url.lastPathComponent
+        let name = job.name
         let remaining = importer.jobs.count - 1
         let percent = Int((job.progress * 100).rounded(.down))
         var status = job.isConverting
