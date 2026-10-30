@@ -2683,3 +2683,101 @@ enum TestMedia {
         return try XCTUnwrap(context.makeImage())
     }
 }
+
+final class SteamWorkshopTests: XCTestCase {
+    func testAListingGivesEachItemOnceInItsOrder() {
+        let page = #"<a href="https://steamcommunity.com/sharedfiles/filedetails/?id=22&l=en"></a> filedetails/?id=11 filedetails/?id=22 filedetails/?id="#
+        XCTAssertEqual(SteamWorkshop.itemIDs(inListing: page), ["22", "11"])
+    }
+
+    func testASearchGoesByRelevanceAndTheRatingIsAskedFor() throws {
+        var query = SteamWorkshop.Query()
+        query.search = " cat "
+        query.kind = .scene
+        let url = try XCTUnwrap(URLComponents(url: SteamWorkshop.listingURL(for: query), resolvingAgainstBaseURL: false))
+        let items = try XCTUnwrap(url.queryItems)
+        XCTAssertTrue(items.contains(URLQueryItem(name: "browsesort", value: "textsearch")))
+        XCTAssertTrue(items.contains(URLQueryItem(name: "searchtext", value: "cat")))
+        XCTAssertEqual(items.filter { $0.name == "requiredtags[]" }.map(\.value), ["Scene", "Everyone"])
+    }
+
+    func testDetailsLeaveOutProgramsAdultWorkAndOtherAppsItems() throws {
+        func item(_ id: String, tags: [String], app: Int = 431960, size: Any = "2048") -> [String: Any] {
+            ["publishedfileid": id, "result": 1, "consumer_app_id": app, "title": "T" + id, "file_size": size,
+             "preview_url": "https://example.com/p.gif", "tags": tags.map { ["tag": $0] }]
+        }
+        let details = [item("1", tags: ["Scene", "Everyone"]), item("2", tags: ["Application", "Everyone"]),
+                       item("3", tags: ["Video", "Mature"]), item("4", tags: ["Everyone"], app: 4000),
+                       ["publishedfileid": "5", "result": 9]]
+        let data = try JSONSerialization.data(withJSONObject: ["response": ["publishedfiledetails": details]])
+        let items = try SteamWorkshop.items(inDetails: data, query: .init())
+        XCTAssertEqual(items.map(\.id), ["1"])
+        XCTAssertEqual(items.first?.fileSize, 2048)
+        XCTAssertEqual(items.first?.kindTag, "Scene")
+
+        var all = SteamWorkshop.Query()
+        all.includesMature = true
+        XCTAssertEqual(try SteamWorkshop.items(inDetails: data, query: all).map(\.id), ["1", "3"])
+    }
+
+    func testTheProgramsWordsBecomeEvents() {
+        var output = SteamCMD.Output()
+        XCTAssertEqual(output.append("Cached credentials not found.\r\n\r\npass"), [])
+        XCTAssertEqual(output.append("word: "), [.needsPassword])
+        XCTAssertEqual(output.append("Please check your email…\r\nSteam Guard code:"), [.needsCode(.email)])
+        XCTAssertEqual(output.append("Two-factor code:"), [.needsCode(.authenticator)])
+        XCTAssertEqual(output.append("Please confirm the login in the Steam Mobile app on your phone.\r\n"), [.needsConfirmation])
+        XCTAssertEqual(output.append("[ 42%] Downloading update (1,024 of 2,048 KB)...\r\n"), [.updating(42)])
+        XCTAssertEqual(output.append("Waiting for user info...OK\r\n"), [.signedIn])
+        XCTAssertEqual(output.append("Logging in user 'x' to Steam Public...FAILED (Invalid Password)\r\n"), [.signInRefused("Invalid Password")])
+        XCTAssertEqual(output.append("FAILED login with result code Two-factor code mismatch\r\n"), [.signInRefused("Two-factor code mismatch")])
+        XCTAssertEqual(output.append("ERROR! Download item 38 failed (Failure).Unloading Steam API...OK\r\n"),
+                       [.downloadFailed(id: "38", reason: "Failure")])
+        XCTAssertEqual(output.append(#"Success. Downloaded item 38 to "/users/x/38" (300 bytes)"# + "\r\n"), [.downloaded("38")])
+        XCTAssertEqual(output.append("Loading Steam API...OK\r\n"), [])
+    }
+}
+
+final class SteamWorkshopPreviewsTests: XCTestCase {
+    private var folder: URL!
+    private let url = URL(string: "https://example.com/ugc/1/ABC?imw=432")!
+
+    override func setUpWithError() throws {
+        folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    private func picture(width: Int, height: Int) throws -> Data {
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        let image = try XCTUnwrap(context.makeImage())
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return data as Data
+    }
+
+    func testAPictureIsKeptSmallForADayAndNoLonger() throws {
+        let previews = SteamWorkshopPreviews(folder: folder)
+        XCTAssertNil(previews.kept(for: url))
+        XCTAssertEqual(try XCTUnwrap(previews.keep(picture(width: 1000, height: 500), for: url)).width, 432)
+
+        let now = Date()
+        XCTAssertEqual(previews.kept(for: url, at: now.addingTimeInterval(23 * 60 * 60))?.width, 432)
+        XCTAssertNil(previews.kept(for: url, at: now.addingTimeInterval(25 * 60 * 60)))
+    }
+
+    func testOnlyWhatIsADayOldIsRemoved() throws {
+        let previews = SteamWorkshopPreviews(folder: folder)
+        _ = previews.keep(try picture(width: 100, height: 100), for: url)
+        let files = { (try? FileManager.default.contentsOfDirectory(atPath: self.folder.path))?.count ?? 0 }
+        previews.removeExpired(at: Date().addingTimeInterval(23 * 60 * 60))
+        XCTAssertEqual(files(), 1)
+        previews.removeExpired(at: Date().addingTimeInterval(25 * 60 * 60))
+        XCTAssertEqual(files(), 0)
+    }
+}

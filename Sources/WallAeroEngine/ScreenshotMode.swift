@@ -34,6 +34,7 @@ enum ScreenshotMode {
         preferences: Preferences,
         manager: WallpaperManager,
         importer: ImportCoordinator,
+        workshop: WorkshopStore,
         cursorSettings: CursorSettings
     ) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -60,6 +61,7 @@ enum ScreenshotMode {
             .environmentObject(library)
             .environmentObject(manager)
             .environmentObject(importer)
+            .environmentObject(workshop)
             .environmentObject(preferences)
             .environmentObject(cursorSettings)
             .environmentObject(state)
@@ -70,6 +72,33 @@ enum ScreenshotMode {
         let showsEnd = CommandLine.arguments.contains("--settings-end")
             || (!CommandLine.arguments.contains("--settings-top") && secondTab == .general)
         Task {
+            // `--switch-sections` goes between the parts of the window and back.
+            if CommandLine.arguments.contains("--switch-sections") {
+                await switchSections(AnyView(mainView), state: state, workshop: workshop, in: directory)
+                NSApp.terminate(nil)
+                return
+            }
+            // `--workshop` pictures the Steam Workshop's part of the window, as Steam lists it
+            // now, and `--workshop-sign-in` what it asks for signing in.
+            if CommandLine.arguments.contains("--workshop") {
+                state.section = .workshop
+                workshop.showsSignIn = CommandLine.arguments.contains("--workshop-sign-in")
+                // Steam takes a few seconds to list them, and more for their pictures.
+                workshop.query.search = values(of: "--search").last ?? ""
+                workshop.reload()
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                await shoot(AnyView(mainView), title: "WallAero Engine",
+                            size: NSSize(width: 1000, height: 700), to: directory.appendingPathComponent("workshop.png"), waiting: 12) { window in
+                    if CommandLine.arguments.contains("--workshop-click") {
+                        Task {
+                            try? await Task.sleep(nanoseconds: 9_000_000_000)
+                            clickWorkshopButtons(in: window, store: workshop)
+                        }
+                    }
+                }
+                NSApp.terminate(nil)
+                return
+            }
             if let seconds = values(of: "--watch-theme").last.flatMap(Int.init) {
                 state.showsSettings = true
                 await watchTheme(AnyView(mainView), seconds: seconds, in: directory)
@@ -222,6 +251,16 @@ enum ScreenshotMode {
             let typed = state.searchText
             await press("\u{7F}", code: 51)
             await report("the Delete key in the search field, which read “\(typed)” and now reads “\(state.searchText)”")
+            // With the Workshop on show, the library's commands leave the library alone.
+            await click(at: tile(1))
+            await report("the wallpaper left selected")
+            state.section = .workshop
+            await pause(1)
+            await press("a", code: 0, .command)
+            await press("\u{8}", code: 51)
+            await report("Command-A and the Delete key in the Workshop")
+            state.section = .library
+            await report("back in the library")
             exit(0)
         }
     }
@@ -375,6 +414,67 @@ enum ScreenshotMode {
         }
     }
 
+    /// `--workshop-click`, with `--workshop`: clicks each Download button with a real mouse event,
+    /// saying which of them take it. With no account in this helper a click opens the sign-in
+    /// and starts nothing.
+    private static func clickWorkshopButtons(in window: NSWindow, store: WorkshopStore) {
+        setlinebuf(stdout)
+        // SwiftUI draws these buttons itself, so they are found by where the grid has them in a
+        // window of 1000×700: the middle of each button, counted from the top left.
+        let height = window.contentView?.bounds.height ?? 700
+        for y in [257.0, 451, 645] {
+            for x in [229.0, 461, 693, 925] {
+                let point = NSPoint(x: x, y: height - y)
+                let before = store.downloads.count
+                let mouse = { (type: NSEvent.EventType) in
+                    NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                }
+                // A button waits for the release once pressed, so that goes in the queue first.
+                mouse(.leftMouseUp).map { NSApp.postEvent($0, atStart: false) }
+                mouse(.leftMouseDown).map(window.sendEvent)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                print("(\(Int(x)), \(Int(y))): " + (store.downloads.count > before ? "clicked" : "NOT clicked"))
+                store.cancelSignIn()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+        }
+    }
+
+    /// `--steam-test <folder>` gets SteamCMD into the folder, signs in to no account and asks for
+    /// a Workshop item as `--steam-test-item <number>` says, printing what it answers: Steam
+    /// refuses, the way it refuses an account that does not own Wallpaper Engine. The first
+    /// time, the program updates itself first.
+    static var steamTestFolder: URL? {
+        values(of: "--steam-test").last.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    static func steamTest(_ folder: URL) {
+        setlinebuf(stdout)
+        let steam = SteamCMD(folder: folder)
+        let item = values(of: "--steam-test-item").last ?? "2482408967"
+        Task {
+            do {
+                if !steam.isInstalled {
+                    try await steam.install()
+                }
+                print("installed: \(steam.isInstalled)")
+                let run = try steam.download([item], account: "anonymous")
+                for await event in run.events {
+                    print(event)
+                    // `--steam-test-cancel` stops it at the first thing it says.
+                    if CommandLine.arguments.contains("--steam-test-cancel") {
+                        run.cancel()
+                    }
+                }
+                exit(0)
+            } catch {
+                print("failed: \(error)")
+                exit(1)
+            }
+        }
+    }
+
     /// `--import-test <library folder> <file or folder>…` brings files into a library of its
     /// own, the way adding them in the app does — an archive, a wallpaper made for Wallpaper
     /// Engine, a page, a video — and says what each became. The library in use is not touched.
@@ -515,6 +615,51 @@ enum ScreenshotMode {
         window.close()
     }
 
+    /// `--switch-sections`, with `--screenshots`: goes from the library to the Steam Workshop and
+    /// back as the control in the toolbar would, with the settings open, taking a picture each
+    /// time (`section-1.png`, …). It scrolls the library first and says where it finds it again,
+    /// and asks Find which search field it reaches.
+    private static func switchSections(_ content: AnyView, state: MainWindowState, workshop: WorkshopStore, in directory: URL) async {
+        state.showsSettings = true
+        let windows = WindowManager(state: state, remembersFrames: false, main: { content })
+        windows.showLibrary()
+        guard let window = windows.libraryWindow else { return }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        func allScrollViews(in view: NSView) -> [NSScrollView] {
+            ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(allScrollViews(in:))
+        }
+        // The grid is the scroll view at the left of the window, the settings the one at its right.
+        func gridOffset() -> CGFloat {
+            allScrollViews(in: window.contentView ?? NSView()).first { $0.convert($0.bounds, to: nil).minX < 100 }?.contentView.bounds.minY ?? -1
+        }
+        allScrollViews(in: window.contentView ?? NSView()).first { $0.convert($0.bounds, to: nil).minX < 100 }.map { grid in
+            grid.contentView.scroll(to: NSPoint(x: 0, y: 200))
+            grid.reflectScrolledClipView(grid.contentView)
+        }
+        func report(_ step: Int, _ what: String) async {
+            var image: CGImage?
+            if #available(macOS 14.4, *) {
+                image = try? await captureWithScreenCaptureKit(window)
+            }
+            if let image = image ?? drawViews(of: window) {
+                write(image, to: directory.appendingPathComponent("section-\(step).png"))
+            }
+            windows.showSearch()
+            let field = (window.firstResponder as? NSTextView)?.delegate as? NSSearchField
+            print("\(what): the window is \(Int(window.frame.width)) wide; Find reaches “\(field?.placeholderString ?? "the library's field")”")
+            window.makeFirstResponder(nil)
+        }
+        await report(1, "the library, scrolled to \(Int(gridOffset()))")
+        state.section = .workshop
+        try? await Task.sleep(nanoseconds: 9_000_000_000)
+        print("the Workshop lists \(workshop.items.count)")
+        await report(2, "the Workshop")
+        state.section = .library
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        await report(3, "the library again, scrolled to \(Int(gridOffset()))")
+        window.close()
+    }
+
     /// Scrolls whatever scrolls in the right half of the window, the settings, to its end or
     /// back to its start. The settings sometimes open a little way down; a picture of how the
     /// window opens is taken from their start.
@@ -535,14 +680,14 @@ enum ScreenshotMode {
     }
 
     private static func shoot(_ content: AnyView, title: String, size: NSSize, to url: URL,
-                              prepare: ((NSWindow) -> Void)? = nil) async {
+                              waiting seconds: Double = 0, prepare: ((NSWindow) -> Void)? = nil) async {
         let window = AppWindow.make(title: title, content: content, size: size)
         centerOnSharpestScreen(window)
         window.makeKeyAndOrderFront(nil)
         // Let SwiftUI lay out, thumbnails load and the window server draw a few frames.
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         prepare?(window)
-        try? await Task.sleep(nanoseconds: 500_000_000)
+        try? await Task.sleep(nanoseconds: 500_000_000 + UInt64(seconds * 1_000_000_000))
         // Whoever is at the Mac may have clicked elsewhere meanwhile: a window that is not
         // the active one is drawn dimmed. Ask for it back a few times, then say so.
         for _ in 0..<8 where !(NSApp.isActive && window.isKeyWindow) {

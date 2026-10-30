@@ -577,6 +577,15 @@ public final class WallpaperLibrary: ObservableObject {
         save()
     }
 
+    /// Notes which Steam Workshop item wallpapers were downloaded from.
+    public func setWorkshopID(_ workshopID: String, for ids: [UUID]) {
+        for id in ids {
+            guard let index = items.firstIndex(where: { $0.id == id }) else { continue }
+            items[index].workshopID = workshopID
+        }
+        save()
+    }
+
     /// Gives every wallpaper that has no music of its own the music that used to be set once
     /// for all of them.
     public func adoptMusic(_ music: Wallpaper.Settings.Music) {

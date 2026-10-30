@@ -118,6 +118,19 @@ extension View {
     }
 }
 
+extension View {
+    /// Leaves the window's title out of its toolbar, where a control in the title's place says
+    /// what the window shows. macOS 14 has no way to ask for that.
+    @ViewBuilder
+    func withoutWindowTitle() -> some View {
+        if #available(macOS 15.0, *) {
+            toolbar(removing: .title)
+        } else {
+            self
+        }
+    }
+}
+
 extension NSMenuItem {
     /// macOS 26 puts a symbol next to some items by itself — a gear by "Settings…" — and indents the
     /// rest of that group to line up with it, so a menu looks ragged. There every item gets its

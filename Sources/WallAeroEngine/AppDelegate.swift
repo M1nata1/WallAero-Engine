@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let preferences: Preferences
     private let manager: WallpaperManager
     private let importer: ImportCoordinator
+    private let workshop: WorkshopStore
     private let cursorSettings = CursorSettings()
     private var windows: WindowManager!
     private var statusMenu: StatusMenuController?
@@ -127,6 +128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             app.run()
             return
         }
+        if let folder = ScreenshotMode.steamTestFolder {
+            ScreenshotMode.steamTest(folder)
+            app.run()
+            return
+        }
         if let request = ScreenshotMode.importTest {
             ScreenshotMode.runImportTest(request)
             app.run()
@@ -151,10 +157,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         preferences = Preferences()
         manager = WallpaperManager(library: library, preferences: preferences)
         importer = ImportCoordinator(library: library, manager: manager)
-        super.init()
         // The helper that takes pictures runs next to the copy in use: its window neither
         // reads nor leaves anything of how the user keeps theirs.
         let helps = ScreenshotMode.outputDirectory != nil
+        workshop = WorkshopStore(library: library, importer: importer, defaults: helps ? nil : .standard)
+        super.init()
         windows = WindowManager(state: helps ? MainWindowState(defaults: nil) : nil, remembersFrames: !helps, main: { [unowned self] in
             AnyView(
                 MainView(actions: LibraryActions(
@@ -165,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .environmentObject(library)
                 .environmentObject(manager)
                 .environmentObject(importer)
+                .environmentObject(workshop)
                 .environmentObject(preferences)
                 .environmentObject(cursorSettings)
                 .environmentObject(windows.state)
@@ -186,7 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let directory = ScreenshotMode.outputDirectory {
             // Documentation helper; runs alongside the copy in use, so it skips the checks below.
             ScreenshotMode.run(to: directory, library: library, preferences: preferences,
-                               manager: manager, importer: importer, cursorSettings: cursorSettings)
+                               manager: manager, importer: importer, workshop: workshop, cursorSettings: cursorSettings)
             return
         }
         if activateRunningCopy() {
@@ -244,7 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        windows.showLibrary()
+        windows.showMainWindow()
         return false
     }
 
@@ -253,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        workshop.stop()
         Chromium.stop()
     }
 
@@ -260,6 +269,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showLibrary(_ sender: Any?) {
         windows.showLibrary()
+    }
+
+    @objc func showWorkshop(_ sender: Any?) {
+        windows.showWorkshop()
     }
 
     @objc func showSettings(_ sender: Any?) {
@@ -271,9 +284,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Whether a command of the Edit menu is meant for the library: its window is the one in
-    /// use, and the cursor is not in a text.
+    /// use and shows it, and the cursor is not in a text.
     private var libraryTakesCommands: Bool {
-        guard let window = windows.libraryWindow, window.isKeyWindow else { return false }
+        guard let window = windows.libraryWindow, window.isKeyWindow, windows.state.section == .library else { return false }
         return !(window.firstResponder is NSText)
     }
 
@@ -553,6 +566,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .setSymbol("plus")
         fileMenu.addItem(withTitle: NSLocalizedString("Open Library…", comment: "Menu item"), action: #selector(showLibrary(_:)), keyEquivalent: "l")
             .setSymbol("square.grid.2x2")
+        fileMenu.addItem(withTitle: NSLocalizedString("Steam Workshop", comment: "Menu item"), action: #selector(showWorkshop(_:)), keyEquivalent: "l")
+            .keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(withTitle: NSLocalizedString("Find", comment: "Menu item"), action: #selector(showSearch(_:)), keyEquivalent: "f")
             .setSymbol("magnifyingglass")
         fileMenu.addItem(.separator())

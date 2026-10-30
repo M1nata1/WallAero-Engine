@@ -8,9 +8,15 @@ final class ImportCoordinator: ObservableObject {
         let id = UUID()
         let url: URL
         let appliesWhenDone: Bool
+        /// What to call it, when the file's name says nothing.
+        var title: String?
+        /// Told what was added, nothing if it failed, once the job is over.
+        var whenDone: (([Wallpaper]) -> Void)?
         var progress: Double = 0
         /// Whether its videos are being made into WebM: the long part.
         var isConverting = false
+
+        var name: String { title ?? url.lastPathComponent }
     }
 
     struct Failure: Identifiable {
@@ -61,6 +67,15 @@ final class ImportCoordinator: ObservableObject {
         runQueue()
     }
 
+    /// Queues the folder of an item downloaded from the Steam Workshop and waits for it to be
+    /// added. Returns what was added.
+    func importDownload(_ folder: URL, title: String) async -> [Wallpaper] {
+        await withCheckedContinuation { continuation in
+            jobs.append(Job(url: folder, appliesWhenDone: false, title: title) { continuation.resume(returning: $0) })
+            runQueue()
+        }
+    }
+
     private func runQueue() {
         guard !isRunning else { return }
         isRunning = true
@@ -109,8 +124,10 @@ final class ImportCoordinator: ObservableObject {
                             manager.setWallpaper(item.id, for: .all)
                         }
                     }
+                    job.whenDone?(added)
                 } catch {
-                    batchFailures.append(Failure(fileName: job.url.lastPathComponent, message: error.localizedDescription))
+                    batchFailures.append(Failure(fileName: job.name, message: error.localizedDescription))
+                    job.whenDone?([])
                 }
                 jobs.removeFirst()
             }
