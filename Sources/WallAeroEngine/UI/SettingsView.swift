@@ -20,7 +20,12 @@ struct SettingsPanel: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
             switch state.settingsTab {
-            case .wallpaper: WallpaperSettingsView(edit: edit)
+            case .wallpaper:
+                if state.section == .library {
+                    WallpaperSettingsView(edit: edit)
+                } else {
+                    WorkshopDetailsPanel()
+                }
             case .general: SettingsView()
             }
         }

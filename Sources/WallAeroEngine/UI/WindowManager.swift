@@ -173,17 +173,15 @@ final class WindowManager: NSObject, NSWindowDelegate {
 
     /// Opens the app's own settings: the main window, with them at its side.
     func showSettings() {
-        showLibrary()
+        showMainWindow()
         state.settingsTab = .general
         state.showsSettings = true
     }
 
-    /// Shows or hides the settings at the side. They belong to the library, so from the Workshop
-    /// this goes to the library and opens them.
+    /// Shows or hides the panel at the side of the window.
     func toggleSettingsPanel() {
-        let wasInWorkshop = state.section == .workshop
-        showLibrary()
-        state.showsSettings = wasInWorkshop || !state.showsSettings
+        showMainWindow()
+        state.showsSettings.toggle()
     }
 
     /// Opens the main window with the cursor in the search field of the part it shows.

@@ -5,13 +5,15 @@ import WallpaperCore
 @MainActor
 final class ImportCoordinator: ObservableObject {
     struct Job: Identifiable {
-        let id = UUID()
+        var id = UUID()
         let url: URL
         let appliesWhenDone: Bool
         /// What to call it, when the file's name says nothing.
         var title: String?
         /// Told what was added, nothing if it failed, once the job is over.
         var whenDone: (([Wallpaper]) -> Void)?
+        /// Told how far it has come.
+        var whileWorking: ((Double) -> Void)?
         var progress: Double = 0
         /// Whether its videos are being made into WebM: the long part.
         var isConverting = false
@@ -46,6 +48,9 @@ final class ImportCoordinator: ObservableObject {
     private var batchFailures: [Failure] = []
     private var batchNotices: [Notice] = []
     private var isRunning = false
+    /// The job under way, if the user stopped it: it is over once what it was in the middle of is.
+    private var cancelled: UUID?
+    private var conversion: Task<Void, Never>?
 
     init(library: WallpaperLibrary, manager: WallpaperManager) {
         self.library = library
@@ -68,11 +73,24 @@ final class ImportCoordinator: ObservableObject {
     }
 
     /// Queues the folder of an item downloaded from the Steam Workshop and waits for it to be
-    /// added. Returns what was added.
-    func importDownload(_ folder: URL, title: String) async -> [Wallpaper] {
+    /// added. Returns what was added; nothing, if the job given by `id` was cancelled.
+    func importDownload(_ folder: URL, title: String, id: UUID, progress: @escaping (Double) -> Void) async -> [Wallpaper] {
         await withCheckedContinuation { continuation in
-            jobs.append(Job(url: folder, appliesWhenDone: false, title: title) { continuation.resume(returning: $0) })
+            jobs.append(Job(id: id, url: folder, appliesWhenDone: false, title: title,
+                            whenDone: { continuation.resume(returning: $0) }, whileWorking: progress))
             runQueue()
+        }
+    }
+
+    /// Takes a job off the queue. The one under way stops its videos at once, and leaves nothing
+    /// in the library.
+    func cancel(_ id: UUID) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        if index == 0 {
+            cancelled = id
+            conversion?.cancel()
+        } else {
+            jobs.remove(at: index).whenDone?([])
         }
     }
 
@@ -101,12 +119,27 @@ final class ImportCoordinator: ObservableObject {
                     if !pages.isEmpty, let index = jobs.firstIndex(where: { $0.id == jobID }) {
                         jobs[index].isConverting = true
                     }
-                    for (index, item) in pages.enumerated() {
-                        // Its videos as Chromium plays them, before anything is drawn of it.
-                        let done = Double(index), count = Double(pages.count)
-                        await MediaConversion.shared.convert(library.projectURL(for: item)) { part in
-                            report(addingShare + (done + part) / count * (1 - addingShare))
+                    let library = library
+                    conversion = Task {
+                        for (index, item) in pages.enumerated() where !Task.isCancelled {
+                            // Its videos as Chromium plays them, before anything is drawn of it.
+                            let done = Double(index), count = Double(pages.count)
+                            await MediaConversion.shared.convert(library.projectURL(for: item)) { part in
+                                report(addingShare + (done + part) / count * (1 - addingShare))
+                            }
                         }
+                    }
+                    if cancelled == jobID {
+                        conversion?.cancel()
+                    }
+                    await conversion?.value
+                    conversion = nil
+                    if cancelled == jobID {
+                        cancelled = nil
+                        library.remove(Set(added.map(\.id)))
+                        job.whenDone?([])
+                        jobs.removeFirst()
+                        continue
                     }
                     report(1)
                     // A video the media engine cannot decode is made over afterwards, while it plays.
@@ -126,7 +159,11 @@ final class ImportCoordinator: ObservableObject {
                     }
                     job.whenDone?(added)
                 } catch {
-                    batchFailures.append(Failure(fileName: job.name, message: error.localizedDescription))
+                    if cancelled == job.id {
+                        cancelled = nil
+                    } else {
+                        batchFailures.append(Failure(fileName: job.name, message: error.localizedDescription))
+                    }
                     job.whenDone?([])
                 }
                 jobs.removeFirst()
@@ -147,6 +184,7 @@ final class ImportCoordinator: ObservableObject {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
         // Reports come from several tasks; the bar never goes back.
         jobs[index].progress = max(jobs[index].progress, min(1, progress))
+        jobs[index].whileWorking?(jobs[index].progress)
     }
 
     /// A folder becomes the importable files inside it; a file is kept as is, so that

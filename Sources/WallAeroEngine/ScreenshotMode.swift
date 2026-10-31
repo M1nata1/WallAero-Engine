@@ -81,26 +81,69 @@ enum ScreenshotMode {
                 NSApp.terminate(nil)
                 return
             }
+            // `--import-cancel <file>` imports it into the library given as a Workshop item is,
+            // and stops that `--import-cancel-after <seconds>` later, saying what is left.
+            if let source = values(of: "--import-cancel").last {
+                setlinebuf(stdout)
+                let id = UUID()
+                let started = Date()
+                var isStopped = false
+                if let seconds = values(of: "--import-cancel-after").last.flatMap(Double.init) {
+                    Task {
+                        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                        guard let job = importer.jobs.first(where: { $0.id == id }) else { return }
+                        isStopped = true
+                        print("stopping at \(Int(job.progress * 100))%, converting: \(job.isConverting)")
+                        importer.cancel(id)
+                    }
+                }
+                let added = await importer.importDownload(URL(fileURLWithPath: source), title: "Test", id: id) { part in
+                    print(String(format: "%.1f s: %d%%", Date().timeIntervalSince(started), Int(part * 100)))
+                }
+                let folders = (try? FileManager.default.contentsOfDirectory(atPath: library.rootURL.appendingPathComponent("Web").path)) ?? []
+                print("stopped: \(isStopped) after \(Int(Date().timeIntervalSince(started))) s; added \(added.count); "
+                    + "the library has \(library.items.count), Web holds \(folders.count); failures \(importer.failures.count)")
+                NSApp.terminate(nil)
+                return
+            }
             // `--workshop` pictures the Steam Workshop's part of the window, as Steam lists it
-            // now, `--workshop-sign-in` what it asks for signing in, and `--workshop-select <n>`
-            // the panel of the n-th item of the list.
+            // now, `--workshop-sign-in` what it asks for signing in, `--workshop-select <n>` the
+            // panel of the n-th item of the list, `--workshop-general` the app's settings there,
+            // and `--workshop-progress` tiles on their way and a click on one, with
+            // `--workshop-cross` as they look under the pointer.
             if CommandLine.arguments.contains("--workshop") {
                 state.section = .workshop
+                state.settingsTab = CommandLine.arguments.contains("--workshop-general") ? .general : .wallpaper
                 workshop.showsSignIn = CommandLine.arguments.contains("--workshop-sign-in")
                 // Steam takes a few seconds to list them, and more for their pictures.
                 workshop.query.search = values(of: "--search").last ?? ""
                 workshop.reload()
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if CommandLine.arguments.contains("--workshop-progress") {
+                    WorkshopRingLook.showsCross = CommandLine.arguments.contains("--workshop-cross")
+                    for (item, phase) in zip(workshop.items, [WorkshopStore.Download.Phase.downloading(0.42), .adding(0.73), .waiting, .stopping, .downloading(0)]) {
+                        workshop.show(phase, of: item)
+                    }
+                    let queued = workshop.downloads.count
+                    await shoot(AnyView(mainView), title: "WallAero Engine", size: NSSize(width: 1420, height: 700),
+                                to: directory.appendingPathComponent("workshop.png"), waiting: 4) { window in
+                        // The third tile is in the queue, so its ring takes it off.
+                        click(NSPoint(x: 614, y: 187), in: window)
+                        print("the ring " + (workshop.downloads.count < queued ? "cancelled" : "did NOT cancel"))
+                    }
+                    NSApp.terminate(nil)
+                    return
+                }
                 if CommandLine.arguments.contains("--workshop-click") {
-                    // The app's own window, which makes room for the panel as it does for the settings.
+                    // The app's own window, which makes room for the panel at its side.
                     let windows = WindowManager(state: state, remembersFrames: false, main: { AnyView(mainView) })
                     windows.showWorkshop()
                     if let window = windows.libraryWindow {
                         var frame = window.frame
-                        frame.size.width = 1000
+                        frame.size.width = 1420
                         window.setFrame(frame, display: true)
                         try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        await clickWorkshopButtons(in: window, store: workshop, in: directory)
+                        await clickWorkshopButtons(in: window, store: workshop, state: state, in: directory)
                     }
                     NSApp.terminate(nil)
                     return
@@ -109,7 +152,7 @@ enum ScreenshotMode {
                     workshop.selected = workshop.items[index]
                 }
                 await shoot(AnyView(mainView), title: "WallAero Engine",
-                            size: NSSize(width: workshop.selected == nil ? 1000 : 1180, height: 700), to: directory.appendingPathComponent("workshop.png"), waiting: 12) { window in
+                            size: NSSize(width: 1180, height: 700), to: directory.appendingPathComponent("workshop.png"), waiting: 12) { window in
                     if workshop.selected != nil {
                         Task {
                             try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -454,21 +497,27 @@ enum ScreenshotMode {
     }
 
     /// `--workshop-click`, with `--workshop`: clicks each tile with a real mouse event, saying
-    /// which of them open their panel, and then Download in the panel of the last one. With no
+    /// which of them show up in the panel, and then Download in the panel of the last one. With no
     /// account in this helper that click opens the sign-in and starts nothing.
-    private static func clickWorkshopButtons(in window: NSWindow, store: WorkshopStore, in directory: URL) async {
+    private static func clickWorkshopButtons(in window: NSWindow, store: WorkshopStore, state: MainWindowState, in directory: URL) async {
         setlinebuf(stdout)
-        // SwiftUI draws the tiles itself, so they are found by where the grid has them in a
-        // window of 1000×700: the middle of each picture, counted from the top left.
+        // SwiftUI draws the tiles itself, so they are found by where the grid has them with the
+        // panel open in a window of 1420×700: the middle of each picture, counted from the top left.
+        let panelStayed = window.frame.width
         for y in [187.0, 381, 575] {
             for x in [150.0, 382, 614, 846] {
                 store.selected = nil
+                // From the app's settings or from a closed panel, a click still shows the item.
+                state.settingsTab = .general
+                state.showsSettings = y != 575
                 try? await Task.sleep(nanoseconds: 700_000_000)
                 click(NSPoint(x: x, y: y), in: window)
                 try? await Task.sleep(nanoseconds: 700_000_000)
-                print("(\(Int(x)), \(Int(y))): " + (store.selected != nil ? "opened" : "NOT opened") + ", window \(Int(window.frame.width)) wide")
+                let isShown = store.selected != nil && state.settingsTab == .wallpaper && state.showsSettings
+                print("(\(Int(x)), \(Int(y))): " + (isShown ? "shown" : "NOT shown") + ", window \(Int(window.frame.width)) wide")
             }
         }
+        print("the window stayed \(Int(panelStayed)) wide: \(window.frame.width == panelStayed)")
         if let image = drawViews(of: window) {
             write(image, to: directory.appendingPathComponent("workshop-panel.png"))
         }
@@ -504,8 +553,8 @@ enum ScreenshotMode {
 
     /// `--steam-test <folder>` gets SteamCMD into the folder, signs in to no account and asks for
     /// a Workshop item as `--steam-test-item <number>` says, printing what it answers: Steam
-    /// refuses, the way it refuses an account that does not own Wallpaper Engine. The first
-    /// time, the program updates itself first.
+    /// refuses, the way it refuses an account that does not own Wallpaper Engine; a free game's
+    /// item, by `--steam-test-app`, it gives out. The first time, the program updates itself first.
     static var steamTestFolder: URL? {
         values(of: "--steam-test").last.map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
@@ -520,7 +569,16 @@ enum ScreenshotMode {
                     try await steam.install()
                 }
                 print("installed: \(steam.isInstalled)")
-                let run = try steam.download([item], account: "anonymous")
+                let run = try steam.download([item], account: "anonymous", app: values(of: "--steam-test-app").last ?? SteamWorkshop.appID)
+                // `--steam-test-size <bytes>`: says how far it has come, as a tile would show it.
+                let size = values(of: "--steam-test-size").last.flatMap(Double.init)
+                let watching = Task {
+                    while let size, !Task.isCancelled {
+                        print("\(Int(min(0.99, Double(run.bytesDownloaded) / size) * 100))%")
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
+                }
+                defer { watching.cancel() }
                 for await event in run.events {
                     print(event)
                     // `--steam-test-cancel` stops it at the first thing it says.

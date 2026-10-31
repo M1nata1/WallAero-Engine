@@ -65,17 +65,6 @@ struct WorkshopView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            if let download = store.downloads.first(where: { $0.phase != .waiting }) {
-                ProgressView(value: progress(of: download))
-                    .progressViewStyle(.linear)
-                    .frame(width: 120)
-                Text(status(of: download))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Button("Cancel") { store.cancel(download.item) }
-                    .barButtonStyle()
-                    .disabled(download.phase == .adding)
-            }
             Spacer(minLength: 12)
             if let account = store.account {
                 Text(verbatim: account)
@@ -90,28 +79,6 @@ struct WorkshopView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-    }
-
-    private func progress(of download: WorkshopStore.Download) -> Double {
-        if case .downloading(let part) = download.phase {
-            return part
-        }
-        return 1
-    }
-
-    private func status(of download: WorkshopStore.Download) -> String {
-        let waiting = store.downloads.filter { $0.phase == .waiting }.count
-        var status: String
-        if case .downloading(let part) = download.phase {
-            status = String(format: NSLocalizedString("Downloading “%@”… %d%%", comment: "Workshop progress"),
-                            download.item.title, Int((part * 100).rounded(.down)))
-        } else {
-            status = String(format: NSLocalizedString("Adding “%@”…", comment: "Workshop progress"), download.item.title)
-        }
-        if waiting > 0 {
-            status += " " + String(format: NSLocalizedString("(%d more in queue)", comment: "Import progress"), waiting)
-        }
-        return status
     }
 
     // MARK: - The list
@@ -140,8 +107,8 @@ struct WorkshopView: View {
                         }
                         .frame(width: CGFloat(columns) * (LibraryView.tileWidth + LibraryView.tileSpacing) - LibraryView.tileSpacing)
                         .padding(16)
-                        // As high as the room there is at least: a click below the rows closes
-                        // the panel too.
+                        // As high as the room there is at least, so that a click below the
+                        // rows is a click beside the wallpapers too.
                         .frame(maxWidth: .infinity, minHeight: max(0, room - 1), alignment: .top)
                         .background {
                             Color.clear
@@ -180,6 +147,7 @@ struct WorkshopView: View {
 /// One item of the Workshop, drawn as a wallpaper of the library is.
 private struct WorkshopTile: View {
     @EnvironmentObject private var store: WorkshopStore
+    @EnvironmentObject private var state: MainWindowState
     @EnvironmentObject private var library: WallpaperLibrary
     let item: SteamWorkshop.Item
 
@@ -204,7 +172,11 @@ private struct WorkshopTile: View {
         }
         .help(item.title)
         .contentShape(Rectangle())
-        .onTapGesture { store.selected = item }
+        .onTapGesture {
+            store.selected = item
+            state.settingsTab = .wallpaper
+            state.showsSettings = true
+        }
         .contextMenu {
             Button("Open in Steam") { NSWorkspace.shared.open(item.pageURL) }
             if store.download(for: item)?.phase == .waiting {
@@ -221,7 +193,7 @@ private struct WorkshopTile: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else if let download = store.download(for: item) {
-            Text(download.phase == .waiting ? "In Queue" : "Downloading…")
+            Text(download.status)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -235,6 +207,11 @@ private struct WorkshopTile: View {
                 // out over the buttons around it, and would take their clicks.
                 WorkshopPreview(url: item.previewURL)
                     .allowsHitTesting(false)
+            }
+            .overlay {
+                if let download = store.download(for: item) {
+                    WorkshopProgressRing(download: download) { store.cancel(item) }
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous))
             .overlay(alignment: .topLeading) {
@@ -256,7 +233,82 @@ private struct WorkshopTile: View {
     }
 }
 
-/// The panel at the side of the window: what the clicked item is, and getting it.
+extension WorkshopStore.Download {
+    var status: LocalizedStringKey {
+        switch phase {
+        case .waiting: "In Queue"
+        case .downloading: "Downloading…"
+        case .adding: "Adding…"
+        case .stopping: "Cancelling…"
+        }
+    }
+
+    /// How far the part under way has come: downloading, and then adding, each go from 0 to 100%.
+    var part: Double {
+        switch phase {
+        case .downloading(let part), .adding(let part): part
+        case .waiting, .stopping: 0
+        }
+    }
+}
+
+/// For the screenshot helper, which has no pointer to rest on a ring.
+enum WorkshopRingLook {
+    static var showsCross = false
+}
+
+/// How far an item has come, over its picture; under the pointer it is the way to stop it.
+private struct WorkshopProgressRing: View {
+    private static let side: CGFloat = 64
+    private static let width: CGFloat = 5
+
+    let download: WorkshopStore.Download
+    let cancel: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .allowsHitTesting(false)
+            if download.phase == .stopping {
+                ProgressView()
+                    .environment(\.colorScheme, .dark)
+            } else {
+                Button(action: cancel) {
+                    ring
+                }
+                .buttonStyle(.plain)
+                .onHover { isHovered = $0 }
+                .help("Cancel")
+            }
+        }
+    }
+
+    private var ring: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.25), lineWidth: Self.width)
+            Circle()
+                .trim(from: 0, to: download.part)
+                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: Self.width, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.linear(duration: 0.4), value: download.part)
+            if isHovered || WorkshopRingLook.showsCross {
+                Image(systemName: "xmark")
+                    .font(.title2.weight(.semibold))
+            } else {
+                Text(verbatim: "\(Int((download.part * 100).rounded(.down)))%")
+                    .font(.callout.weight(.semibold))
+                    .monospacedDigit()
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(width: Self.side, height: Self.side)
+        .contentShape(Circle())
+    }
+}
+
+/// The Workshop's page of the panel at the side: what the clicked item is, and getting it.
 struct WorkshopDetailsPanel: View {
     @EnvironmentObject private var store: WorkshopStore
 
@@ -264,6 +316,11 @@ struct WorkshopDetailsPanel: View {
         if let item = store.selected {
             WorkshopDetails(item: item)
                 .id(item.id)
+        } else {
+            Text("No wallpaper selected")
+                .foregroundStyle(.secondary)
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
@@ -372,21 +429,9 @@ private struct WorkshopDetails: View {
         } else if let download = store.download(for: item) {
             HStack(spacing: 10) {
                 Button("Cancel") { store.cancel(item) }
-                    .disabled(download.phase == .adding)
-                switch download.phase {
-                case .waiting:
-                    Text("In Queue")
-                        .foregroundStyle(.secondary)
-                case .downloading(let part):
-                    ProgressView(value: part)
-                        .progressViewStyle(.linear)
-                    Text(verbatim: "\(Int((part * 100).rounded(.down)))%")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                case .adding:
-                    Text("Adding…")
-                        .foregroundStyle(.secondary)
-                }
+                    .disabled(download.phase == .stopping)
+                Text(download.status)
+                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {

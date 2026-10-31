@@ -21,7 +21,9 @@ final class WorkshopStore: ObservableObject {
         enum Phase: Equatable {
             case waiting
             case downloading(Double)
-            case adding
+            case adding(Double)
+            /// The user stopped it while it was being added, which ends with what is under way.
+            case stopping
         }
 
         let item: SteamWorkshop.Item
@@ -57,6 +59,8 @@ final class WorkshopStore: ObservableObject {
     private var isDownloading = false
     /// Whether the user stopped the download under way.
     private var cancelledDownload = false
+    /// The import of the item that has finished downloading.
+    private var importID: UUID?
 
     /// Without defaults no account is read or remembered: the screenshot helper works that way,
     /// next to the copy in use.
@@ -239,12 +243,23 @@ final class WorkshopStore: ObservableObject {
 
     /// Takes an item off the queue; the one on its way is stopped.
     func cancel(_ item: SteamWorkshop.Item) {
-        if download(for: item)?.phase == .waiting {
+        switch download(for: item)?.phase {
+        case .waiting:
             downloads.removeAll { $0.id == item.id }
-        } else if case .downloading? = download(for: item)?.phase {
+        case .downloading:
             cancelledDownload = true
             downloadRun?.cancel()
+        case .adding:
+            setPhase(.stopping, of: item)
+            importID.map(importer.cancel)
+        case .stopping, nil:
+            break
         }
+    }
+
+    /// What the screenshot helper shows on a tile, with nothing on its way.
+    func show(_ phase: Download.Phase, of item: SteamWorkshop.Item) {
+        downloads.append(Download(item: item, phase: phase))
     }
 
     /// Lets nothing outlive the app.
@@ -276,9 +291,7 @@ final class WorkshopStore: ObservableObject {
         let total = max(item.fileSize, 1)
         let watching = Task {
             while !Task.isCancelled {
-                let bytes = await Task.detached { [steam] in steam.downloadedBytes() }.value
-                guard !Task.isCancelled else { return }
-                // What it has downloaded gets copied into place at the end, which counts twice.
+                let bytes = downloadRun?.bytesDownloaded ?? 0
                 setPhase(.downloading(min(0.99, Double(bytes) / Double(total))), of: item)
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
@@ -311,8 +324,15 @@ final class WorkshopStore: ObservableObject {
         }
 
         watching.cancel()
-        setPhase(.adding, of: item)
-        let added = await importer.importDownload(steam.itemFolder(item.id), title: item.title)
+        setPhase(.adding(0), of: item)
+        let id = UUID()
+        importID = id
+        let added = await importer.importDownload(steam.itemFolder(item.id), title: item.title, id: id) { [weak self] part in
+            if self?.download(for: item)?.phase != .stopping {
+                self?.setPhase(.adding(part), of: item)
+            }
+        }
+        importID = nil
         if !added.isEmpty {
             library.setWorkshopID(item.id, for: added.map(\.id))
         }

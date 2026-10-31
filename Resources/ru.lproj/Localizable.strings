@@ -808,8 +808,6 @@
 "Open in Steam" = "Открыть в Steam";
 "In Library" = "В библиотеке";
 "Download" = "Скачать";
-"Downloading “%@”… %d%%" = "Скачивается «%@»… %d%%";
-"Adding “%@”…" = "Добавляется «%@»…";
 "To download wallpapers you need a Steam account that owns Wallpaper Engine. The first time, the app gets SteamCMD, Valve's download tool, from Valve. Your password isn't saved." = "Чтобы скачивать обои, нужен аккаунт Steam с купленным Wallpaper Engine. При первом входе приложение скачает с серверов Valve их программу SteamCMD. Пароль не сохраняется.";
 "Account name" = "Имя аккаунта";
 "Password" = "Пароль";
@@ -827,6 +825,7 @@
 "Steam didn't give out “%@”. Make sure this account owns Wallpaper Engine." = "Steam не отдал «%@». Проверьте, что на этом аккаунте куплен Wallpaper Engine.";
 "In Queue" = "В очереди";
 "Adding…" = "Добавляется…";
+"Cancelling…" = "Отменяется…";
 "Author" = "Автор";
 "Rating" = "Оценка";
 "Type" = "Тип";
