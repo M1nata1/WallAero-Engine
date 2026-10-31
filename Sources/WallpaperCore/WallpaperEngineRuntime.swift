@@ -422,13 +422,14 @@ public enum WallpaperEngineRuntime {
 
       // `types`: the type each uniform is declared with, "float" or "vec3".
       function annotations(source) {
-        var result = { combos: {}, uniforms: {}, types: {} };
+        var result = { combos: {}, uniforms: {}, types: {}, switches: {} };
         source.replace(/\r\n?/g, '\n').split('\n').forEach(function (line) {
           var combo = /^\s*\/\/\s*\[\s*(?:COMBO|COMBO_OFF|OFF_COMBO)\s*\]\s*(\{.*\})\s*$/.exec(line);
           if (combo) {
             try {
               var declared = loose(combo[1]);
               if (declared && declared.combo) result.combos[declared.combo] = number(declared['default'], 0);
+              if (declared && declared.combo && declared.material && /\[\s*COMBO\s*\]/.test(line)) result.switches[declared.combo] = declared;
             } catch (error) {}
             return;
           }
@@ -1775,7 +1776,7 @@ public enum WallpaperEngineRuntime {
               get: function () {
                 if (own !== undefined) return own;
                 var value = given && typeof given === 'object' && said.name in given ? plain(given[said.name]) : said.value;
-                if (value === undefined || value === null) return said.value;
+                if (value === undefined || value === null) return said.value === undefined && said.options && said.options[0] ? said.options[0].value : said.value;
                 // A color comes as three numbers in a text; a script that declared one takes a vector.
                 if (typeof value === 'string' && said.value && typeof said.value === 'object' && 'x' in said.value) return new Vec3(value);
                 return value;
@@ -1808,7 +1809,7 @@ public enum WallpaperEngineRuntime {
       var KEPT_AWAY = ['window', 'document', 'globalThis', 'self', 'top', 'parent', 'frames', 'opener', 'fetch', 'XMLHttpRequest',
                        'WebSocket', 'EventSource', 'Worker', 'navigator', 'location', 'history', 'indexedDB', 'sessionStorage',
                        'caches', 'eval', 'Function', 'open', 'postMessage', 'webkit'];
-      function compileScript(source, names, values) {
+      function scriptBody(source) {
         // A script may come squeezed onto one line, its statements one after another with no
         // room between them (`'use strict';import*as WEMath from'WEMath';…;export function …`,
         // 3811154012): what starts a statement may follow a line's start, `;`, `{` or `}`.
@@ -1824,8 +1825,58 @@ public enum WallpaperEngineRuntime {
         var tail = '\n;return {' + EVENTS.map(function (name) {
           return name + ': typeof ' + name + ' === "function" ? ' + name + ' : null';
         }).join(', ') + '};';
-        var body = 'return (function () {\n"use strict";\n' + text + tail + '\n}).call(undefined);';
-        return Function.apply(null, names.concat(['__modules'], KEPT_AWAY, [body])).apply(null, values.concat([MODULES]));
+        return 'return (function () {\n"use strict";\n' + text + tail + '\n}).call(undefined);';
+      }
+      function compileScript(source, names, values) {
+        return Function.apply(null, names.concat(['__modules'], KEPT_AWAY, [scriptBody(source)])).apply(null, values.concat([MODULES]));
+      }
+
+      // The line of the script's own text an error stands on: what `Function` and `scriptBody`
+      // put in front of it comes to four lines.
+      function scriptLine(error) {
+        return typeof error.line === 'number' ? Math.max(1, error.line - 4) : 0;
+      }
+
+      // For the editor: whether a script can be read at all, without running any of it.
+      function checkScript(source) {
+        try {
+          Function.apply(null, ['__modules'].concat(KEPT_AWAY, [scriptBody(source)]));
+          return null;
+        } catch (error) {
+          return { message: error.message, line: scriptLine(error) };
+        }
+      }
+
+      // For the editor: the settings a script declares. Its text is run with nothing of a scene
+      // to touch, which is all it can get at outside of its functions.
+      function scriptDeclares(source) {
+        var found = [];
+        var builder = new Proxy({}, {
+          get: function (object, name) {
+            if (name === 'finish') return function () { return {}; };
+            return function (said) {
+              if (said && said.name !== undefined) {
+                var plainly = {};
+                Object.keys(said).forEach(function (part) { plainly[part] = said[part]; });
+                plainly.kind = String(name).replace(/^add/, '').toLowerCase();
+                if (plainly.value && typeof plainly.value === 'object' && 'x' in plainly.value) {
+                  plainly.value = plainly.value.x + ' ' + plainly.value.y + ' ' + plainly.value.z;
+                }
+                found.push(plainly);
+              }
+              return builder;
+            };
+          }
+        });
+        function nothing() { return new Proxy(function () {}, { get: function (object, name) { return typeof name === 'string' ? nothing() : undefined; }, apply: function () { return nothing(); } }); }
+        try {
+          compileScript(source,
+            ['engine', 'thisScene', 'thisLayer', 'thisObject', 'input', 'shared', 'console', 'localStorage', 'renderContext',
+             'createScriptProperties', 'Vec2', 'Vec3', 'Vec4', 'Mat3', 'Mat4'],
+            [nothing(), nothing(), nothing(), nothing(), nothing(), {}, nothing(), nothing(), nothing(),
+             function () { return builder; }, Vec2, Vec3, Vec4, Mat3, Mat4]);
+        } catch (error) {}
+        return found;
       }
 
       // ------------------------------------------------------------------ pictures made here
@@ -4187,6 +4238,7 @@ public enum WallpaperEngineRuntime {
           } catch (error) {
             script.failures = (script.failures || 0) + 1;
             note('a script of “' + (script.owner ? script.owner.name : 'the scene') + '” fails: ' + error.message);
+            scriptErrors[script.said.script] = { message: error.message, line: scriptLine(error), during: name };
             return undefined;
           }
         }
@@ -4210,6 +4262,7 @@ public enum WallpaperEngineRuntime {
                  MEDIA_PLAYBACK, lenient({}), lenient({}), lenient({}), lenient({})]);
             } catch (error) {
               note('a script of “' + (script.owner ? script.owner.name : 'the scene') + '” cannot be read: ' + error.message);
+              scriptErrors[script.said.script] = { message: error.message, line: scriptLine(error) };
             }
             if (script.made) {
               var first = call(script, 'init', toScript(script, current));
@@ -4220,6 +4273,11 @@ public enum WallpaperEngineRuntime {
           }
           return current;
         }
+
+        // What went wrong with scripts and what they wrote, for the editor: errors by the text
+        // of the script, each once.
+        var scriptErrors = {};
+        var scriptLog = [];
 
         // Gives a script's value for this frame.
         function runScript(script, current) {
@@ -4287,9 +4345,21 @@ public enum WallpaperEngineRuntime {
           return function () { timers = timers.filter(function (each) { return each !== timer; }); };
         }
 
+        function written(list) {
+          scriptLog.push(Array.prototype.map.call(list, function (part) {
+            return part && typeof part === 'object' ? (part.x !== undefined ? part.toString() : JSON.stringify(part)) : String(part);
+          }).join(' '));
+          if (scriptLog.length > 200) scriptLog.shift();
+        }
         var consoleObject = {
-          log: function () { if (window.console) window.console.log.apply(window.console, arguments); },
-          error: function () { note('a script says: ' + Array.prototype.join.call(arguments, ' ')); }
+          log: function () {
+            written(arguments);
+            if (window.console) window.console.log.apply(window.console, arguments);
+          },
+          error: function () {
+            written(arguments);
+            note('a script says: ' + Array.prototype.join.call(arguments, ' '));
+          }
         };
 
         var storageObject = {
@@ -11055,10 +11125,29 @@ public enum WallpaperEngineRuntime {
             function page(x, y) { return pageAt(matrix[0] * x + matrix[4] * y + matrix[12], matrix[1] * x + matrix[5] * y + matrix[13]); }
             var result = { middle: page(0, 0), visible: stands.visible };
             if (thing.size) {
+              result.size = thing.size;
               var w = thing.size[0] / 2, h = thing.size[1] / 2;
               result.corners = [page(-w, h), page(w, h), page(w, -h), page(-w, -h)];
             }
             return result;
+          },
+          scriptReport: function () {
+            var written = scriptLog;
+            scriptLog = [];
+            return { errors: scriptErrors, log: written };
+          },
+          // A texture given new pixels as it is painted, four bytes each.
+          paintTexture: function (name, width, pixels) {
+            var stored = pictures[key(name)] || pictures['materials/' + key(name)];
+            var made = stored && texture(name);
+            if (!made || !made.ready || !made.layers.length) return false;
+            gl.bindTexture(gl.TEXTURE_2D, made.layers[0].texture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, pixels.length / 4 / width, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+            if (stored.smooth !== false) gl.generateMipmap(gl.TEXTURE_2D);
+            changed();
+            return true;
           },
           // A point of the page in the coordinates an object's place is counted in: the scene's,
           // or those of the object it hangs on. An object moved by the pointer has its place move
@@ -11130,11 +11219,46 @@ public enum WallpaperEngineRuntime {
 
         // An effect for the editor: its values, by the names its material gives them, each once
         // however many of its passes have it — as Wallpaper Engine's own editor shows them.
+        // What a shader is with the effect's switches as they are set: whether it declares a name
+        // then, and whether a value's `require`, the condition Wallpaper Engine shows it on, is met.
+        var workingCache = {};
+        function workingNames(vertex, fragment, said, ownCombos, pass) {
+          var defines = {};
+          Object.keys(said.combos).forEach(function (name) { defines[name] = said.combos[name]; });
+          [ownCombos, pass && pass.combos].forEach(function (combos) {
+            Object.keys(combos || {}).forEach(function (name) { defines[name] = number(combos[name], 0); });
+          });
+          var textures = (pass && pass.textures) || [];
+          Object.keys(said.uniforms).forEach(function (name) {
+            var slot = /^g_Texture(\d+)$/.exec(name), about = said.uniforms[name];
+            if (slot && about && about.combo && textures[Number(slot[1])]) defines[about.combo] = 1;
+          });
+          var id = vertex.length + ':' + fragment.length + ':' + fragment.slice(0, 200) + JSON.stringify(defines);
+          var text = workingCache[id];
+          if (text === undefined) {
+            try {
+              text = preprocess(vertex, Object.assign({}, defines), files, {}) + '\n' + preprocess(fragment, Object.assign({}, defines), files, {});
+            } catch (error) {
+              text = null;
+            }
+            workingCache[id] = text;
+          }
+          return {
+            present: function (name) { return text === null || new RegExp('\\b' + name + '\\b').test(text); },
+            met: function (about) {
+              var wanted = about.require && typeof about.require === 'object' ? about.require : {};
+              return Object.keys(wanted).every(function (name) { return number(defines[name], 0) === number(wanted[name], 0); });
+            }
+          };
+        }
+
         function describeEffect(use, place) {
           use = use || {};
           var fileName = String(plain(use.file) || '');
           var effect = json(fileName) || {};
           var values = [];
+          var masks = [];
+          var switches = [];
           var seen = {};
           (effect.passes || []).forEach(function (step, index) {
             if (step.command) return;
@@ -11144,10 +11268,44 @@ public enum WallpaperEngineRuntime {
             if (typeof vertex !== 'string' || typeof fragment !== 'string') return;
             var said = annotations(vertex + '\n' + fragment + '\n' + headersOf(vertex + '\n' + fragment, files));
             var constants = merged(own.constantshadervalues, ((use.passes || [])[index] || {}).constantshadervalues);
+            var works = workingNames(vertex, fragment, said, own.combos, (use.passes || [])[index]);
+            Object.keys(said.switches).forEach(function (name) {
+              var about = said.switches[name];
+              if (!works.met(about)) return;
+              var same = switches.filter(function (one) { return one.name === about.combo; })[0];
+              if (same) { same.passes.push(index); return; }
+              var given = ((use.passes || [])[index] || {}).combos;
+              var ownCombos = own.combos || {};
+              var now = given && isSet(given[about.combo]) ? given[about.combo] : (isSet(ownCombos[about.combo]) ? ownCombos[about.combo] : about['default']);
+              var options = [];
+              if (Array.isArray(about.options)) {
+                options = about.options.map(function (option) {
+                  return option && typeof option === 'object' ? { label: String(option.label), value: number(option.value, 0) } : { label: String(option), value: number(option, 0) };
+                });
+              } else if (about.options && typeof about.options === 'object') {
+                options = Object.keys(about.options).map(function (label) { return { label: label, value: number(about.options[label], 0) }; })
+                  .sort(function (a, b) { return a.value - b.value; });
+              }
+              switches.push({ name: String(about.combo), label: String(about.material), kind: String(about.type || 'options'), value: number(now, 0), options: options, passes: [index] });
+            });
+            Object.keys(said.uniforms).forEach(function (name) {
+              // A map to paint, one for all the passes that take the same one.
+              var about = said.uniforms[name];
+              var slot = /^g_Texture(\d+)$/.exec(name);
+              if (!slot || !about || !works.present(name) || !works.met(about) || !/^(opacitymask|flowmask|rgbmask|depth)$/.test(about.mode) || about.hidden === true) return;
+              var label = String(about.label || about.material || 'ui_editor_properties_opacity_mask');
+              var same = masks.filter(function (mask) { return mask.label === label && mask.slot === Number(slot[1]); })[0];
+              if (same) { same.passes.push(index); return; }
+              var starts = isSet(about.paintdefaultcolor) ? numbers(about.paintdefaultcolor, 1, 0)[0] : (about['default'] === 'util/black' ? 0 : 1);
+              masks.push({ label: label, mode: about.mode, slot: Number(slot[1]), passes: [index], fill: Math.round(real(starts) * 255) });
+            });
             Object.keys(said.uniforms).forEach(function (name) {
               var about = said.uniforms[name];
               var count = { 'float': 1, vec2: 2, vec3: 3, vec4: 4 }[said.types[name]];
               if (!about || !count || !isSet(about.material) || seen[about.material] || about.hidden === true) return;
+              // The amount of a numbered layer goes with the layer's texture.
+              var layer = /_(\d)$/.exec(String(about.label || ''));
+              if (!works.met(about) || (layer && said.uniforms['g_Texture' + layer[1]] && !works.present('g_Texture' + layer[1]))) return;
               seen[about.material] = true;
               var raw = isSet(constants[about.material]) ? constants[about.material] : about['default'];
               var range = Array.isArray(about.range) && about.range.length === 2 ? about.range.map(Number) : null;
@@ -11160,7 +11318,7 @@ public enum WallpaperEngineRuntime {
             });
           });
           return { id: place, name: String(plain(use.name) || effect.name || fileName.replace(/^effects\//, '').replace(/\/effect\.json$/, '')),
-                   isVisible: flag(use.visible, true), isSteered: changesByItself(use.visible), values: values };
+                   isVisible: flag(use.visible, true), isSteered: changesByItself(use.visible), values: values, masks: masks, switches: switches };
         }
 
         return player;
@@ -11221,6 +11379,10 @@ public enum WallpaperEngineRuntime {
         describe: ofCurrent('describe'),
         hit: ofCurrent('hit'),
         outline: ofCurrent('outline'),
+        paintTexture: ofCurrent('paintTexture'),
+        scriptReport: ofCurrent('scriptReport'),
+        checkScript: checkScript,
+        scriptDeclares: scriptDeclares,
         placeAt: ofCurrent('placeAt'),
         seek: ofCurrent('seek'),
         // The translation of a shader alone, for whoever wants to see or check it.

@@ -450,7 +450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let preview = EngineEditorPreviewController(model: model)
             windows.showEditor(for: item.id, title: item.name,
                                content: AnyView(EngineEditorView(model: model, preview: preview)),
-                               onClose: { model.saveNow() })
+                               onClose: { model.close() })
         } catch {
             NSAlert(error: error).runModal()
         }

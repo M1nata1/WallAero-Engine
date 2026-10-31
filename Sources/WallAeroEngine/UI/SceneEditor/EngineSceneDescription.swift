@@ -1,3 +1,4 @@
+import WallpaperCore
 import Foundation
 
 /// One of Wallpaper Engine's scenes as its player describes it to the editor: the scene's
@@ -89,8 +90,57 @@ struct EngineSceneDescription: Decodable, Equatable {
         var isVisible: Bool
         var isSteered: Bool
         var values: [Value]
+        /// What of it can be painted; old descriptions do not say.
+        var masks: [Mask]?
+        /// What of its shader can be switched; old descriptions do not say.
+        var switches: [Switch]?
 
         var title: String { EngineSceneDescription.title(of: name, prefix: "ui_editor_effect_", suffix: "_title", table: "effect") }
+    }
+
+    /// A switch of an effect's shader: on or off, or one of several.
+    struct Switch: Decodable, Equatable, Identifiable {
+        struct Option: Decodable, Equatable {
+            var label: String
+            var value: Double
+
+            var title: String { EngineSceneDescription.title(of: label, prefix: "ui_editor_properties_", suffix: "", table: "property") }
+        }
+
+        /// As the shader names it, and as the scene does.
+        var name: String
+        var label: String
+        /// As shaders say: options, imageblending or audioprocessingoptions.
+        var kind: String
+        var value: Double
+        var options: [Option]
+        /// The passes of the effect it is in.
+        var passes: [Int]
+
+        var id: String { name }
+        var title: String { EngineSceneDescription.title(of: label, prefix: "ui_editor_properties_", suffix: "", table: "property") }
+    }
+
+    /// A map to paint that an effect's shader asks for.
+    struct Mask: Decodable, Equatable, Identifiable {
+        var label: String
+        /// As shaders say: opacitymask, flowmask, rgbmask or depth.
+        var mode: String
+        /// The texture slot it goes in, in each of these passes of the effect.
+        var slot: Int
+        var passes: [Int]
+        /// What a new mask is filled with, from 0 to 255.
+        var fill: Int
+
+        var id: Int { slot }
+        var isFlow: Bool { mode == "flowmask" }
+        var isColor: Bool { mode == "rgbmask" }
+        /// What a new one is filled with.
+        var start: [UInt8] {
+            if isFlow { return [WallpaperEngineMask.noDirection, WallpaperEngineMask.noDirection] }
+            return [UInt8](repeating: UInt8(min(255, max(0, fill))), count: isColor ? 3 : 1)
+        }
+        var title: String { EngineSceneDescription.title(of: label, prefix: "ui_editor_properties_", suffix: "", table: "property") }
     }
 
     /// A value of an effect the scene lets be changed: a number, a point or a color.

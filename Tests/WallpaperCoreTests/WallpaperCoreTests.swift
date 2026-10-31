@@ -2991,4 +2991,289 @@ final class SteamWorkshopPreviewsTests: XCTestCase {
         previews.removeExpired(at: Date().addingTimeInterval(25 * 60 * 60))
         XCTAssertEqual(files(), 0)
     }
+
+    // MARK: - Masks
+
+    func testBrushGoesNoFurtherThanItsOpacityWithinAStroke() {
+        var mask = WallpaperEngineMask(width: 40, height: 40, values: [0])
+        let brush = WallpaperEngineMask.Brush(radiusX: 8, radiusY: 8, hardness: 1, opacity: 0.5, paint: .values([255]))
+        var stroke = mask.startStroke()
+        for _ in 0..<5 { mask.paint(&stroke, with: brush, toX: 20, y: 20) }
+        XCTAssertEqual(mask.values(atX: 20, y: 20)[0], 128)
+        XCTAssertEqual(mask.values(atX: 2, y: 2)[0], 0)
+        // The next stroke starts from what the last one left.
+        stroke = mask.startStroke()
+        mask.paint(&stroke, with: brush, toX: 20, y: 20)
+        XCTAssertEqual(mask.values(atX: 20, y: 20)[0], 192)
+    }
+
+    func testBrushLineHasNoGaps() {
+        var mask = WallpaperEngineMask(width: 200, height: 20, values: [0])
+        let brush = WallpaperEngineMask.Brush(radiusX: 4, radiusY: 4, hardness: 1, opacity: 1, paint: .values([255]))
+        var stroke = mask.startStroke()
+        mask.paint(&stroke, with: brush, toX: 10, y: 10)
+        mask.paint(&stroke, with: brush, toX: 190, y: 10)
+        for x in 10...190 { XCTAssertEqual(mask.values(atX: Double(x), y: 10)[0], 255, "at \(x)") }
+    }
+
+    func testSoftBrushFadesTowardItsEdge() {
+        var mask = WallpaperEngineMask(width: 60, height: 60, values: [0])
+        var stroke = mask.startStroke()
+        mask.paint(&stroke, with: .init(radiusX: 20, radiusY: 20, hardness: 0.5, opacity: 1, paint: .values([255])), toX: 30, y: 30)
+        XCTAssertEqual(mask.values(atX: 30, y: 30)[0], 255)
+        let middle = mask.values(atX: 45, y: 30)[0]
+        XCTAssertGreaterThan(middle, 0)
+        XCTAssertLessThan(middle, 255)
+        XCTAssertEqual(mask.values(atX: 52, y: 30)[0], 0)
+    }
+
+    func testRealFlowMapsSayWhichWayTheWaterGoes() throws {
+        guard let root = ProcessInfo.processInfo.environment["WALLAERO_FLOW_CHECK"] else { throw XCTSkip("no library copy given") }
+        for scene in try FileManager.default.contentsOfDirectory(atPath: root).sorted() {
+            let folder = URL(fileURLWithPath: root).appendingPathComponent(scene).appendingPathComponent("project/materials/masks")
+            for file in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where file.hasPrefix("waterflow") {
+                let data = try Data(contentsOf: folder.appendingPathComponent(file))
+                guard let map = WallpaperEngineMask(textureFile: data, channels: 2) else { print("flow", file, "unreadable"); continue }
+                var counted = 0, x = 0.0, y = 0.0
+                for index in stride(from: 0, to: map.pixels.count, by: 2) where abs(Int(map.pixels[index]) - 127) + abs(Int(map.pixels[index + 1]) - 127) > 12 {
+                    counted += 1
+                    x += Double(map.pixels[index]) - 127
+                    y += Double(map.pixels[index + 1]) - 127
+                }
+                print("flow", scene.prefix(8), file.prefix(24), map.width, map.height, "painted \(counted * 100 / (map.pixels.count / 2))%", String(format: "mean r %+.0f g %+.0f", x / Double(max(1, counted)), y / Double(max(1, counted))))
+            }
+        }
+    }
+
+    func testPictureGoesTheWayTheBrushGoes() {
+        var map = WallpaperEngineMask(width: 100, height: 100, values: [127, 127])
+        var stroke = map.startStroke()
+        let brush = WallpaperEngineMask.Brush(radiusX: 10, radiusY: 10, hardness: 1, opacity: 1, paint: .flow(.along, strength: 1))
+        map.paint(&stroke, with: brush, toX: 20, y: 50)
+        XCTAssertEqual(map.values(atX: 20, y: 50), [127, 127], "a brush that has not gone anywhere has no direction")
+        map.paint(&stroke, with: brush, toX: 80, y: 50)
+        // Shaders read the picture ahead of where it is shown, so the map says the opposite way.
+        XCTAssertEqual(map.values(atX: 50, y: 50), [0, 127])
+        XCTAssertEqual(map.flow(atX: 50, y: 50).x, 1)
+        XCTAssertEqual(map.flow(atX: 50, y: 50).y, 0)
+        XCTAssertEqual(map.values(atX: 50, y: 5), [127, 127])
+    }
+
+    func testBrushesRoundAMiddle() {
+        func flow(_ kind: WallpaperEngineMask.Flow, atX x: Double, y: Double) -> (x: Double, y: Double) {
+            var map = WallpaperEngineMask(width: 100, height: 100, values: [127, 127])
+            var stroke = map.startStroke()
+            map.paint(&stroke, with: .init(radiusX: 40, radiusY: 40, hardness: 1, opacity: 1, paint: .flow(kind, strength: 1)), toX: 50, y: 50)
+            return map.flow(atX: x, y: y)
+        }
+        // Clockwise as seen: right at the top, which is up the rows.
+        XCTAssertGreaterThan(flow(.spin, atX: 50, y: 20).x, 0.9)
+        XCTAssertGreaterThan(flow(.spread, atX: 80, y: 50).x, 0.9)
+        XCTAssertLessThan(flow(.pinch, atX: 80, y: 50).x, -0.9)
+        XCTAssertGreaterThan(flow(.fixed(x: 0, y: 1), atX: 50, y: 50).y, 0.9)
+    }
+
+    func testDirectionMapIsSavedWithItsColorAtRestAndComesBack() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var map = WallpaperEngineMask(width: 30, height: 20, values: [127, 127])
+        var stroke = map.startStroke()
+        map.paint(&stroke, with: .init(radiusX: 5, radiusY: 5, hardness: 1, opacity: 1, paint: .flow(.fixed(x: 1, y: 0), strength: 0.5)), toX: 10, y: 10)
+        let file = try Data(contentsOf: folder.appendingPathComponent("materials/\(try map.save(forEffect: "waterflow", to: folder)).tex"))
+        XCTAssertEqual(WallpaperEngineMask(textureFile: file, channels: 2), map)
+        XCTAssertEqual(file.subdata(in: 42..<46), Data([0x7F, 0x7F, 0x00, 0xFF]))
+    }
+
+    func testMapOfColorsKeepsThemApart() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let map = WallpaperEngineMask(width: 4, height: 4, values: [200, 100, 50])
+        let file = try Data(contentsOf: folder.appendingPathComponent("materials/\(try map.save(forEffect: "blend", to: folder)).tex"))
+        XCTAssertEqual(WallpaperEngineMask(textureFile: file, channels: 3)?.values(atX: 1, y: 1), [200, 100, 50])
+        var colors = [UInt8](repeating: 0, count: 64)
+        colors.withUnsafeMutableBufferPointer { map.writeColors(to: $0.baseAddress!) }
+        XCTAssertEqual(Array(colors[0..<4]), [200, 100, 50, 255])
+    }
+
+    // MARK: - Scripts
+
+    private func scriptDocument(_ origin: JSONValue, general: [String: JSONValue] = [:]) -> WallpaperEngineDocument {
+        WallpaperEngineDocument(project: .object([:]), scene: .object([
+            "general": .object(general),
+            "objects": .array([.object(["id": .number(5), "origin": origin, "effects": .array([.object([
+                "file": .string("effects/tint/effect.json"), "passes": .array([.object(["constantshadervalues": .object(["alpha": .number(0.5)])])]),
+            ])])])]),
+        ]))
+    }
+
+    func testScriptGoesBehindAValueAndComesOutWithTheValueAsItWas() {
+        var document = scriptDocument(.string("1 2 3"))
+        let target = WallpaperEngineScriptTarget.value(object: 5, key: "origin")
+        document.setScript("x", of: target, fallback: .string("0 0 0"))
+        XCTAssertEqual(document.script(of: target), "x")
+        XCTAssertEqual(document.rawValue(of: target)?["value"]?.stringValue, "1 2 3")
+        XCTAssertEqual(document.scriptTargets(of: 5), [target])
+        document.removeScript(of: target)
+        XCTAssertEqual(document.rawValue(of: target)?.stringValue, "1 2 3")
+        XCTAssertEqual(document.scriptTargets(of: 5), [])
+    }
+
+    func testRemovingAScriptKeepsWhatElseStandsBehindTheValue() {
+        var document = scriptDocument(.object(["script": .string("x"), "user": .string("speed"), "value": .string("1 2 3"),
+                                               "scriptproperties": .object(["a": .number(1)])]))
+        let target = WallpaperEngineScriptTarget.value(object: 5, key: "origin")
+        document.removeScript(of: target)
+        XCTAssertEqual(document.rawValue(of: target)?["user"]?.stringValue, "speed")
+        XCTAssertNil(document.rawValue(of: target)?["script"])
+        XCTAssertNil(document.rawValue(of: target)?["scriptproperties"])
+    }
+
+    func testScriptOfAnEffectValueAndOfTheScene() {
+        var document = scriptDocument(.string("0 0 0"), general: ["bloomstrength": .number(2)])
+        let effect = WallpaperEngineScriptTarget.effect(object: 5, index: 0, pass: 0, name: "alpha")
+        document.setScript("e", of: effect, fallback: .number(1))
+        XCTAssertEqual(document.rawValue(of: effect)?["value"]?.numberValue, 0.5)
+        XCTAssertEqual(document.scriptTargets(of: 5), [effect])
+        let general = WallpaperEngineScriptTarget.general("bloomstrength")
+        document.setScript("g", of: general, fallback: .number(0))
+        XCTAssertEqual(document.sceneScriptTargets, [general])
+        XCTAssertEqual(document.rawValue(of: general)?["value"]?.numberValue, 2)
+    }
+
+    func testScriptSettingBoundToAWallpaperSettingStaysBound() {
+        var document = scriptDocument(.object(["script": .string("x"), "value": .string("0 0 0"), "scriptproperties": .object([
+            "speed": .object(["user": .string("speedy"), "value": .number(1)]),
+        ])]))
+        let target = WallpaperEngineScriptTarget.value(object: 5, key: "origin")
+        document.setScriptProperty("speed", to: .number(9), of: target)
+        document.setScriptProperty("new", to: .bool(true), of: target)
+        XCTAssertEqual(document.scriptProperty("speed", of: target)?["user"]?.stringValue, "speedy")
+        XCTAssertEqual(document.scriptProperty("speed", of: target)?["value"]?.numberValue, 9)
+        XCTAssertEqual(document.scriptProperty("new", of: target)?.boolValue, true)
+    }
+
+    func testSettingsGoInTheChainOrStartOneAfterTheImports() {
+        let plain = "'use strict';\nimport * as WEMath from 'WEMath';\n\nexport function update(value) {\n\treturn value;\n}\n"
+        let first = WallpaperEngineScriptText.adding(.slider, name: "a", to: plain)
+        XCTAssertTrue(first.contains("from 'WEMath';\n\nexport var scriptProperties = createScriptProperties()\n\t.addSlider({ name: 'a'"))
+        let second = WallpaperEngineScriptText.adding(.checkbox, name: "b", to: first)
+        XCTAssertEqual(second.components(separatedBy: "createScriptProperties()").count, 2)
+        let lines = second.components(separatedBy: "\n")
+        XCTAssertLessThan(lines.firstIndex { $0.contains("addSlider") }!, lines.firstIndex { $0.contains("addCheckbox") }!)
+        XCTAssertLessThan(lines.firstIndex { $0.contains("addCheckbox") }!, lines.firstIndex { $0.contains(".finish()") }!)
+    }
+
+    func testTemplateIsTheOneWallpaperEngineStartsWith() {
+        let text = WallpaperEngineScriptText.template(type: "Number", key: "alpha")
+        XCTAssertTrue(text.hasPrefix("'use strict';\n\n/**\n * @param {Number} value - for property 'alpha'\n"))
+        XCTAssertTrue(text.contains("export function update(value) {\n\t\n\treturn value;\n}\n"))
+    }
+
+    func testScriptTextIsToldApart() {
+        let text = "// note 'x'\nconst a = 'it\\'s' + 12.5; /* b\nc */ engine.frametime; const b = `x\ny`;"
+        let tokens = WallpaperEngineScriptText.tokens(in: text).map { (text as NSString).substring(with: $0.range) }
+        XCTAssertEqual(tokens, ["// note 'x'", "const", "'it\\'s'", "12.5", "/* b\nc */", "engine", "const", "`x\ny`"])
+    }
+
+    func testNamesOfferedAfterADot() {
+        XCTAssertTrue(WallpaperEngineScriptText.members(of: "engine").contains("frametime"))
+        XCTAssertTrue(WallpaperEngineScriptText.members(of: "thisLayer").contains("origin"))
+        XCTAssertEqual(WallpaperEngineScriptText.members(of: "somethingElse"), [])
+    }
+
+    func testReadyMadeScriptsAreForTypesThatExist() {
+        for example in WallpaperEngineScriptText.examples {
+            XCTAssertTrue(["Number", "Boolean", "String", "Vec2", "Vec3", "Vec4"].contains(example.type), example.id)
+            XCTAssertTrue(example.text.contains("export function update"), example.id)
+        }
+    }
+
+    // MARK: - Conditions
+
+    func testConditionsReadAsWallpaperEngineWritesThem() {
+        let values: [String: WallpaperEngineCondition.Value] = ["language": .text("2"), "on": .flag(true), "off": .flag(false), "count": .number(3), "name": .text("a")]
+        func met(_ text: String) -> Bool { WallpaperEngineCondition.isMet(text) { values[$0] } }
+        XCTAssertTrue(met("language.value == 2"))
+        XCTAssertTrue(met("language.value ==2"))
+        XCTAssertFalse(met("language.value == 1"))
+        XCTAssertTrue(met("on.value"))
+        XCTAssertFalse(met("off.value"))
+        XCTAssertTrue(met("on.value == true"))
+        XCTAssertTrue(met("on.value == 1"))
+        XCTAssertTrue(met("off.value==false && on.value"))
+        XCTAssertTrue(met("!off.value"))
+        XCTAssertTrue(met("off.value || count.value > 2"))
+        XCTAssertFalse(met("(off.value || count.value > 3) && on.value"))
+        XCTAssertTrue(met("name.value == 'a'"))
+        XCTAssertTrue(met("name.value != \"b\""))
+        XCTAssertFalse(met("missing.value"))
+        XCTAssertTrue(met(""), "no condition hides nothing")
+        XCTAssertTrue(met("language.value == =="), "nonsense hides nothing")
+        XCTAssertFalse(WallpaperEngineCondition.isValid("language.value == =="))
+        XCTAssertTrue(WallpaperEngineCondition.isValid("a.value == 1"))
+    }
+
+    func testLibraryConditionsCount() throws {
+        guard let root = ProcessInfo.processInfo.environment["WALLAERO_FLOW_CHECK"] else { throw XCTSkip("no library copy given") }
+        for name in try FileManager.default.contentsOfDirectory(atPath: root).sorted() {
+            let folder = URL(fileURLWithPath: root).appendingPathComponent(name)
+            guard let project = WallpaperEngineProjectFolder.project(ofScene: folder), let scene = try? SceneProject.read(from: folder) else { continue }
+            let conditions = WallpaperEngineProject.conditions(inProject: project)
+            guard !conditions.isEmpty else { continue }
+            let invalid = conditions.values.filter { !WallpaperEngineCondition.isValid($0) }
+            print("conditions", name.prefix(8), "settings", scene.variables.count, "shown", scene.shownVariables(conditions: conditions).count, "conditions", conditions.count, "invalid", invalid)
+        }
+    }
+
+    func testSettingsAreHiddenByTheirConditions() {
+        var scene = WallpaperScene()
+        var language = WallpaperScene.Variable(kind: .choice, title: "Language", key: "language")
+        language.property = "language"
+        language.options = ["One", "Two"]
+        language.values = [.text("1"), .text("2")]
+        language.text = "Two"
+        var first = WallpaperScene.Variable(kind: .color, title: "First", key: "first")
+        first.property = "first"
+        var second = WallpaperScene.Variable(kind: .color, title: "Second", key: "second")
+        second.property = "second"
+        scene.variables = [language, first, second]
+        let shown = scene.shownVariables(conditions: ["first": "language.value == 1", "second": "language.value == 2"])
+        XCTAssertEqual(shown.map(\.title), ["Language", "Second"])
+    }
+
+    func testSmoothingEvensAnEdgeOut() {
+        var mask = WallpaperEngineMask(width: 40, height: 40, values: [0])
+        var stroke = mask.startStroke()
+        mask.paint(&stroke, with: .init(radiusX: 100, radiusY: 8, hardness: 1, opacity: 1, paint: .values([255])), toX: 20, y: 0)
+        XCTAssertEqual(mask.values(atX: 20, y: 7)[0], 255)
+        var smoothing = mask.startStroke()
+        mask.paint(&smoothing, with: .init(radiusX: 16, radiusY: 16, hardness: 1, opacity: 1, paint: .smooth), toX: 20, y: 8)
+        XCTAssertLessThan(mask.values(atX: 20, y: 7)[0], 255)
+        XCTAssertGreaterThan(mask.values(atX: 20, y: 9)[0], 0)
+    }
+
+    func testMaskSavedComesBackTheSameUnderAWallpaperEngineName() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var mask = WallpaperEngineMask(width: 37, height: 21, values: [0])
+        var stroke = mask.startStroke()
+        mask.paint(&stroke, with: .init(radiusX: 6, radiusY: 6, hardness: 0.3, opacity: 0.8, paint: .values([200])), toX: 9, y: 4)
+        let name = try mask.save(forEffect: "shake", to: folder)
+        XCTAssertTrue(name.hasPrefix("masks/shake_mask_"))
+        let file = try Data(contentsOf: folder.appendingPathComponent("materials/\(name).tex"))
+        XCTAssertEqual(WallpaperEngineMask(textureFile: file, channels: 1), mask)
+        XCTAssertEqual(try mask.save(forEffect: "shake", to: folder), name)
+    }
+
+    func testEffectTextureGoesInItsSlotAndComesOutCleanly() {
+        var document = WallpaperEngineDocument(project: .object([:]), scene: .object([
+            "objects": .array([.object(["id": .number(5), "effects": .array([.object(["file": .string("effects/shake/effect.json"), "passes": .array([.object(["id": .number(1)])])])])])]),
+        ]))
+        document.setEffectTexture("masks/a", object: 5, effect: 0, passes: [0, 1], slot: 2)
+        XCTAssertEqual(document.effectTexture(object: 5, effect: 0, pass: 1, slot: 2), "masks/a")
+        XCTAssertNil(document.effectTexture(object: 5, effect: 0, pass: 0, slot: 1))
+        XCTAssertEqual(document.object(5)?["effects"]?[0]?["passes"]?[0]?["id"]?.numberValue, 1)
+        document.setEffectTexture(nil, object: 5, effect: 0, passes: [0], slot: 2)
+        XCTAssertNil(document.object(5)?["effects"]?[0]?["passes"]?[0]?["textures"])
+    }
 }

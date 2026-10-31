@@ -1187,6 +1187,50 @@ enum ScreenshotMode {
             // `--timeline`, `--curves`: the timeline open, on its keys or on its curves.
             model.showsTimeline = CommandLine.arguments.contains("--timeline")
             model.timelineCurves = CommandLine.arguments.contains("--curves")
+            // `--effect-switch <effect> <name> <value>`: a switch of an effect of the selection set.
+            if let index = CommandLine.arguments.firstIndex(of: "--effect-switch"), index + 3 < CommandLine.arguments.count,
+               let effect = Int(CommandLine.arguments[index + 1]), let value = Double(CommandLine.arguments[index + 3]), let id = model.selection {
+                for _ in 0..<40 where model.description?.object(id)?.effects.first(where: { $0.id == effect }) == nil {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                @MainActor func show(_ when: String) {
+                    let described = model.description?.object(id)?.effects.first { $0.id == effect }
+                    print("\(when): switches \(described?.switches?.map { "\($0.name)=\($0.value)" } ?? []), values \(described?.values.count ?? 0), maps \(described?.masks?.map(\.slot) ?? [])")
+                }
+                show("before")
+                if let item = model.description?.object(id)?.effects.first(where: { $0.id == effect })?.switches?.first(where: { $0.name == CommandLine.arguments[index + 2] }) {
+                    model.setEffectSwitch(item, to: value, object: id, effect: effect)
+                }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                show("after")
+            }
+            // `--paint <effect> [slot]`: the selected object's effect's mask opened to paint, `--paint-setup
+            // <size> <value> <hardness> <opacity>` for the brush, `--paint-show` with it shown.
+            if let effect = values(of: "--paint").last.flatMap(Int.init), let id = model.selection {
+                for _ in 0..<40 where model.description?.object(id)?.effects.first(where: { $0.id == effect }) == nil {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                let masks = model.description?.object(id)?.effects.first { $0.id == effect }?.masks ?? []
+                print("masks of effect \(effect): \(masks.map { "\($0.label) slot \($0.slot) passes \($0.passes) fill \($0.fill)" })")
+                if let mask = masks.first {
+                    model.startPainting(.init(object: id, effect: effect, mask: mask))
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    if let index = CommandLine.arguments.firstIndex(of: "--paint-setup"), index + 4 < CommandLine.arguments.count, let paint = model.painting {
+                        let numbers = CommandLine.arguments[(index + 1)...(index + 4)].compactMap(Double.init)
+                        paint.size = numbers[0]
+                        paint.value = numbers[1]
+                        paint.hardness = numbers[2]
+                        paint.opacity = numbers[3]
+                    }
+                    if let kind = values(of: "--paint-brush").last.flatMap(EngineMaskPaint.Brush.init(rawValue:)) {
+                        model.painting?.brush = kind
+                    }
+                    model.painting?.isolates = CommandLine.arguments.contains("--paint-isolate")
+                    model.painting?.isPicking = CommandLine.arguments.contains("--paint-pick")
+                    model.painting?.showsMask = CommandLine.arguments.contains("--paint-show")
+                    print("painting \(model.painting?.texture ?? "nothing"), new \(model.painting?.isNew ?? false), mask \(model.painting?.mask.width ?? 0)×\(model.painting?.mask.height ?? 0)")
+                }
+            }
             // `--window-drag <x0> <y0> <x1> <y1>`: the mouse pressed, dragged and let go, in points
             // of the window from its bottom left, as the window gets it.
             // Given several times, one after another.
@@ -1198,7 +1242,10 @@ enum ScreenshotMode {
                 for step in 0...8 {
                     let share = Double(step) / 8
                     let at = NSPoint(x: numbers[0] + (numbers[2] - numbers[0]) * share, y: numbers[1] + (numbers[3] - numbers[1]) * share)
-                    if let event = NSEvent.mouseEvent(with: step == 0 ? .leftMouseDown : .leftMouseDragged, location: at, modifierFlags: [],
+                    var held = NSEvent.ModifierFlags()
+                    if values(of: "--drag-keys").last?.contains("c") == true { held.insert(.control) }
+                    if values(of: "--drag-keys").last?.contains("s") == true { held.insert(.shift) }
+                    if let event = NSEvent.mouseEvent(with: step == 0 ? .leftMouseDown : .leftMouseDragged, location: at, modifierFlags: held,
                                                       timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                                       context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
                         NSApp.postEvent(event, atStart: false)
@@ -1211,7 +1258,90 @@ enum ScreenshotMode {
                     NSApp.postEvent(event, atStart: false)
                 }
                 try? await Task.sleep(nanoseconds: 300_000_000)
+                if let paint = model.painting {
+                    print("brush after the drag: size \(paint.size), opacity \(paint.opacity), hardness \(paint.hardness), value \(paint.value), undo \(paint.canUndo)")
+                }
                 print("after the drag: frame \(model.timelineFrame), keys \(model.activeAnimation?.keyFrames ?? []), selected \(model.selectedKeys.map(\.frame).sorted()), undo \(model.canUndo), handles at 30 \(model.activeAnimation?.keys(0).first { $0.frame == 30 }.map { "\($0.back.map { [$0.x, $0.y] } ?? []) \($0.front.map { [$0.x, $0.y] } ?? [])" } ?? "")")
+            }
+            // `--script <key>`: the panel of scripts, on the script of a value of the selection, made
+            // if there is none (`general:<key>` for one of the scene); `--script-text <file>`,
+            // that text typed in; `--script-apply`, applied.
+            if let key = values(of: "--script").last {
+                model.showsScripts = true
+                let target: WallpaperEngineScriptTarget = key.hasPrefix("general:") ? .general(String(key.dropFirst(8))) : .value(object: model.selection ?? 0, key: key)
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                if model.document.script(of: target) == nil { model.addScript(target) } else { model.openScript(target) }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if let file = values(of: "--script-text").last, let text = try? String(contentsOfFile: file, encoding: .utf8) {
+                    model.scriptView?.replaceAll(with: text)
+                }
+                if let id = values(of: "--script-example").last, let example = WallpaperEngineScriptText.examples.first(where: { $0.id == id }) {
+                    model.useExample(example)
+                }
+                if CommandLine.arguments.contains("--script-apply") {
+                    print("applied: \(model.applyScript()), problem \(model.scriptProblem.map { "line \($0.line): \($0.message)" } ?? "none")")
+                    try? await Task.sleep(nanoseconds: 1_800_000_000)
+                    model.readScriptReport()
+                }
+                // `--script-typing`: what typing does: a new line keeps the indent, Undo takes back
+                // text and not the scene, and names are offered.
+                if CommandLine.arguments.contains("--script-typing"), let text = model.scriptView {
+                    window.makeFirstResponder(text)
+                    let start = (text.string as NSString).range(of: "return").location
+                    text.setSelectedRange(NSRange(location: start, length: 0))
+                    let before = text.string
+                    text.insertNewline(nil)
+                    let line = (text.string as NSString).substring(with: NSRange(location: start, length: 3))
+                    print("after a new line: \(line.debugDescription)")
+                    text.insertText("engine.", replacementRange: text.selectedRange())
+                    var index = 0
+                    let at = text.selectedRange().location
+                    print("names after engine.: \(text.completions(forPartialWordRange: NSRange(location: at, length: 0), indexOfSelectedItem: &index)?.prefix(4).map { $0 } ?? [])")
+                    let steps = model.canUndo
+                    for _ in 0..<4 { model.undo() }
+                    print("undone: \(text.string == before), draft follows \(model.scriptDraft == text.string), scene steps \(steps) → \(model.canUndo)")
+                }
+                let colored = Date()
+                model.scriptView?.showColors(problemLine: model.scriptProblem?.line)
+                print("colors in \(Int(Date().timeIntervalSince(colored) * 1000)) ms")
+                print("script \(model.scriptTarget.map(model.title(of:)) ?? "none"): \(model.scriptDraft.count) characters, changed \(model.scriptIsChanged), settings \(model.scriptSettings.map(\.name)), problem \(model.scriptProblem.map { "line \($0.line): \($0.message) \($0.during ?? "")" } ?? "none"), log \(model.scriptLog.suffix(3))")
+            }
+            // `--scene-menu <x> <y>`: the right button at a point of the preview, in points from its
+            // top left; `--scene-menu-pick <title>…`, a way through the menus to an item to choose.
+            if let index = CommandLine.arguments.firstIndex(of: "--scene-menu"), index + 2 < CommandLine.arguments.count {
+                let numbers = CommandLine.arguments[(index + 1)...(index + 2)].compactMap(Double.init)
+                var menu = preview.sceneMenu(at: CGPoint(x: numbers[0], y: numbers[1]))
+                print("scene menu: \(menu?.items.map(\.title) ?? [])")
+                for title in values(of: "--scene-menu-pick") {
+                    guard let found = menu?.items.first(where: { $0.title == title }) else { print("no \(title)"); break }
+                    if let inner = found.submenu {
+                        menu = inner
+                        print("in \(title): \(inner.items.map(\.title))")
+                    } else {
+                        NSApp.sendAction(found.action!, to: found.target, from: found)
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                print("selected \(model.selection.map(String.init) ?? "nothing"): \(model.selection.flatMap { model.document.object($0)?["origin"]?.plain.stringValue } ?? "")")
+            }
+            // `--paint-speed`: how long the scene takes to be given the whole mask.
+            if CommandLine.arguments.contains("--paint-speed"), let paint = model.painting {
+                let start = Date()
+                for _ in 0..<30 { paint.push() }
+                print("mask \(paint.mask.width)×\(paint.mask.height): \(Int(Date().timeIntervalSince(start) * 1000 / 30)) ms a time")
+            }
+            // `--paint-end done|cancel`, after the drags, and `--paint-back`, a step back after that.
+            if let end = values(of: "--paint-end").last {
+                model.finishPainting(keeping: end == "done")
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                print("ended \(end): texture \(model.document.effectTexture(object: model.selection ?? 0, effect: values(of: "--paint").last.flatMap(Int.init) ?? 0, pass: 0, slot: 1) ?? "none"), undo \(model.canUndo)")
+                if CommandLine.arguments.contains("--paint-back") {
+                    model.undo()
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    print("back: texture \(model.document.effectTexture(object: model.selection ?? 0, effect: values(of: "--paint").last.flatMap(Int.init) ?? 0, pass: 0, slot: 1) ?? "none"), redo \(model.canRedo)")
+                }
+                model.close()
+                print("masks left: \((try? FileManager.default.contentsOfDirectory(atPath: model.projectFolder.appendingPathComponent("materials/masks").path)) ?? [])")
             }
             // `--wheel <x> <y> <lines>`: the wheel turned over a point of the window, from its top left;
             // `--wheel-heights` as with Shift. A wheel event made here belongs to no window, so
@@ -1238,7 +1368,7 @@ enum ScreenshotMode {
             // what each did; `,` stands for the search field taking the keys, `.` for its leaving them.
             if let letters = values(of: "--press").last {
                 let codes: [Character: UInt16] = ["w": 13, "g": 5, "r": 15, "s": 1, "h": 4, " ": 49, "k": 40, "a": 0, "t": 17, "<": 123, ">": 124,
-                                                  "C": 8, "V": 9, "x": 51]
+                                                  "C": 8, "V": 9, "x": 51, "m": 46, "i": 34]
                 for letter in letters {
                     if letter == "," || letter == "." {
                         func field(in view: NSView) -> NSSearchField? {
@@ -1257,6 +1387,9 @@ enum ScreenshotMode {
                         NSApp.postEvent(event, atStart: false)
                     }
                     try? await Task.sleep(nanoseconds: 250_000_000)
+                    if let paint = model.painting {
+                        print("brush: shows mask \(paint.showsMask), picking \(paint.isPicking)")
+                    }
                     print("“\(letter)”: frame \(model.timelineFrame), keys \(model.activeAnimation?.keyFrames ?? []), auto \(model.autoKey), timeline \(model.showsTimeline), tool \(model.tool), playing \(model.isPlaying), "
                         + "visible \(model.selection.map(model.isVisible) ?? true), filter “\(model.layerFilter)”")
                 }

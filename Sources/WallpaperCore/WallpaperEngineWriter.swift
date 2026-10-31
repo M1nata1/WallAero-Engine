@@ -10,7 +10,9 @@ public enum WallpaperEngineWriter {
     /// - Parameters:
     ///   - clamped: whether the picture ends at its edges rather than repeating.
     ///   - smooth: whether it is smoothed when drawn larger or smaller.
-    public static func texture(picture file: Data, width: Int, height: Int, clamped: Bool = true, smooth: Bool = true) -> Data {
+    ///   - color: the color the header gives, as Wallpaper Engine gives a map's color at rest.
+    public static func texture(picture file: Data, width: Int, height: Int, clamped: Bool = true, smooth: Bool = true,
+                               color: UInt32 = 0xFF00_0000) -> Data {
         // FreeImage's numbers for the kinds of picture file.
         let kind: Int32 = file.starts(with: [0xFF, 0xD8]) ? 2 : 13
         var data = Data()
@@ -22,7 +24,7 @@ public enum WallpaperEngineWriter {
         data += int(Int32(powerOfTwo(height)))
         data += int(Int32(width))
         data += int(Int32(height))
-        data += uint(0xFF00_0000)
+        data += uint(color)
         data += zeroText("TEXB0003")
         data += int(1) // one picture
         data += int(kind)

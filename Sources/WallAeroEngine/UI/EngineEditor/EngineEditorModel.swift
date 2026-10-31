@@ -25,6 +25,7 @@ final class EngineEditorModel: ObservableObject {
             if selection != oldValue {
                 preview?.select(selection)
                 timelineDidChangeObject()
+                scriptsDidChangeObject()
             }
         }
     }
@@ -39,6 +40,10 @@ final class EngineEditorModel: ObservableObject {
     @Published var sheet: Sheet?
     /// The picture whose puppet warp is being edited; the middle of the window is then its.
     @Published var puppetObject: Int?
+    /// The mask being painted over the scene, if one is.
+    @Published var painting: EngineMaskPaint?
+    /// Masks written since the editor opened, which steps to take back may still need.
+    var madeMasks: Set<String> = []
     /// What a drag over the scene does.
     @Published var tool = Tool.multi {
         didSet { preview?.setTool(tool) }
@@ -51,10 +56,34 @@ final class EngineEditorModel: ObservableObject {
     @Published var objectTab = ObjectTab.object
     @Published var sceneTab = SceneTab.scene
     /// Whether the timeline is open under the scene; the scene then stands at its moment.
+    /// The panel of scripts under the scene; it and the timeline take turns there.
+    @Published var showsScripts = false {
+        didSet {
+            guard showsScripts != oldValue else { return }
+            if showsScripts {
+                showsTimeline = false
+                openScript(scriptTargets.first)
+            } else {
+                openScript(nil)
+            }
+        }
+    }
+    /// The script open, what is typed of it, and what is typed of others and cannot be read yet.
+    @Published var scriptTarget: WallpaperEngineScriptTarget?
+    @Published var scriptDraft = ""
+    @Published var scriptProblem: EngineScriptProblem?
+    @Published var scriptLog: [String] = []
+    /// The settings the script declares, and what the scene gives them.
+    @Published var scriptSettings: [WallpaperEngineScriptSetting] = []
+    @Published var scriptValues: [String: JSONValue] = [:]
+    var scriptDrafts: [WallpaperEngineScriptTarget: String] = [:]
+    var scriptValueTask: Task<Void, Never>?
+    weak var scriptView: EngineScriptTextView?
     @Published var showsTimeline = false {
         didSet {
             guard showsTimeline != oldValue else { return }
             if !showsTimeline { setTimelinePlaying(false) }
+            if showsTimeline { showsScripts = false }
             showTimelineMoment()
         }
     }
@@ -213,13 +242,22 @@ final class EngineEditorModel: ObservableObject {
         endGesture()
     }
 
+    /// The text of a script keeps its own steps, while it is being typed in.
+    private var scriptViewIsInUse: Bool {
+        scriptView != nil && scriptView?.window?.firstResponder === scriptView
+    }
+
     func undo() {
+        if scriptViewIsInUse { scriptView?.undoManager?.undo(); return }
+        if let painting { return painting.undo() }
         guard let previous = undoStack.popLast() else { return }
         redoStack.append(document)
         restore(previous)
     }
 
     func redo() {
+        if scriptViewIsInUse { scriptView?.undoManager?.redo(); return }
+        if let painting { return painting.redo() }
         guard let next = redoStack.popLast() else { return }
         undoStack.append(document)
         restore(next)
@@ -232,6 +270,27 @@ final class EngineEditorModel: ObservableObject {
         canUndo = !undoStack.isEmpty
         canRedo = !redoStack.isEmpty
         endGesture()
+        // A step may bring back a mask the player was told to do without.
+        if !madeMasks.isEmpty { hasNewFiles = true }
+    }
+
+    /// Puts another document in place, as one step that goes back to a given one, or as none.
+    func replaceDocument(with other: WallpaperEngineDocument, undoingTo step: WallpaperEngineDocument?) {
+        isApplyingHistory = true
+        document = other
+        isApplyingHistory = false
+        if let step {
+            undoStack.append(step)
+            redoStack = []
+        }
+        showHistory(canUndo: !undoStack.isEmpty, canRedo: !redoStack.isEmpty)
+        endGesture()
+    }
+
+    /// What Undo and Redo offer, which a mask being painted has its own of.
+    func showHistory(canUndo: Bool, canRedo: Bool) {
+        self.canUndo = canUndo
+        self.canRedo = canRedo
     }
 
     private func scheduleSave() {
@@ -276,6 +335,8 @@ final class EngineEditorModel: ObservableObject {
     // MARK: - From the preview
 
     func playerDidStart(_ description: EngineSceneDescription) {
+        // A scene played anew has the mask as the project does, not as it is painted.
+        painting?.push()
         if description != self.description {
             self.description = description
         }
@@ -711,6 +772,20 @@ final class EngineEditorModel: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// A picture from a file for a slot of an effect, in place of one painted.
+    func chooseMapPicture(_ target: EngineMaskPaint.Target) {
+        guard let url = choose([.image]) else { return }
+        do {
+            let picture = try WallpaperEngineProjectFolder.addPicture(url, to: projectFolder)
+            hasNewFiles = true
+            change {
+                $0.setEffectTexture(picture.texture, object: target.object, effect: target.effect, passes: target.mask.passes, slot: target.mask.slot)
+            }
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
 
     private func choose(_ types: [UTType]) -> URL? {
         let panel = NSOpenPanel()

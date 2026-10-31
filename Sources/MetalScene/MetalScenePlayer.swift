@@ -42,6 +42,8 @@ public final class MetalScenePlayer {
     private var frameWanted = false
     private var clock: Timer?
     private var playing = true
+    /// The memory new pixels of a texture reach the scene through, and the scene's name for it.
+    private var paintPixels: (memory: UnsafeMutableRawPointer?, size: Int, array: JSValue?) = (nil, 0, nil)
     private let started = CACurrentMediaTime()
     /// The page's size in points, and pixels to a point.
     private var size = CGSize(width: 1, height: 1), scale: CGFloat = 2
@@ -95,6 +97,7 @@ public final class MetalScenePlayer {
 
     deinit {
         stop()
+        paintPixels.memory?.deallocate()
     }
 
     private func note(_ text: String) {
@@ -272,6 +275,25 @@ public final class MetalScenePlayer {
         _ = ask("seek", [seconds ?? NSNull()])
         call("__frame", [(CACurrentMediaTime() - started) * 1000])
         gl.present()
+    }
+
+    /// Gives a texture of the scene new pixels, four bytes each, and shows them at once, also
+    /// while the scene is paused. False while the scene has no such texture yet.
+    @discardableResult
+    public func paintTexture(_ name: String, width: Int, byteCount size: Int, write: (UnsafeMutablePointer<UInt8>) -> Void) -> Bool {
+        if paintPixels.size != size {
+            paintPixels.memory?.deallocate()
+            paintPixels = (UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 4), size, nil)
+            let array = JSObjectMakeTypedArrayWithBytesNoCopy(context.jsGlobalContextRef, kJSTypedArrayTypeUint8Array, paintPixels.memory,
+                                                              size, nil, nil, nil)
+            paintPixels.array = array.map { JSValue(jsValueRef: $0, in: context) }
+        }
+        guard let memory = paintPixels.memory?.assumingMemoryBound(to: UInt8.self), let array = paintPixels.array else { return false }
+        write(memory)
+        guard ask("paintTexture", [name, width, array]) as? Bool == true else { return false }
+        call("__frame", [(CACurrentMediaTime() - started) * 1000])
+        gl.present()
+        return true
     }
 
     /// Frames copied to other screens so far.

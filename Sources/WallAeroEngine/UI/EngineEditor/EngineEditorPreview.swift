@@ -36,6 +36,7 @@ final class EngineEditorPreviewController {
             overlay.onSelect = { [weak model] id in model?.selection = id }
             overlay.onChange = { [weak model] id, patch in model?.applyFromPreview(object: id, patch: patch) }
             overlay.onCommit = { [weak model] in model?.endGesture() }
+            overlay.onMenu = { [weak self] point in self?.sceneMenu(at: point) }
             overlay.animatedPlace = { [weak model] id, name in model?.animatedPlace(of: id, name) }
             overlay.onZoom = { [weak model] factor, point in model?.zoomView(by: factor, around: point) }
             overlay.onPan = { [weak model, weak overlay] distance in
@@ -132,12 +133,123 @@ final class EngineEditorPreviewController {
         return true
     }
 
+    /// The next change of the scene is one the player cannot follow as it plays.
+    var playsAnewOnNextChange = false
+
+    /// What is wrong with the text of a script, without running it.
+    func checkScript(_ text: String) -> EngineScriptProblem? {
+        guard let said = sceneView?.scenePlayer?.ask("checkScript", [text]) as? [String: Any] else { return nil }
+        return Self.problem(said)
+    }
+
+    private static func problem(_ said: [String: Any]) -> EngineScriptProblem {
+        EngineScriptProblem(message: said["message"] as? String ?? "", line: (said["line"] as? NSNumber)?.intValue ?? 0, during: said["during"] as? String)
+    }
+
+    /// The settings a script declares.
+    func scriptDeclares(_ text: String) -> [[String: Any]] {
+        sceneView?.scenePlayer?.ask("scriptDeclares", [text]) as? [[String: Any]] ?? []
+    }
+
+    /// What went wrong with scripts, by their text, and what they wrote since the last time.
+    func scriptReport() -> (errors: [String: EngineScriptProblem], log: [String])? {
+        guard let said = sceneView?.scenePlayer?.ask("scriptReport") as? [String: Any] else { return nil }
+        return ((said["errors"] as? [String: [String: Any]] ?? [:]).mapValues(Self.problem), said["log"] as? [String] ?? [])
+    }
+
+    /// What the right button offers at a point of the scene: the object under it, and what can
+    /// be added there.
+    func sceneMenu(at point: CGPoint) -> NSMenu? {
+        guard let model, let player = sceneView?.scenePlayer else { return nil }
+        let menu = NSMenu()
+        if let hit = (player.ask("hit", [point.x, point.y]) as? NSNumber)?.intValue {
+            model.selection = hit
+            menu.addItem(NSMenuItem(title: model.name(of: hit), action: nil, keyEquivalent: ""))
+            menu.items.last?.isEnabled = false
+            menu.addItem(EngineMenuItem(NSLocalizedString("Duplicate", comment: "Menu of an object")) { model.duplicate(hit) })
+            menu.addItem(EngineMenuItem(NSLocalizedString("Bring Forward", comment: "Menu of an object")) { model.move(hit, forward: true) })
+            menu.addItem(EngineMenuItem(NSLocalizedString("Send Backward", comment: "Menu of an object")) { model.move(hit, forward: false) })
+            menu.addItem(EngineMenuItem(NSLocalizedString(model.isVisible(hit) ? "Hide" : "Show", comment: "Menu of an object")) { model.toggleVisibility(of: hit) })
+            menu.addItem(EngineMenuItem(NSLocalizedString("Delete", comment: "Menu of an object")) { model.delete(hit) })
+            menu.addItem(.separator())
+        }
+        let here = { [weak self] (add: () -> Void) in self?.addHere(point, add) }
+        let adds = NSMenu()
+        adds.addItem(EngineMenuItem(NSLocalizedString("Image…", comment: "Add menu")) { here(model.addPicture) })
+        adds.addItem(EngineMenuItem(NSLocalizedString("Video…", comment: "Add menu")) { model.addVideo() })
+        adds.addItem(EngineMenuItem(NSLocalizedString("Text", comment: "Add menu")) { here(model.addText) })
+        adds.addItem(EngineMenuItem(NSLocalizedString("Solid Color", comment: "Add menu")) { here(model.addSolid) })
+        adds.addItem(.separator())
+        let particles = NSMenu()
+        for preset in WallpaperEngineParticlePreset.all {
+            particles.addItem(EngineMenuItem(preset.title) { here { model.addParticles(preset) } })
+        }
+        adds.addItem(Self.submenu(NSLocalizedString("Particles", comment: "Add menu"), particles))
+        adds.addItem(EngineMenuItem(NSLocalizedString("Sound…", comment: "Add menu")) { model.addSound() })
+        let lights = NSMenu()
+        for kind in WallpaperEngineDocument.LightKind.allCases {
+            lights.addItem(EngineMenuItem(EngineEditorModel.lightTitle(kind)) { here { model.addLight(kind) } })
+        }
+        adds.addItem(Self.submenu(NSLocalizedString("Light Source", comment: "Add menu"), lights))
+        adds.addItem(EngineMenuItem(NSLocalizedString("Group", comment: "Add menu")) { here(model.addGroup) })
+        menu.addItem(Self.submenu(NSLocalizedString("Add", comment: "Menu of the scene"), adds))
+        return menu
+    }
+
+    private static func submenu(_ title: String, _ menu: NSMenu) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.submenu = menu
+        return item
+    }
+
+    /// Adds an object and puts it where the menu was opened.
+    private func addHere(_ point: CGPoint, _ add: () -> Void) {
+        guard let model else { return }
+        let before = model.selection
+        add()
+        guard let made = model.selection, made != before,
+              let place = sceneView?.scenePlayer?.ask("placeAt", [made, point.x, point.y]) as? [NSNumber], place.count >= 2 else { return }
+        model.applyFromPreview(object: made, patch: ["x": place[0].doubleValue, "y": place[1].doubleValue])
+        model.endGesture()
+    }
+
+    /// A mask being painted is shown by the frame over the scene, and the mouse is its.
+    func setPainting(_ paint: EngineMaskPaint?) {
+        overlay?.painting = paint
+    }
+
+    /// New values of a texture being painted.
+    func showMask(_ texture: String, _ mask: WallpaperEngineMask) {
+        sceneView?.scenePlayer?.paintTexture(texture, width: mask.width, byteCount: mask.width * mask.height * 4) { mask.writeColors(to: $0) }
+    }
+
+    func maskChanged() {
+        overlay?.maskChanged()
+    }
+
+    /// An object's own size, in the scene's pixels.
+    func objectSize(_ id: Int) -> CGSize? {
+        guard let size = (sceneView?.scenePlayer?.ask("outline", [id]) as? [String: Any])?["size"] as? [Double], size.count >= 2 else { return nil }
+        return CGSize(width: size[0], height: size[1])
+    }
+
     /// The editor's keys, by their place on the keyboard, so that they work in any layout. They
     /// are not for a text being typed, a window on top, or the puppet warp, which has its own.
     private func handleKey(_ event: NSEvent) -> Bool {
         guard let model, model.puppetObject == nil, let window = view.window, event.window === window,
               window.attachedSheet == nil, !(window.firstResponder is NSText) else { return false }
         let keys = event.modifierFlags.intersection([.command, .control, .option])
+        if let painting = model.painting {
+            guard keys.isEmpty else { return false }
+            switch event.keyCode {
+            case 46: painting.showsMask.toggle()               // M
+            case 34: painting.isPicking.toggle()               // I
+            case 49: model.isPlaying.toggle()
+            case 115: model.fitView()
+            default: return false
+            }
+            return true
+        }
         if keys == .command, event.keyCode == 2, let selection = model.selection {
             model.duplicate(selection)
             return true
@@ -240,7 +352,7 @@ final class EngineEditorPreviewController {
             // What the frame showed while an object was dragged is in the scene now.
             overlay?.forgetChanges()
             player.editorUpdate(settings: nil, changes: [:])
-            if changed.isEmpty {
+            if changed.isEmpty, !playsAnewOnNextChange {
                 player.setSceneFile(scene)
             } else {
                 changed["scene.json"] = scene
@@ -394,4 +506,22 @@ private struct EnginePreviewHost: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView { view }
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// An item of a menu made in code, which does what it is given.
+private final class EngineMenuItem: NSMenuItem {
+    private let run: () -> Void
+
+    init(_ title: String, run: @escaping () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(chosen), keyEquivalent: "")
+        target = self
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    @objc private func chosen() { run() }
 }

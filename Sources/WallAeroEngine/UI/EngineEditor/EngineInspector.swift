@@ -447,8 +447,14 @@ private struct EngineEffectsSection: View {
                     .fixedSize()
                 } content: {
                     if let described {
+                        ForEach(described.switches ?? []) { item in
+                            EngineEffectSwitchRow(model: model, object: id, effect: index, item: item)
+                        }
                         ForEach(described.values) { value in
                             EngineEffectValueRows(value: value, numbers: model.effectValue(id, effect: index, value))
+                        }
+                        ForEach(model.paintableMasks(of: described, object: id)) { mask in
+                            EngineMaskRow(model: model, target: .init(object: id, effect: index, mask: mask))
                         }
                     } else {
                         Text("Its values show once the scene plays it.")
@@ -487,6 +493,52 @@ private struct EngineEffectsSection: View {
         if let described { return described.title }
         let folder = (file as NSString).deletingLastPathComponent
         return (folder as NSString).lastPathComponent
+    }
+}
+
+/// A switch of an effect: its shader is made anew with it, so that the scene starts over.
+private struct EngineEffectSwitchRow: View {
+    @ObservedObject var model: EngineEditorModel
+    let object: Int
+    let effect: Int
+    let item: EngineSceneDescription.Switch
+
+    private var value: Binding<Double> {
+        Binding(get: { item.value }, set: { model.setEffectSwitch(item, to: $0, object: object, effect: effect) })
+    }
+
+    var body: some View {
+        if item.kind == "options", item.options.isEmpty {
+            Toggle(isOn: Binding(get: { item.value != 0 }, set: { value.wrappedValue = $0 ? 1 : 0 })) {
+                Text(verbatim: item.title)
+            }
+        } else {
+            Picker(selection: value) {
+                ForEach(choices, id: \.value) { choice in
+                    Text(verbatim: choice.title).tag(choice.value)
+                }
+            } label: {
+                Text(verbatim: item.title)
+            }
+        }
+    }
+
+    private var choices: [(title: String, value: Double)] {
+        var list: [(title: String, value: Double)]
+        switch item.kind {
+        case "imageblending":
+            list = EngineObjectProperties.blendModes
+        case "audioprocessingoptions":
+            list = [(NSLocalizedString("Off", comment: "A sound channel an effect follows"), 0),
+                    (NSLocalizedString("Left Channel", comment: "A sound channel an effect follows"), 1),
+                    (NSLocalizedString("Right Channel", comment: "A sound channel an effect follows"), 2),
+                    (NSLocalizedString("Both Channels", comment: "A sound channel an effect follows"), 3)]
+        default:
+            list = item.options.map { ($0.title, $0.value) }
+        }
+        // A mode the list does not name is shown by its number, not lost.
+        if !list.contains(where: { $0.value == item.value }) { list.append((String(format: "%g", item.value), item.value)) }
+        return list
     }
 }
 

@@ -37,7 +37,7 @@ struct WallpaperSettingsView: View {
                     }
                     if let scene = scene(of: item), !scene.variables.isEmpty {
                         Section("Scene") {
-                            ForEach(scene.variables) { variable in
+                            ForEach(scene.shownVariables(conditions: model.conditions)) { variable in
                                 if let binding = model.binding(for: variable.id) {
                                     VariableValueRow(variable: binding, title: Text(verbatim: variable.title))
                                 }
@@ -208,6 +208,8 @@ final class WallpaperSettingsModel: ObservableObject {
     @Published private(set) var scene: WallpaperScene?
     /// The settings of a scene of Wallpaper Engine's that take a picture.
     @Published private(set) var pictures: [Picture] = []
+    /// When settings of such a scene are shown, by their names.
+    @Published private(set) var conditions: [String: String] = [:]
     /// The settings whose picture is being put into the scene.
     @Published private(set) var working: Set<String> = []
 
@@ -237,6 +239,7 @@ final class WallpaperSettingsModel: ObservableObject {
         watcher = nil
         scene = folder.flatMap { try? SceneProject.read(from: $0) }
         readPictures()
+        conditions = folder.flatMap(WallpaperEngineProjectFolder.project(ofScene:)).map(WallpaperEngineProject.conditions(inProject:)) ?? [:]
         guard let folder else { return }
         watcher = FolderWatcher(folder: folder) { [weak self] paths in
             guard paths.contains(where: { ($0 as NSString).lastPathComponent == SceneProject.sceneFileName }) else { return }
