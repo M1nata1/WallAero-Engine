@@ -147,11 +147,19 @@ extension EngineEditorModel {
 /// The settings of the wallpaper, in the scene's properties.
 struct EngineUserProperties: View {
     @ObservedObject var model: EngineEditorModel
+    @State private var open: Set<String> = []
 
     var body: some View {
         Section {
             ForEach(model.userProperties) { property in
-                DisclosureGroup {
+                FoldingRows(isOpen: $open.contains(property.id)) {
+                    Label {
+                        Text(verbatim: model.userPropertyTitle(property.id))
+                            .lineLimit(2)
+                    } icon: {
+                        Image(systemName: symbol(property.kind))
+                    }
+                } content: {
                     TextField("Label", text: string(property.id, "text"))
                     switch property.kind {
                     case .bool:
@@ -180,13 +188,6 @@ struct EngineUserProperties: View {
                         TextField("Value", text: string(property.id, "value"))
                     }
                     Button("Remove Setting", role: .destructive) { model.removeUserProperty(property.id) }
-                } label: {
-                    Label {
-                        Text(verbatim: model.userPropertyTitle(property.id))
-                            .lineLimit(2)
-                    } icon: {
-                        Image(systemName: symbol(property.kind))
-                    }
                 }
             }
             Menu {

@@ -275,6 +275,11 @@ private func fileName(_ source: String?) -> String {
 
 /// A number with a slider for coarse changes and a field for exact ones.
 struct NumberRow: View {
+    /// The room kept for a unit in every row, so that the numbers of a section stand in a column.
+    static let unitWidth: CGFloat = 14
+    /// What stands beyond the number. Numbers in rows of other kinds keep clear of as much.
+    static let beyondNumber = unitWidth + 6
+
     let title: Text
     @Binding var value: Double
     let range: ClosedRange<Double>
@@ -305,7 +310,7 @@ struct NumberRow: View {
                     .frame(width: 52)
                 Text(suffix)
                     .foregroundStyle(.secondary)
-                    .frame(width: 14, alignment: .leading)
+                    .frame(width: Self.unitWidth, alignment: .leading)
             }
         } label: {
             title
@@ -323,6 +328,58 @@ struct NumberRow: View {
 }
 
 /// A colour kept as CSS text, such as "#FFAA00" or, with transparency, "#FFAA0080".
+/// A row of a form that folds what belongs to it away. What it holds are rows of the form like
+/// any other: a `DisclosureGroup` there lays them tight under its title, cutting into the tallest.
+struct FoldingRows<Title: View, Content: View>: View {
+    @Binding var isOpen: Bool
+    @ViewBuilder let title: () -> Title
+    @ViewBuilder let content: () -> Content
+
+    private var isShown: Bool { isOpen || FoldingRowsLook.opensAll }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isShown ? 90 : 0))
+                .frame(width: 12)
+            title()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { isOpen.toggle() }
+        Group {
+            if isShown {
+                content()
+            }
+        }
+        .padding(.leading, FoldingRowsLook.indent)
+    }
+}
+
+extension Binding {
+    /// Whether the set has the member, as a thing to switch.
+    func contains<Member: Hashable>(_ member: Member) -> Binding<Bool> where Value == Set<Member> {
+        Binding<Bool>(
+            get: { wrappedValue.contains(member) },
+            set: { isIn in
+                if isIn {
+                    wrappedValue.insert(member)
+                } else {
+                    wrappedValue.remove(member)
+                }
+            }
+        )
+    }
+}
+
+enum FoldingRowsLook {
+    /// Under the title, past its arrow.
+    static let indent: CGFloat = 18
+    /// For the editor's test: everything open, with no click to do it.
+    static var opensAll = false
+}
+
 struct ColorRow: View {
     let title: Text
     @Binding var hex: String

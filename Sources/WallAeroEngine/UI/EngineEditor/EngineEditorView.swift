@@ -37,7 +37,7 @@ struct EngineEditorView: View {
             }
             .inspector(isPresented: showsInspector) {
                 EngineInspector(model: model)
-                    .inspectorColumnWidth(min: 300, ideal: 340, max: 440)
+                    .inspectorColumnWidth(min: 320, ideal: 360, max: 440)
                     .toolbar {
                         Spacer()
                         exportButton
@@ -62,7 +62,7 @@ struct EngineEditorView: View {
                     middle
                     if showsInspector.wrappedValue {
                         Divider()
-                        EngineInspector(model: model).frame(width: 340)
+                        EngineInspector(model: model).frame(width: 360)
                     }
                 }
             }

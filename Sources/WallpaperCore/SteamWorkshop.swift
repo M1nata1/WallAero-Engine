@@ -5,6 +5,7 @@ import Foundation
 /// getting an item's files takes an account: see `SteamCMD`.
 public enum SteamWorkshop {
     public static let appID = "431960"
+    public static let animeTag = "Anime"
 
     public struct Item: Identifiable, Hashable, Sendable {
         public let id: String
@@ -73,15 +74,54 @@ public enum SteamWorkshop {
         fileprivate static let tags = allCases.compactMap(\.tag)
     }
 
+    /// The tags a wallpaper can be looked for by, as Steam's own pages group them. The type, the
+    /// age rating and anime have controls of their own.
+    public static let tagCategories: [(name: String, tags: [String])] = [
+        ("Genre", ["Abstract", "Animal", "Cartoon", "CGI", "Cyberpunk", "Fantasy", "Game", "Girls", "Guys", "Landscape",
+                   "Medieval", "Memes", "MMD", "Music", "Nature", "Pixel art", "Relaxing", "Retro", "Sci-Fi", "Sports",
+                   "Technology", "Television", "Vehicle", "Unspecified"]),
+        ("Resolution", resolutionTags),
+        ("Miscellaneous", ["Approved", "Audio responsive", "3D", "Customizable", "Puppet Warp", "HDR", "Media Integration",
+                           "User Shortcut", "Video Texture", "Asset Pack"]),
+    ]
+
+    /// An item has one of these, so asking for two would find nothing.
+    private static let resolutionTags = [
+        "Standard Definition", "1280 x 720", "1366 x 768", "1920 x 1080", "2560 x 1440", "3840 x 2160",
+        "Ultrawide Standard Definition", "Ultrawide 2560 x 1080", "Ultrawide 3440 x 1440",
+        "Dual Standard Definition", "Dual 3840 x 1080", "Dual 5120 x 1440", "Dual 7680 x 2160",
+        "Triple Standard Definition", "Triple 4096 x 768", "Triple 5760 x 1080", "Triple 7680 x 1440", "Triple 11520 x 2160",
+        "Portrait Standard Definition", "Portrait 720 x 1280", "Portrait 1080 x 1920", "Portrait 1440 x 2560", "Portrait 2160 x 3840",
+        "Other resolution", "Dynamic resolution",
+    ]
+
     public struct Query: Equatable, Sendable {
         public var search = ""
         public var sort = Sort.popular
         public var kind = Kind.all
+        /// What an item has to have, all of it: Steam finds only what has every tag asked for.
+        public private(set) var tags: Set<String> = []
         /// Whether wallpapers rated for grown-ups are shown too. Steam shows them to anyone.
         public var includesMature = false
+        /// Whether anime is shown. There is a lot of it, and not everyone wants to see it.
+        public var includesAnime = true
         public var page = 1
 
         public init() {}
+
+        /// Takes the tags ticked now. A second resolution takes the place of the first.
+        public mutating func setTags(_ new: Set<String>) {
+            let resolutions = Set(SteamWorkshop.resolutionTags)
+            let added = new.subtracting(tags).intersection(resolutions)
+            tags = added.isEmpty ? new : new.subtracting(resolutions).union(added.prefix(1))
+        }
+
+        /// Back to what is asked for at first.
+        public mutating func resetTags() {
+            tags = []
+            includesAnime = true
+            includesMature = false
+        }
     }
 
     /// The page of a browser's listing for a query. A search goes by relevance, whatever the sort.
@@ -96,8 +136,11 @@ public enum SteamWorkshop {
         }
         var components = URLComponents(string: "https://steamcommunity.com/workshop/browse/")!
         components.queryItems = parameters.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
-        let tags = [query.kind.tag, query.includesMature ? nil : "Everyone"].compactMap { $0 }
+        let tags = [query.kind.tag, query.includesMature ? nil : "Everyone"].compactMap { $0 } + query.tags.sorted()
         components.queryItems! += tags.map { URLQueryItem(name: "requiredtags[]", value: $0) }
+        if !query.includesAnime {
+            components.queryItems!.append(URLQueryItem(name: "excludedtags[]", value: animeTag))
+        }
         return components.url!
     }
 
@@ -134,7 +177,11 @@ public enum SteamWorkshop {
             }
             let tags = (detail["tags"] as? [[String: Any]] ?? []).compactMap { $0["tag"] as? String }
             // A listing also links to items beside the ones asked for.
-            guard !tags.contains("Application"), query.includesMature || tags.contains("Everyone") else { return nil }
+            guard !tags.contains("Application"), query.includesMature || tags.contains("Everyone"),
+                  query.includesAnime || !tags.contains(animeTag)
+            else {
+                return nil
+            }
             let size = (detail["file_size"] as? Int64) ?? Int64(detail["file_size"] as? String ?? "") ?? 0
             // Twice the size of a tile, as Steam scales them for its own pages.
             let original = detail["preview_url"] as? String

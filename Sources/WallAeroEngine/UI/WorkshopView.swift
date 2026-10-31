@@ -19,6 +19,8 @@ struct WorkshopView: View {
             .onChange(of: store.query.sort) { _ in store.reload() }
             .onChange(of: store.query.kind) { _ in store.reload() }
             .onChange(of: store.query.includesMature) { _ in store.reload() }
+            .onChange(of: store.query.tags) { _ in store.reload() }
+            .onChange(of: store.query.includesAnime) { _ in store.reload() }
             .sheet(isPresented: $store.showsSignIn) {
                 WorkshopSignInView()
             }
@@ -40,7 +42,10 @@ struct WorkshopView: View {
             SearchField(text: $store.query.search, prompt: NSLocalizedString("Search the Workshop", comment: "Placeholder")) {
                 store.reload()
             }
-            .frame(minWidth: 160, maxWidth: 260)
+            .frame(minWidth: 130, maxWidth: 200)
+            TagFilterButton(groups: tagGroups, selection: tags, isOpen: $store.showsTagFilter, name: SteamWorkshop.name(ofTag:),
+                            top: AnyView(shown), filtersOnTop: (store.query.includesAnime ? 0 : 1) + (store.query.includesMature ? 1 : 0),
+                            reset: { store.query.resetTags() })
             Spacer(minLength: 0)
             Picker("Type:", selection: $store.query.kind) {
                 Text("All Types").tag(SteamWorkshop.Kind.all)
@@ -57,10 +62,34 @@ struct WorkshopView: View {
             }
             .labelsHidden()
             .fixedSize()
-            Toggle("Adult content", isOn: $store.query.includesMature)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 7)
+    }
+
+    /// What is in the list at all, above the tags: the first thing people look for there.
+    /// Ticked, it shows; unticked, it is gone.
+    private var shown: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("workshop.shows")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Toggle("Adult content", isOn: $store.query.includesMature)
+            Toggle(isOn: $store.query.includesAnime) {
+                Text(verbatim: SteamWorkshop.name(ofTag: SteamWorkshop.animeTag))
+            }
+        }
+        .toggleStyle(.checkbox)
+    }
+
+    private var tagGroups: [TagGroup] {
+        SteamWorkshop.tagCategories.map { category in
+            TagGroup(category: NSLocalizedString(category.name, comment: "A kind of Workshop tags"), tags: category.tags)
+        }
+    }
+
+    private var tags: Binding<Set<String>> {
+        Binding(get: { store.query.tags }, set: { store.query.setTags($0) })
     }
 
     private var footer: some View {
@@ -233,6 +262,13 @@ private struct WorkshopTile: View {
     }
 }
 
+extension SteamWorkshop {
+    /// What a tag of Steam's is called in the app's language. Steam itself only knows it in English.
+    static func name(ofTag tag: String) -> String {
+        NSLocalizedString("workshop.tag." + tag, value: tag, comment: "A tag of the Steam Workshop")
+    }
+}
+
 extension WorkshopStore.Download {
     var status: LocalizedStringKey {
         switch phase {
@@ -344,7 +380,7 @@ private struct WorkshopDetails: View {
                     if !shownTags.isEmpty {
                         FlowLayout {
                             ForEach(shownTags, id: \.self) { tag in
-                                Text(verbatim: tag)
+                                Text(verbatim: SteamWorkshop.name(ofTag: tag))
                                     .font(.caption)
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 3)

@@ -2855,6 +2855,42 @@ final class SteamWorkshopTests: XCTestCase {
         XCTAssertEqual(try SteamWorkshop.items(inDetails: data, query: all).map(\.id), ["1", "3"])
     }
 
+    func testTheTagsTickedAreAskedForAndOneResolutionStays() throws {
+        var query = SteamWorkshop.Query()
+        query.setTags(["Game", "Cyberpunk"])
+        query.setTags(query.tags.union(["1920 x 1080"]))
+        query.setTags(query.tags.union(["2560 x 1440"]))
+        XCTAssertEqual(query.tags, ["Game", "Cyberpunk", "2560 x 1440"])
+        query.setTags(query.tags.subtracting(["2560 x 1440"]))
+        XCTAssertEqual(query.tags, ["Game", "Cyberpunk"])
+
+        let url = try XCTUnwrap(URLComponents(url: SteamWorkshop.listingURL(for: query), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(url.queryItems?.filter { $0.name == "requiredtags[]" }.map(\.value), ["Everyone", "Cyberpunk", "Game"])
+    }
+
+    func testUntickedAnimeIsLeftOutAndResetGoesBack() throws {
+        var query = SteamWorkshop.Query()
+        XCTAssertTrue(query.includesAnime)
+        XCTAssertFalse(query.includesMature)
+        let excluded = { (query: SteamWorkshop.Query) in
+            URLComponents(url: SteamWorkshop.listingURL(for: query), resolvingAgainstBaseURL: false)?
+                .queryItems?.filter { $0.name == "excludedtags[]" }.map(\.value)
+        }
+        XCTAssertEqual(excluded(query), [])
+
+        query.includesAnime = false
+        XCTAssertEqual(excluded(query), ["Anime"])
+        let detail: [String: Any] = ["publishedfileid": "1", "result": 1, "consumer_app_id": 431960, "title": "T",
+                                     "tags": [["tag": "Everyone"], ["tag": "Anime"]]]
+        let data = try JSONSerialization.data(withJSONObject: ["response": ["publishedfiledetails": [detail]]])
+        XCTAssertTrue(try SteamWorkshop.items(inDetails: data, query: query).isEmpty)
+
+        query.includesMature = true
+        query.setTags(["Game"])
+        query.resetTags()
+        XCTAssertEqual(query, SteamWorkshop.Query())
+    }
+
     func testAnItemSaysWhatThePanelShows() throws {
         let detail: [String: Any] = ["publishedfileid": "1", "result": 1, "consumer_app_id": 431960, "title": "T", "file_size": "1",
                                      "preview_url": "https://example.com/p.gif", "tags": [["tag": "Everyone"]],

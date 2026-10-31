@@ -16,22 +16,7 @@ struct LibraryFilterBar: View {
         HStack(spacing: 12) {
             SearchField(text: $searchText)
                 .frame(minWidth: 130, maxWidth: 200)
-            Button {
-                showsTags.toggle()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "line.3.horizontal.decrease")
-                    // How many are ticked shows on the button, so a filter is not forgotten.
-                    Text("Tags") + Text(verbatim: selection.isEmpty ? "" : " · \(selection.count)")
-                    Image(systemName: "chevron.down")
-                        .font(.caption2.weight(.semibold))
-                }
-            }
-            .pressedButtonStyle(!selection.isEmpty)
-            .disabled(groups.isEmpty)
-            .popover(isPresented: $showsTags, arrowEdge: .bottom) {
-                TagChecklist(groups: groups, selection: $selection)
-            }
+            TagFilterButton(groups: groups, selection: $selection, isOpen: $showsTags)
             Spacer(minLength: 0)
             Picker("Type:", selection: $kind) {
                 Text("All Types").tag(MainWindowState.KindFilter.all)
@@ -55,16 +40,59 @@ struct LibraryFilterBar: View {
     }
 }
 
-/// The library's tags with a checkbox each, under the names of their categories. Of one
-/// category any ticked tag will do; of several categories a wallpaper needs one from each.
+/// The button that opens the tags to tick. `name` says what a tag is called on the screen.
+struct TagFilterButton: View {
+    let groups: [TagGroup]
+    @Binding var selection: Set<String>
+    @Binding var isOpen: Bool
+    var name: (String) -> String = { $0 }
+    /// What stands above the tags, and how many filters it holds on top of the ticked tags.
+    var top: AnyView?
+    var filtersOnTop = 0
+    /// Sets it all back; by default, unticks the tags.
+    var reset: (() -> Void)?
+
+    private var count: Int { selection.count + filtersOnTop }
+
+    var body: some View {
+        Button {
+            isOpen.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal.decrease")
+                // How many are ticked shows on the button, so a filter is not forgotten.
+                Text("Tags") + Text(verbatim: count == 0 ? "" : " · \(count)")
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+            }
+        }
+        .pressedButtonStyle(count > 0)
+        .fixedSize()
+        .disabled(groups.isEmpty)
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            TagChecklist(groups: groups, selection: $selection, name: name, top: top, canReset: count > 0, reset: reset)
+        }
+    }
+}
+
+/// Tags with a checkbox each, under the names of their categories. In the library, of one
+/// category any ticked tag will do, and of several a wallpaper needs one from each.
 struct TagChecklist: View {
     let groups: [TagGroup]
     @Binding var selection: Set<String>
+    var name: (String) -> String = { $0 }
+    var top: AnyView?
+    var canReset: Bool?
+    var reset: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 7) {
+                    if let top {
+                        top
+                            .padding(.bottom, 7)
+                    }
                     ForEach(groups) { group in
                         if groups.namesCategories {
                             group.title
@@ -74,7 +102,7 @@ struct TagChecklist: View {
                         }
                         ForEach(group.tags, id: \.self) { tag in
                             Toggle(isOn: isTicked(tag)) {
-                                Text(verbatim: tag)
+                                Text(verbatim: name(tag))
                             }
                             .toggleStyle(.checkbox)
                         }
@@ -86,9 +114,13 @@ struct TagChecklist: View {
             .frame(maxHeight: 360)
             Divider()
             Button("Reset") {
-                selection = []
+                if let reset {
+                    reset()
+                } else {
+                    selection = []
+                }
             }
-            .disabled(selection.isEmpty)
+            .disabled(!(canReset ?? !selection.isEmpty))
             .padding(10)
         }
         .frame(minWidth: 220)
