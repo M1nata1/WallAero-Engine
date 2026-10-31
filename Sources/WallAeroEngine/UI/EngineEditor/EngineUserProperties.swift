@@ -126,21 +126,47 @@ extension EngineEditorModel {
         )
     }
 
+    /// What an object's value follows: a setting, or one choice of a list being chosen.
+    struct Link: Hashable {
+        var name: String
+        var choice: String?
+    }
+
     /// The setting an object's value follows, if it follows one.
-    func link(_ id: Int, _ key: String) -> Binding<String?> {
+    func link(_ id: Int, _ key: String) -> Binding<Link?> {
         Binding(
-            get: { [weak self] in self?.document.object(id)?[key]?["user"]?.stringValue },
-            set: { [weak self] name in
+            get: { [weak self] in
+                guard let user = self?.document.object(id)?[key]?["user"] else { return nil }
+                if let name = user.stringValue { return Link(name: name) }
+                guard let name = user["name"]?.stringValue else { return nil }
+                return Link(name: name, choice: user["condition"]?.stringValue)
+            },
+            set: { [weak self] link in
                 self?.document.update(id) { object in
                     let plain = object[key]?.plain ?? .null
-                    if let name {
-                        object[key] = .object(["user": .string(name), "value": plain])
+                    if let link, let choice = link.choice {
+                        object[key] = .object(["user": .object(["name": .string(link.name), "condition": .string(choice)]), "value": plain])
+                    } else if let link {
+                        object[key] = .object(["user": .string(link.name), "value": plain])
                     } else {
                         object[key] = plain.isNull ? nil : plain
                     }
                 }
             }
         )
+    }
+
+    /// The choices of a list setting, as label and value.
+    func userPropertyOptions(_ name: String) -> [(label: String, value: String)] {
+        (document.project["general"]?["properties"]?[name]?["options"]?.arrayValue ?? []).map { option in
+            (option["label"]?.stringValue ?? "", option["value"]?.stringValue ?? option["value"]?.numberValue.map { String(format: "%g", $0) } ?? "")
+        }
+    }
+
+    func setUserPropertyOptions(_ name: String, _ options: [(label: String, value: String)]) {
+        document.project["general"]?["properties"]?[name]?["options"] = .array(options.map {
+            .object(["label": .string($0.label), "value": .string($0.value)])
+        })
     }
 }
 
@@ -181,12 +207,11 @@ struct EngineUserProperties: View {
                             }
                         ))
                     case .combo:
-                        Text("Options are named in the project file.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                        choices(property.id)
                     case .textinput:
                         TextField("Value", text: string(property.id, "value"))
                     }
+                    condition(property.id)
                     Button("Remove Setting", role: .destructive) { model.removeUserProperty(property.id) }
                 }
             }
@@ -202,6 +227,97 @@ struct EngineUserProperties: View {
         } header: {
             Text("Wallpaper Settings")
         }
+    }
+
+    /// The choices of a list, each with what it stands for.
+    @ViewBuilder
+    private func choices(_ name: String) -> some View {
+        let options = model.userPropertyOptions(name)
+        ForEach(options.indices, id: \.self) { index in
+            HStack {
+                TextField("Choice", text: Binding(
+                    get: { index < options.count ? options[index].label : "" },
+                    set: { new in
+                        var list = model.userPropertyOptions(name)
+                        guard index < list.count else { return }
+                        list[index].label = new
+                        model.setUserPropertyOptions(name, list)
+                    }
+                ))
+                .labelsHidden()
+                TextField("Value", text: Binding(
+                    get: { index < options.count ? options[index].value : "" },
+                    set: { new in
+                        var list = model.userPropertyOptions(name)
+                        guard index < list.count else { return }
+                        list[index].value = new
+                        model.setUserPropertyOptions(name, list)
+                    }
+                ))
+                .labelsHidden()
+                .frame(width: 60)
+                Button {
+                    var list = model.userPropertyOptions(name)
+                    list.remove(at: index)
+                    model.setUserPropertyOptions(name, list)
+                } label: {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.borderless)
+                .disabled(options.count < 2)
+                .help("Remove the choice")
+            }
+        }
+        Button("Add Choice") {
+            var list = model.userPropertyOptions(name)
+            var number = list.count + 1
+            while list.contains(where: { $0.value == String(number) }) { number += 1 }
+            list.append((String(format: NSLocalizedString("Choice %d", comment: "A new choice of a list setting"), number), String(number)))
+            model.setUserPropertyOptions(name, list)
+        }
+    }
+
+    /// When the setting is shown, written as Wallpaper Engine writes it.
+    private func condition(_ name: String) -> some View {
+        let text = Binding(
+            get: { model.userPropertyField(name, "condition").wrappedValue?.stringValue ?? "" },
+            set: { model.userPropertyField(name, "condition").wrappedValue = $0.isEmpty ? nil : .string($0) }
+        )
+        return VStack(alignment: .leading, spacing: 4) {
+            LabeledContent("Shown When") {
+                TextField("Shown When", text: text, prompt: Text(verbatim: "name.value == 1"))
+                    .labelsHidden()
+                    .font(.system(.body, design: .monospaced))
+                    .multilineTextAlignment(.trailing)
+            }
+            if !WallpaperEngineCondition.isValid(text.wrappedValue) {
+                Text("This is not a condition.")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+            let others = model.userProperties.filter { $0.id != name && ($0.kind == .bool || $0.kind == .combo) }
+            if !others.isEmpty {
+                Menu("Choose a Condition") {
+                    Button("Always") { text.wrappedValue = "" }
+                    ForEach(others) { other in
+                        if other.kind == .bool {
+                            Button(model.userPropertyTitle(other.id)) { text.wrappedValue = "\(other.id).value" }
+                        } else {
+                            Menu(model.userPropertyTitle(other.id)) {
+                                ForEach(model.userPropertyOptions(other.id), id: \.value) { option in
+                                    Button(option.label) { text.wrappedValue = "\(other.id).value == \(Self.literal(option.value))" }
+                                }
+                            }
+                        }
+                    }
+                }
+                .fixedSize()
+            }
+        }
+    }
+
+    private static func literal(_ value: String) -> String {
+        Double(value) != nil ? value : "'\(value)'"
     }
 
     private func string(_ name: String, _ key: String) -> Binding<String> {
@@ -243,7 +359,7 @@ struct EngineObjectLinks: View {
         let properties = model.userProperties
         if !properties.isEmpty {
             Section("Follows a Setting") {
-                picker("Visible", key: "visible", kinds: [.bool], properties: properties)
+                visibility(properties)
                 if [.image, .text, .solid, .composition].contains(model.kind(of: id)) {
                     picker("Opacity", key: "alpha", kinds: [.slider], properties: properties)
                     picker("Color", key: "color", kinds: [.color], properties: properties)
@@ -258,9 +374,26 @@ struct EngineObjectLinks: View {
     private func picker(_ title: LocalizedStringKey, key: String, kinds: [EngineEditorModel.UserProperty.Kind],
                         properties: [EngineEditorModel.UserProperty]) -> some View {
         Picker(title, selection: model.link(id, key)) {
-            Text("None").tag(String?.none)
+            Text("None").tag(EngineEditorModel.Link?.none)
             ForEach(properties.filter { kinds.contains($0.kind) }) { property in
-                Text(verbatim: model.userPropertyTitle(property.id)).tag(Optional(property.id))
+                Text(verbatim: model.userPropertyTitle(property.id)).tag(Optional(EngineEditorModel.Link(name: property.id)))
+            }
+        }
+    }
+
+    /// An object may also be shown for one choice of a list, which is how Wallpaper Engine has one
+    /// of several objects shown.
+    private func visibility(_ properties: [EngineEditorModel.UserProperty]) -> some View {
+        Picker("Visible", selection: model.link(id, "visible")) {
+            Text("None").tag(EngineEditorModel.Link?.none)
+            ForEach(properties.filter { $0.kind == .bool }) { property in
+                Text(verbatim: model.userPropertyTitle(property.id)).tag(Optional(EngineEditorModel.Link(name: property.id)))
+            }
+            ForEach(properties.filter { $0.kind == .combo }) { property in
+                ForEach(model.userPropertyOptions(property.id), id: \.value) { option in
+                    Text(verbatim: "\(model.userPropertyTitle(property.id)): \(option.label)")
+                        .tag(Optional(EngineEditorModel.Link(name: property.id, choice: option.value)))
+                }
             }
         }
     }

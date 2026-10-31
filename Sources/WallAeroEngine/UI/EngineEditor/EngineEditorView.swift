@@ -36,7 +36,7 @@ struct EngineEditorView: View {
                     .toolbar { toolbarContent }
             }
             .inspector(isPresented: showsInspector) {
-                EngineInspector(model: model)
+                inspector
                     .inspectorColumnWidth(min: 320, ideal: 360, max: 440)
                     .toolbar {
                         Spacer()
@@ -62,17 +62,28 @@ struct EngineEditorView: View {
                     middle
                     if showsInspector.wrappedValue {
                         Divider()
-                        EngineInspector(model: model).frame(width: 360)
+                        inspector.frame(width: 360)
                     }
                 }
             }
         }
     }
 
-    /// While a puppet warp is edited the layers stay in view but are not to be changed.
+    /// While a puppet warp is edited or a mask painted, the layers stay in view but are not to
+    /// be changed.
     private var hierarchy: some View {
         EngineHierarchy(model: model)
-            .disabled(model.puppetObject != nil)
+            .disabled(model.puppetObject != nil || model.painting != nil)
+    }
+
+    /// The properties, or the brush while a mask is painted.
+    @ViewBuilder
+    private var inspector: some View {
+        if let painting = model.painting {
+            EngineBrushPanel(model: model, paint: painting)
+        } else {
+            EngineInspector(model: model)
+        }
     }
 
     /// The puppet warp has a panel of its own, so it takes the place of the properties too.
@@ -96,7 +107,7 @@ struct EngineEditorView: View {
         let size = model.document.size
         return EngineEditorPreview(model: model, controller: preview, aspectRatio: size.height > 0 ? size.width / size.height : 16 / 9)
             .overlay(alignment: .topLeading) {
-                if preview.drawsNatively {
+                if preview.drawsNatively, model.painting == nil {
                     EngineToolStrip(model: model)
                 }
             }
@@ -105,6 +116,10 @@ struct EngineEditorView: View {
                 VStack(spacing: 0) {
                     if model.showsTimeline {
                         EngineTimelineView(model: model)
+                        Divider()
+                    }
+                    if model.showsScripts {
+                        EngineScriptPanel(model: model)
                         Divider()
                     }
                     statusLine
@@ -116,7 +131,7 @@ struct EngineEditorView: View {
     private var statusLine: some View {
         HStack(spacing: 12) {
             if preview.drawsNatively {
-                Text(model.tool.hint)
+                Text(model.painting == nil ? model.tool.hint : "Paint over the object. Control and drag changes the size, Shift and drag the opacity.")
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -127,6 +142,11 @@ struct EngineEditorView: View {
                 }
                 .toggleStyle(.button)
                 .help("Timeline (T)")
+                Toggle(isOn: $model.showsScripts) {
+                    Label("Scripts", systemImage: "curlybraces")
+                }
+                .toggleStyle(.button)
+                .help("Scripts of the selection")
             }
             Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
                 .foregroundStyle(.secondary)
@@ -192,7 +212,7 @@ struct EngineEditorView: View {
             Label("Add", systemImage: "plus")
         }
         .labelStyle(.titleAndIcon)
-        .disabled(model.puppetObject != nil)
+        .disabled(model.puppetObject != nil || model.painting != nil)
         .help("Add an object to the scene")
     }
 
@@ -201,7 +221,7 @@ struct EngineEditorView: View {
             Label("Undo", systemImage: "arrow.uturn.backward")
         }
         .labelStyle(.iconOnly)
-        .disabled(!model.canUndo || model.puppetObject != nil)
+        .disabled((!model.canUndo && !model.showsScripts) || model.puppetObject != nil)
         .keyboardShortcut("z", modifiers: .command)
         .help("Undo")
     }
@@ -211,7 +231,7 @@ struct EngineEditorView: View {
             Label("Redo", systemImage: "arrow.uturn.forward")
         }
         .labelStyle(.iconOnly)
-        .disabled(!model.canRedo || model.puppetObject != nil)
+        .disabled((!model.canRedo && !model.showsScripts) || model.puppetObject != nil)
         .keyboardShortcut("z", modifiers: [.command, .shift])
         .help("Redo")
     }

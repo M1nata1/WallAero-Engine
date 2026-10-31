@@ -1,5 +1,6 @@
 import AppKit
 import MetalScene
+import WallpaperCore
 
 /// The editor's hold on a scene the app draws itself: over the scene, the frame of the selected
 /// object with handles to move, scale and turn it, as `SceneEditorScript` gives them on the
@@ -19,12 +20,31 @@ final class EngineEditorOverlay: NSView {
     var onZoom: ((CGFloat, CGSize) -> Void)?
     /// The scene is to be moved.
     var onPan: ((CGSize) -> Void)?
+    /// The menu of a point of the scene.
+    var onMenu: ((CGPoint) -> NSMenu?)?
     /// Where an object stands now if an animation has it elsewhere than the scene says.
     var animatedPlace: ((Int, String) -> Double?)?
     /// What a drag over the scene does.
     var tool = EngineEditorModel.Tool.multi {
         didSet { needsDisplay = true }
     }
+
+    /// The mask painted over the scene, which takes the mouse for as long as it is.
+    var painting: EngineMaskPaint? {
+        didSet {
+            maskPicture = nil
+            paintGesture = nil
+            window?.invalidateCursorRects(for: self)
+            needsDisplay = true
+        }
+    }
+    private var brushAt: CGPoint?
+    private var gestureKeys = NSEvent.ModifierFlags()
+    /// A press with Option moves the view: every other drag paints.
+    private var paintPans = false
+    private var maskPicture: CGImage?
+    /// The brush's settings as a press with a modifier key took hold of them, as in Wallpaper Engine.
+    private var paintGesture: (from: CGPoint, size: Double, opacity: Double, hardness: Double)?
 
     /// The selected object, by its number.
     private(set) var object: Int?
@@ -33,6 +53,7 @@ final class EngineEditorOverlay: NSView {
     /// What the editor changed of the scene and has not yet been written: `{"objects": [...]}`.
     private(set) var changes: [String: Any] = [:]
     private var outline: (middle: CGPoint, corners: [CGPoint]?, visible: Bool)?
+    private var objectSize: CGSize?
     private var drag: Drag?
     private var follow: Timer?
     private var reported: [Int: [String: Double]] = [:]
@@ -118,6 +139,7 @@ final class EngineEditorOverlay: NSView {
             outline = nil
             return
         }
+        objectSize = (found["size"] as? [NSNumber]).flatMap { $0.count >= 2 ? CGSize(width: $0[0].doubleValue, height: $0[1].doubleValue) : nil }
         let corners = (found["corners"] as? [[NSNumber]])?.compactMap { $0.count >= 2 ? CGPoint(x: $0[0].doubleValue, y: $0[1].doubleValue) : nil }
         outline = (CGPoint(x: middle[0].doubleValue, y: middle[1].doubleValue), corners?.count == 4 ? corners : nil,
                    (found["visible"] as? NSNumber)?.boolValue ?? true)
@@ -147,6 +169,10 @@ final class EngineEditorOverlay: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        if let painting {
+            drawPainting(painting)
+            return
+        }
         guard let outline, let shape else { return }
         let accent = NSColor.controlAccentColor
         let transform = NSAffineTransform()
@@ -187,15 +213,33 @@ final class EngineEditorOverlay: NSView {
     override func mouseMoved(with event: NSEvent) {
         let at = point(event)
         player?.pointer("move", x: at.x, y: at.y)
+        if painting != nil {
+            brushAt = at
+            needsDisplay = true
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
         player?.pointer("leave", x: 0, y: 0)
+        brushAt = nil
+        if painting != nil { needsDisplay = true }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        painting == nil ? onMenu?(point(event)) : nil
+    }
+
+    override func resetCursorRects() {
+        if painting != nil { addCursorRect(bounds, cursor: .crosshair) }
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let at = point(event)
+        if let painting {
+            pressBrush(painting, at, event)
+            return
+        }
         player?.pointer("down", x: at.x, y: at.y)
         if object != nil {
             // These two take hold anywhere; a click without a drag picks what is under it.
@@ -230,6 +274,14 @@ final class EngineEditorOverlay: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         let at = point(event)
+        if let painting {
+            if paintPans {
+                onPan?(CGSize(width: event.deltaX, height: event.deltaY))
+            } else {
+                dragBrush(painting, at)
+            }
+            return
+        }
         guard let drag, let object else {
             player?.pointer("move", x: at.x, y: at.y)
             return
@@ -268,6 +320,12 @@ final class EngineEditorOverlay: NSView {
 
     override func mouseUp(with event: NSEvent) {
         let at = point(event)
+        if let painting {
+            paintGesture = nil
+            paintPans = false
+            painting.endStroke()
+            return
+        }
         player?.pointer("up", x: at.x, y: at.y)
         guard let drag else { return }
         self.drag = nil
@@ -281,6 +339,159 @@ final class EngineEditorOverlay: NSView {
             self?.flushReports()
             self?.onCommit?()
         }
+    }
+
+    // MARK: - The mask
+
+    /// A point of this view as a point of the mask.
+    private func maskPoint(_ at: CGPoint, _ mask: WallpaperEngineMask) -> (x: Double, y: Double)? {
+        guard let c = outline?.corners else { return nil }
+        let across = CGPoint(x: c[1].x - c[0].x, y: c[1].y - c[0].y), down = CGPoint(x: c[3].x - c[0].x, y: c[3].y - c[0].y)
+        let area = across.x * down.y - across.y * down.x
+        guard abs(area) > 1e-6 else { return nil }
+        let x = at.x - c[0].x, y = at.y - c[0].y
+        return ((x * down.y - y * down.x) / area * Double(mask.width), (across.x * y - across.y * x) / area * Double(mask.height))
+    }
+
+    /// How far a pixel of the mask reaches in pixels of the scene, each way.
+    private func sceneScale(_ mask: WallpaperEngineMask) -> (x: Double, y: Double) {
+        guard let object, let objectSize else { return (1, 1) }
+        return (max(1e-3, abs(value(object, "scaleX"))) * objectSize.width / Double(mask.width),
+                max(1e-3, abs(value(object, "scaleY"))) * objectSize.height / Double(mask.height))
+    }
+
+    private func dab(_ painting: EngineMaskPaint, _ at: CGPoint) {
+        guard let place = maskPoint(at, painting.mask) else { return }
+        let scale = sceneScale(painting.mask)
+        painting.paint(atX: place.x, y: place.y, radiusX: painting.size / 2 / scale.x, radiusY: painting.size / 2 / scale.y)
+    }
+
+    private func pressBrush(_ painting: EngineMaskPaint, _ at: CGPoint, _ event: NSEvent) {
+        if event.modifierFlags.contains(.option) {
+            paintPans = true
+            return
+        }
+        if !event.modifierFlags.intersection([.control, .shift]).isEmpty {
+            paintGesture = (at, painting.size, painting.opacity, painting.hardness)
+            gestureKeys = event.modifierFlags
+            return
+        }
+        if painting.isPicking {
+            if let place = maskPoint(at, painting.mask) { painting.pickValue(atX: place.x, y: place.y) }
+            return
+        }
+        painting.startStroke()
+        dab(painting, at)
+    }
+
+    private func dragBrush(_ painting: EngineMaskPaint, _ at: CGPoint) {
+        brushAt = at
+        needsDisplay = true
+        guard let gesture = paintGesture else {
+            dab(painting, at)
+            return
+        }
+        let x = at.x - gesture.from.x, y = at.y - gesture.from.y
+        let control = gestureKeys.contains(.control), shift = gestureKeys.contains(.shift)
+        if control, shift {
+            painting.hardness = min(100, max(0, (gesture.hardness + 0.25 * x).rounded()))
+        } else if control {
+            painting.size = min(2000, max(1, (gesture.size + x).rounded()))
+            painting.hardness = min(100, max(0, (gesture.hardness + 0.25 * y).rounded()))
+        } else {
+            painting.opacity = min(100, max(1, (gesture.opacity + 0.25 * x).rounded()))
+        }
+    }
+
+    /// The mask changed, or the way it is shown.
+    func maskChanged() {
+        maskPicture = nil
+        needsDisplay = true
+    }
+
+    /// Arrows over the object, the way the picture moves and as far as it does.
+    private func drawDirections(_ mask: WallpaperEngineMask, _ c: [CGPoint]) {
+        let across = CGPoint(x: c[1].x - c[0].x, y: c[1].y - c[0].y), down = CGPoint(x: c[3].x - c[0].x, y: c[3].y - c[0].y)
+        let gap: CGFloat = 26
+        let columns = max(1, Int(hypot(across.x, across.y) / gap)), rows = max(1, Int(hypot(down.x, down.y) / gap))
+        let arrows = NSBezierPath()
+        for row in 0..<rows {
+            for column in 0..<columns {
+                let u = (Double(column) + 0.5) / Double(columns), v = (Double(row) + 0.5) / Double(rows)
+                let flow = mask.flow(atX: u * Double(mask.width), y: v * Double(mask.height))
+                let strength = min(1, hypot(flow.x, flow.y))
+                guard strength > 0.03 else { continue }
+                let from = CGPoint(x: c[0].x + across.x * u + down.x * v, y: c[0].y + across.y * u + down.y * v)
+                // Along the object's own sides, which may be turned.
+                let wayX = (across.x * flow.x + down.x * flow.y), wayY = (across.y * flow.x + down.y * flow.y)
+                let length = max(1e-6, hypot(wayX, wayY)), reach = gap * 0.8 * strength
+                let to = CGPoint(x: from.x + wayX / length * reach, y: from.y + wayY / length * reach)
+                let turn = atan2(to.y - from.y, to.x - from.x), wing = min(6, reach * 0.45)
+                arrows.move(to: from)
+                arrows.line(to: to)
+                arrows.line(to: CGPoint(x: to.x - wing * cos(turn - 0.5), y: to.y - wing * sin(turn - 0.5)))
+                arrows.move(to: to)
+                arrows.line(to: CGPoint(x: to.x - wing * cos(turn + 0.5), y: to.y - wing * sin(turn + 0.5)))
+            }
+        }
+        NSColor.black.withAlphaComponent(0.55).setStroke()
+        arrows.lineWidth = 3
+        arrows.stroke()
+        NSColor.white.setStroke()
+        arrows.lineWidth = 1.25
+        arrows.stroke()
+    }
+
+    private func drawPainting(_ painting: EngineMaskPaint) {
+        guard let context = NSGraphicsContext.current?.cgContext, let c = outline?.corners else { return }
+        let accent = NSColor.controlAccentColor
+        if painting.showsMask {
+            let mask = painting.mask
+            if painting.target.mask.isFlow {
+                drawDirections(mask, c)
+            } else {
+                if maskPicture == nil, let provider = CGDataProvider(data: Data(mask.pixels) as CFData) {
+                    maskPicture = CGImage(width: mask.width, height: mask.height, bitsPerComponent: 8, bitsPerPixel: 8 * mask.channels,
+                                          bytesPerRow: mask.width * mask.channels,
+                                          space: mask.channels == 3 ? CGColorSpaceCreateDeviceRGB() : CGColorSpaceCreateDeviceGray(),
+                                          bitmapInfo: CGBitmapInfo(), provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+                }
+                if let maskPicture {
+                    context.saveGState()
+                    // A picture stands with its top at 1, and the view counts downwards.
+                    context.concatenate(CGAffineTransform(a: c[1].x - c[0].x, b: c[1].y - c[0].y, c: c[0].x - c[3].x, d: c[0].y - c[3].y, tx: c[3].x, ty: c[3].y))
+                    let whole = CGRect(x: 0, y: 0, width: 1, height: 1)
+                    if mask.channels == 3 {
+                        context.setAlpha(painting.maskOpacity / 100)
+                        context.draw(maskPicture, in: whole)
+                    } else {
+                        context.clip(to: whole, mask: maskPicture)
+                        context.setFillColor(accent.withAlphaComponent(painting.maskOpacity / 100).cgColor)
+                        context.fill(whole)
+                    }
+                    context.restoreGState()
+                }
+            }
+        }
+        let frame = NSBezierPath()
+        frame.move(to: c[0])
+        c.dropFirst().forEach(frame.line(to:))
+        frame.close()
+        frame.lineWidth = 1
+        accent.withAlphaComponent(0.6).setStroke()
+        frame.stroke()
+        guard let brushAt, !painting.isPicking else { return }
+        let scale = sceneScale(painting.mask)
+        let wide = painting.size / scale.x / Double(painting.mask.width) * hypot(c[1].x - c[0].x, c[1].y - c[0].y)
+        let high = painting.size / scale.y / Double(painting.mask.height) * hypot(c[3].x - c[0].x, c[3].y - c[0].y)
+        let ring = NSBezierPath(ovalIn: NSRect(x: -wide / 2, y: -high / 2, width: wide, height: high))
+        let transform = NSAffineTransform()
+        transform.translateX(by: brushAt.x, yBy: brushAt.y)
+        transform.rotate(byRadians: atan2(c[1].y - c[0].y, c[1].x - c[0].x))
+        ring.transform(using: transform as AffineTransform)
+        ring.lineWidth = 1.5
+        accent.setStroke()
+        ring.stroke()
     }
 
     // MARK: - The view
