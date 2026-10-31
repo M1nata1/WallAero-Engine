@@ -21,9 +21,20 @@ final class MainWindowState: ObservableObject {
         case general
     }
 
+    /// The type the library is narrowed down to. A scene and a web page are both web wallpapers
+    /// to the library, so this tells them apart where `Wallpaper.Kind` does not.
+    enum KindFilter: String {
+        case all
+        case scene
+        case video
+        case web
+        case image
+    }
+
     /// The width of the settings at the side of the window, in points.
     static let settingsWidth: CGFloat = 420
     private static let showsSettingsKey = "showsSettings"
+    private static let libraryOrderKey = "libraryOrder"
     private let defaults: UserDefaults?
 
     /// What a command of the menu asks of the library, which takes it and lets it go.
@@ -56,6 +67,12 @@ final class MainWindowState: ObservableObject {
     /// outlives the window.
     @Published var searchText = ""
     @Published var selectedTags: Set<String> = []
+    /// The type the library is narrowed down to, which does not outlive the window either.
+    @Published var kindFilter = KindFilter.all
+    /// The order of the library, kept between launches.
+    @Published var libraryOrder: WallpaperOrder {
+        didSet { defaults?.set(libraryOrder.rawValue, forKey: Self.libraryOrderKey) }
+    }
     /// Whether the list of tags to tick is dropped down.
     @Published var showsTagFilter = false
     @Published var showsSettings: Bool {
@@ -70,6 +87,7 @@ final class MainWindowState: ObservableObject {
         self.defaults = defaults
         // Until the user hides them, the settings are there, showing the wallpaper's own.
         showsSettings = defaults?.object(forKey: Self.showsSettingsKey) as? Bool ?? true
+        libraryOrder = defaults?.string(forKey: Self.libraryOrderKey).flatMap(WallpaperOrder.init(rawValue:)) ?? .newest
     }
 
     /// The window opens the way it was at first, whatever part of it was left open.
@@ -78,6 +96,7 @@ final class MainWindowState: ObservableObject {
         hasOpenedWorkshop = false
         searchText = ""
         selectedTags = []
+        kindFilter = .all
         showsTagFilter = false
         settingsTab = .wallpaper
     }
@@ -157,6 +176,14 @@ final class WindowManager: NSObject, NSWindowDelegate {
         showLibrary()
         state.settingsTab = .general
         state.showsSettings = true
+    }
+
+    /// Shows or hides the settings at the side. They belong to the library, so from the Workshop
+    /// this goes to the library and opens them.
+    func toggleSettingsPanel() {
+        let wasInWorkshop = state.section == .workshop
+        showLibrary()
+        state.showsSettings = wasInWorkshop || !state.showsSettings
     }
 
     /// Opens the main window with the cursor in the search field of the part it shows.

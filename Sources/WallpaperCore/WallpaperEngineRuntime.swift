@@ -1203,11 +1203,13 @@ public enum WallpaperEngineRuntime {
       //   { c0: [{ frame, value, front: { enabled, magic, x, y }, back: { enabled, magic, x, y } }, …],
       //     c1: …, options: { fps, length, mode, wraploop }, relative }
       //
-      // A handle says how the curve leaves or reaches its moment: by how much the curve has moved
-      // on, in frames and in value, where the handle ends. A handle marked `magic` is left to the
-      // player: the curve passes its moment smoothly, level where the value turns back. With
-      // `wraploop` the curve goes on from its last moment to its first, one length later, so that
-      // a loop has no jump. With `relative` the numbers are counted from what the scene says.
+      // A handle says where a curve leaving or reaching its moment is drawn towards, as Wallpaper
+      // Engine's own editor draws it: across, in halves of the way to the moment on that side, so
+      // from 0 to 2; up and down, in the value's own numbers. A handle marked `magic` is one that
+      // editor works out when moments change; what it worked out is written like any other. With
+      // `wraploop` the curve goes on from its last moment to its first, one length later,
+      // arriving as the first leaves, so that a loop has no jump. With `relative` the numbers are
+      // counted from what the scene says.
       function curveOf(animation) {
         if (!animation || typeof animation !== 'object') return null;
         var channels = [];
@@ -1217,7 +1219,7 @@ public enum WallpaperEngineRuntime {
           var keys = animation[name].filter(function (each) { return each && isFinite(Number(each.frame)) && isFinite(Number(each.value)); })
             .map(function (each) {
               function handle(said) {
-                return said && said.enabled ? { x: Number(said.x) || 0, y: Number(said.y) || 0, magic: said.magic === true } : null;
+                return said && said.enabled ? { x: Number(said.x) || 0, y: Number(said.y) || 0 } : null;
               }
               return { frame: Number(each.frame), value: Number(each.value), front: handle(each.front), back: handle(each.back) };
             })
@@ -1239,16 +1241,8 @@ public enum WallpaperEngineRuntime {
           if (other) return other;
           if (!wraps) return null;
           other = by > 0 ? keys[0] : keys[keys.length - 1];
-          return { frame: other.frame + by * length, value: other.value, front: other.front, back: other.back };
-        }
-
-        // How steeply a curve left to the player passes a moment: as the line between the moments
-        // on both sides of it runs, and level where the value turns back or the curve ends.
-        function slope(keys, index) {
-          var here = keys[index], before = beside(keys, index, -1), after = beside(keys, index, 1);
-          if (!before || !after || after.frame === before.frame) return 0;
-          if ((here.value - before.value) * (after.value - here.value) <= 0) return 0;
-          return (after.value - before.value) / (after.frame - before.frame);
+          var arrival = by > 0 && other.front ? { x: -other.front.x, y: -other.front.y } : other.back;
+          return { frame: other.frame + by * length, value: other.value, front: other.front, back: arrival };
         }
 
         function along(first, second, third, fourth, t) {
@@ -1256,20 +1250,20 @@ public enum WallpaperEngineRuntime {
           return rest * rest * rest * first + 3 * rest * rest * t * second + 3 * rest * t * t * third + t * t * t * fourth;
         }
 
-        // The value between two moments; `fromIndex` and `toIndex` say which of the curve's they are.
-        function span(keys, from, to, fromIndex, toIndex, frame) {
+        // The value between two moments.
+        function span(from, to, frame) {
           var wide = to.frame - from.frame;
           if (!(wide > 0)) return to.value;
           if (!from.front && !to.back) return from.value + (to.value - from.value) * (frame - from.frame) / wide;
           // A curve drawn with two handles; the moment along it is looked for, then its height.
           var x1 = from.frame, y1 = from.value, x2 = to.frame, y2 = to.value;
           if (from.front) {
-            x1 += from.front.magic ? wide / 3 : Math.max(0, Math.min(wide, from.front.x));
-            y1 += from.front.magic ? slope(keys, fromIndex) * wide / 3 : from.front.y;
+            x1 += Math.max(0, Math.min(2, from.front.x)) * wide / 2;
+            y1 += from.front.y;
           }
           if (to.back) {
-            x2 += to.back.magic ? -wide / 3 : Math.max(-wide, Math.min(0, to.back.x));
-            y2 += to.back.magic ? -slope(keys, toIndex) * wide / 3 : to.back.y;
+            x2 += Math.max(-2, Math.min(0, to.back.x)) * wide / 2;
+            y2 += to.back.y;
           }
           var low = 0, high = 1;
           for (var step = 0; step < 24; step++) {
@@ -1284,15 +1278,15 @@ public enum WallpaperEngineRuntime {
           var last = keys.length - 1;
           if (frame <= keys[0].frame) {
             var before = beside(keys, 0, -1);
-            return before && frame < keys[0].frame ? span(keys, before, keys[0], last, 0, frame) : keys[0].value;
+            return before && frame < keys[0].frame ? span(before, keys[0], frame) : keys[0].value;
           }
           if (frame >= keys[last].frame) {
             var after = beside(keys, last, 1);
-            return after && frame > keys[last].frame ? span(keys, keys[last], after, last, 0, frame) : keys[last].value;
+            return after && frame > keys[last].frame ? span(keys[last], after, frame) : keys[last].value;
           }
           var index = 1;
           while (keys[index].frame < frame) index++;
-          return span(keys, keys[index - 1], keys[index], index - 1, index, frame);
+          return span(keys[index - 1], keys[index], frame);
         }
 
         // The numbers at a moment, in seconds since the scene began; a number the animation
@@ -1323,6 +1317,9 @@ public enum WallpaperEngineRuntime {
         valueAt.rate = rate;
         valueAt.frames = length;
         valueAt.follows = options.parent && typeof options.parent === 'object' && typeof options.parent.key === 'string' ? options.parent.key : '';
+        valueAt.events = (Array.isArray(options.events) ? options.events : [])
+          .filter(function (event) { return event && typeof event.name === 'string' && isFinite(Number(event.frame)); })
+          .map(function (event) { return { name: event.name, frame: Number(event.frame) }; });
         return valueAt;
       }
 
@@ -1806,7 +1803,8 @@ public enum WallpaperEngineRuntime {
       // it is called.
       var EVENTS = ['init', 'update', 'destroy', 'resizeScreen', 'applyUserProperties', 'applyGeneralSettings',
                     'cursorEnter', 'cursorLeave', 'cursorMove', 'cursorDown', 'cursorUp', 'cursorClick',
-                    'mediaStatusChanged', 'mediaPropertiesChanged', 'mediaThumbnailChanged', 'mediaPlaybackChanged', 'mediaTimelineChanged'];
+                    'mediaStatusChanged', 'mediaPropertiesChanged', 'mediaThumbnailChanged', 'mediaPlaybackChanged', 'mediaTimelineChanged',
+                    'animationEvent'];
       var KEPT_AWAY = ['window', 'document', 'globalThis', 'self', 'top', 'parent', 'frames', 'opener', 'fetch', 'XMLHttpRequest',
                        'WebSocket', 'EventSource', 'Worker', 'navigator', 'location', 'history', 'indexedDB', 'sessionStorage',
                        'caches', 'eval', 'Function', 'open', 'postMessage', 'webkit'];
@@ -4067,6 +4065,7 @@ public enum WallpaperEngineRuntime {
 
         var things = [];         // everything of the scene that has a place: pictures, texts, particles
         var motions = [];        // the animations of values, each with how far it has played
+        var timelineAt = null;   // the moment the editor's timeline shows, in seconds, while it does
         var scripts = [];        // the scripts that are running
         var timers = [];         // what the scripts asked to be called later
         var shared = {};         // what the scripts keep for one another
@@ -4103,18 +4102,40 @@ public enum WallpaperEngineRuntime {
           // An animation plays from the scene's start, or waits for a script to play it; `at` is
           // how far it has played, in seconds. One that follows another plays as that one does.
           // Until one that waits has been played, the value stays as the scene gives it.
-          var motion = curve ? { curve: curve, called: curve.called, at: 0, playing: !curve.startsPaused, started: !curve.startsPaused,
-                                 speed: 1, leader: null } : null;
-          if (motion) motions.push(motion);
+          function motionOf(made) {
+            var result = { curve: made, called: made.called, at: 0, playing: !made.startsPaused, started: !made.startsPaused,
+                           speed: 1, leader: null, owner: owner };
+            motions.push(result);
+            return result;
+          }
+          var motion = curve ? motionOf(curve) : null;
           // `bound`: a setting of the wallpaper stands behind it.
           var value = { raw: raw, changes: !!curve, motion: motion, script: script, bound: !!(behind && behind.user !== undefined && behind.user !== null) };
           value.now = base();
           if (script) script.value = value;
+          // The editor has changed what the scene says: the animation behind it may be another.
+          value.renew = function () {
+            var said = value.raw && typeof value.raw === 'object' && !Array.isArray(value.raw) ? value.raw : null;
+            var next = said ? curveOf(said.animation) : null;
+            if (next && motion) {
+              motion.curve = next;
+              motion.called = next.called;
+            } else if (next) {
+              motion = motionOf(next);
+            } else if (motion) {
+              motions.splice(motions.indexOf(motion), 1);
+              motion = null;
+            }
+            curve = next;
+            value.motion = motion;
+            value.changes = !!next;
+          };
           value.read = function () {
             // A script carries on from what the value is; anything else starts from what the
             // scene says.
             var result = script && script.made !== undefined ? value.now : base();
-            if (curve && (motion.leader || motion).started) result = curve((motion.leader || motion).at, result);
+            if (curve && timelineAt !== null) result = curve(timelineAt, result);
+            else if (curve && (motion.leader || motion).started) result = curve((motion.leader || motion).at, result);
             if (script) result = runScript(script, result);
             value.now = result;
             return result;
@@ -4158,11 +4179,11 @@ public enum WallpaperEngineRuntime {
           return before.map(function (old, index) { return typeof list[index] === 'number' && isFinite(list[index]) ? list[index] * by : old; });
         }
 
-        function call(script, name, argument) {
+        function call(script, name, argument, second) {
           var wanted = script.made && script.made[name];
           if (!wanted || script.failures > 3) return undefined;
           try {
-            return wanted(argument);
+            return wanted(argument, second);
           } catch (error) {
             script.failures = (script.failures || 0) + 1;
             note('a script of “' + (script.owner ? script.owner.name : 'the scene') + '” fails: ' + error.message);
@@ -4640,6 +4661,44 @@ public enum WallpaperEngineRuntime {
           var nothing = lenient({ visible: true, rate: 1, isPlaying: function () { return true; }, getFrame: function () { return 0; },
                                   getAnimation: function () { return nothing; } });
           return nothing;
+        }
+
+        // How many times a moment of an animation is passed from one frame to another, on a
+        // clock of frames that runs on past its end every `period`. A start at nought counts the
+        // moment at nought, as the animation is on it then.
+        function passings(moment, period, from, to) {
+          if (from === 0) from = -1e-6;
+          return Math.floor((to - moment) / period) - Math.floor((from - moment) / period);
+        }
+
+        // The scripts of an object are told of the moments of its animation that have gone by,
+        // with what the value of a script bound to a value is, which it may answer with another.
+        // Wallpaper Engine's documentation says only that they are told as an animation passes
+        // a frame: that a loop tells them each time round and a mirror on the way back too is
+        // taken to go with it.
+        function tellAnimationEvents(motion, before, after) {
+          var curve = motion.curve;
+          if (!curve.events.length || timelineAt !== null) return;
+          var length = curve.frames, from = before * curve.rate, to = after * curve.rate;
+          curve.events.forEach(function (event) {
+            var times;
+            if (curve.mode === 'single' || !(length > 0)) {
+              times = (from === 0 ? event.frame >= 0 : event.frame > from) && event.frame <= to ? 1 : 0;
+            } else if (curve.mode === 'mirror') {
+              times = passings(event.frame, length * 2, from, to);
+              if (event.frame > 0 && event.frame < length) times += passings(length * 2 - event.frame, length * 2, from, to);
+            } else {
+              times = passings(event.frame, length, from, to);
+            }
+            while (times-- > 0) {
+              scripts.slice().forEach(function (script) {
+                if (script.owner !== motion.owner || !script.made || !script.made.animationEvent) return;
+                var value = script.value, current = value ? value.now : undefined;
+                var answer = call(script, 'animationEvent', { name: event.name, frame: event.frame }, value ? toScript(script, current) : undefined);
+                if (value && answer !== undefined) value.now = fromScript(script, answer, current);
+              });
+            }
+          });
         }
 
         // The animation of one of an object's values that goes by a name; with no name, its first.
@@ -10293,6 +10352,7 @@ public enum WallpaperEngineRuntime {
             var value = thing.lives[name];
             if (!value || JSON.stringify(value.raw) === JSON.stringify(object[name])) return;
             value.raw = object[name];
+            value.renew();
             var behind = value.raw && typeof value.raw === 'object' && !Array.isArray(value.raw) ? value.raw : null;
             value.bound = !!(behind && isSet(behind.user));
             // What a script makes of the value, it goes on making.
@@ -10329,6 +10389,7 @@ public enum WallpaperEngineRuntime {
                 var raw = constants[value.material] !== undefined ? constants[value.material] : value.fallback;
                 if (JSON.stringify(raw) === JSON.stringify(value.live.raw)) return;
                 value.live.raw = raw;
+                value.live.renew();
                 if (value.live.script && value.live.script.made !== undefined) return;
                 var before = value.live.now;
                 if (!same(value.live.read(), before)) touched = true;
@@ -10735,6 +10796,7 @@ public enum WallpaperEngineRuntime {
           // Animations move on; one that plays once stops at its end.
           motions.forEach(function (motion) {
             if (motion.leader || !motion.playing) return;
+            motion.was = motion.at;
             motion.at += passed * motion.speed;
             var curve = motion.curve;
             if (curve.mode === 'single' && curve.frames > 0 && motion.at * curve.rate >= curve.frames) {
@@ -10742,6 +10804,11 @@ public enum WallpaperEngineRuntime {
               motion.playing = false;
             }
           });
+          motions.slice().forEach(function (motion) {
+            var lead = motion.leader || motion;
+            if (lead.was !== undefined && lead.was !== lead.at) tellAnimationEvents(motion, lead.was, lead.at);
+          });
+          motions.forEach(function (motion) { if (!motion.leader) motion.was = undefined; });
           // A script may make a layer, or put one elsewhere, while the objects are gone through.
           things.slice().forEach(function (thing) { refresh(thing, false); });
           // A script nothing has asked for by now belongs to something that could not be made.
@@ -10948,6 +11015,14 @@ public enum WallpaperEngineRuntime {
             changed();
             return followed;
           },
+          // Has the animations show a moment, in seconds, whether they play or wait; with
+          // nothing, they go on as they were.
+          seek: function (seconds) {
+            timelineAt = typeof seconds === 'number' && isFinite(seconds) ? seconds : null;
+            things.slice().forEach(function (thing) { refresh(thing, true); });
+            dirty = true;
+            changed();
+          },
           // The scene for the editor: its objects as the scene has them, without the editor's
           // changes, which the editor knows, and what of them can be changed.
           describe: function () {
@@ -11147,12 +11222,17 @@ public enum WallpaperEngineRuntime {
         hit: ofCurrent('hit'),
         outline: ofCurrent('outline'),
         placeAt: ofCurrent('placeAt'),
+        seek: ofCurrent('seek'),
         // The translation of a shader alone, for whoever wants to see or check it.
         translate: translate,
         annotations: annotations,
         // The way a value changes over time, a script made ready and the settings it declares, a
         // refused shader mended and numbers read from a text: also for checking.
         curve: curveOf,
+        curveValue: function (animation, seconds, base) {
+          var curve = curveOf(animation);
+          return curve ? curve(seconds, base) : null;
+        },
         script: compileScript,
         mend: mend,
         mendPair: mendPair,

@@ -35,6 +35,8 @@ final class WorkshopStore: ObservableObject {
     @Published private(set) var items: [SteamWorkshop.Item] = []
     @Published private(set) var isLoading = false
     @Published private(set) var cannotLoad = false
+    /// The item the user clicked, shown at the side of the window.
+    @Published var selected: SteamWorkshop.Item?
     /// The account SteamCMD is signed in to, as far as is known.
     @Published private(set) var account: String?
     @Published private(set) var signIn = SignIn.idle

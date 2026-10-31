@@ -22,7 +22,10 @@ final class EngineEditorModel: ObservableObject {
     /// The object selected; nil is the scene as a whole.
     @Published var selection: Int? {
         didSet {
-            if selection != oldValue { preview?.select(selection) }
+            if selection != oldValue {
+                preview?.select(selection)
+                timelineDidChangeObject()
+            }
         }
     }
     /// What the player says of the scene once it plays: the values of the effects, among others.
@@ -32,21 +35,119 @@ final class EngineEditorModel: ObservableObject {
     @Published var isPlaying = true {
         didSet { preview?.setPlaying(isPlaying) }
     }
-    /// A sheet the editor shows: the effects to add, a system of particles to change.
+    /// A sheet the editor shows: the effects to add.
     @Published var sheet: Sheet?
+    /// The picture whose puppet warp is being edited; the middle of the window is then its.
+    @Published var puppetObject: Int?
+    /// What a drag over the scene does.
+    @Published var tool = Tool.multi {
+        didSet { preview?.setTool(tool) }
+    }
+    /// How much the scene is enlarged in the preview, and how far it is moved from the middle.
+    @Published private(set) var viewZoom: CGFloat = 1
+    @Published private(set) var viewPan = CGSize.zero
+    /// The part of an object's properties and of the scene's on show. Each stays as it is from
+    /// one selection to the next, so that the same thing can be looked at on object after object.
+    @Published var objectTab = ObjectTab.object
+    @Published var sceneTab = SceneTab.scene
+    /// Whether the timeline is open under the scene; the scene then stands at its moment.
+    @Published var showsTimeline = false {
+        didSet {
+            guard showsTimeline != oldValue else { return }
+            if !showsTimeline { setTimelinePlaying(false) }
+            showTimelineMoment()
+        }
+    }
+    /// The moment the timeline stands at, in seconds.
+    @Published var timelineSeconds = 0.0 {
+        didSet {
+            if timelineSeconds != oldValue { showTimelineMoment() }
+        }
+    }
+    /// What of the selected object the timeline's keys and curves are for.
+    @Published var timelineTarget: WallpaperEngineAnimationTarget?
+    /// The moments selected, on one value or on several.
+    @Published var selectedKeys: Set<EngineTimelineKey> = []
+    /// The first of them, for what is shown of one.
+    var selectedKey: EngineTimelineKey? { selectedKeys.first }
+    var timelineClipboard: [EngineCopiedKey] = []
+    /// What of the time the timeline shows: from a second, as many seconds; nil is all of it.
+    @Published var timelineStart = 0.0
+    @Published var timelineSpan: Double?
+    /// The heights the curves are shown in; nil follows the curves.
+    @Published var curveRange: ClosedRange<Double>?
+    /// Where the timeline's tracks are in the window, from its top left, for the wheel over them.
+    var timelineArea = CGRect.zero
+    /// Whether a change of an animated value makes a moment where there is none.
+    @Published var autoKey = true
+    @Published var timelineCurves = false
+    @Published var timelinePlaying = false
+    var timelineTimer: Timer?
+    /// What the list of layers is narrowed down to.
+    @Published var layerFilter = ""
 
     enum Sheet: Identifiable {
         case effects(object: Int)
-        case particles(object: Int)
-        case puppet(object: Int)
+        /// How an animation plays; `fallback` is the value of one not yet written in the scene.
+        case animation(object: Int, target: WallpaperEngineAnimationTarget, isNew: Bool, fallback: [Double])
+        case events(target: WallpaperEngineAnimationTarget)
 
         var id: String {
             switch self {
             case .effects(let object): return "effects-\(object)"
-            case .particles(let object): return "particles-\(object)"
-            case .puppet(let object): return "puppet-\(object)"
+            case .animation(let object, let target, _, _): return "animation-\(object)-\(target)"
+            case .events(let target): return "events-\(target)"
             }
         }
+    }
+
+    enum Tool: CaseIterable {
+        /// Picks, moves, and scales and turns by the handles of the frame.
+        case multi
+        case move
+        case rotate
+        case scale
+
+        var symbol: String {
+            switch self {
+            case .multi: return "cursorarrow"
+            case .move: return "arrow.up.and.down.and.arrow.left.and.right"
+            case .rotate: return "rotate.right"
+            case .scale: return "arrow.up.left.and.arrow.down.right"
+            }
+        }
+
+        var title: LocalizedStringKey {
+            switch self {
+            case .multi: return "Select and Transform (W)"
+            case .move: return "Move (G)"
+            case .rotate: return "Rotate (R)"
+            case .scale: return "Scale (S)"
+            }
+        }
+
+        var hint: LocalizedStringKey {
+            switch self {
+            case .multi: return "Drag to move. The corners resize, the round handle turns."
+            case .move: return "Drag to move. Shift keeps to one axis."
+            case .rotate: return "Drag anywhere to turn. Shift turns by 15°."
+            case .scale: return "Drag anywhere to resize."
+            }
+        }
+    }
+
+    enum ObjectTab {
+        case object
+        /// What only this kind of object has: its text, its particles, its light.
+        case kind
+        case effects
+    }
+
+    enum SceneTab {
+        case scene
+        case view
+        case environment
+        case settings
     }
 
     /// Called after the scene was written and laid out.
@@ -182,28 +283,49 @@ final class EngineEditorModel: ObservableObject {
 
     /// An object moved, scaled or turned with the mouse; the page shows it already.
     func applyFromPreview(object id: Int, patch: [String: Double]) {
-        document.update(id) { object in
-            if patch["x"] != nil || patch["y"] != nil {
-                var origin = object["origin"]?.vector ?? [0, 0, 0]
-                while origin.count < 3 { origin.append(0) }
-                if let x = patch["x"] { origin[0] = x }
-                if let y = patch["y"] { origin[1] = y }
-                object["origin"] = (object["origin"] ?? .null).replacingPlain(with: .vector(origin))
-            }
-            if patch["scaleX"] != nil || patch["scaleY"] != nil {
-                var scale = object["scale"]?.vector ?? [1, 1, 1]
-                while scale.count < 3 { scale.append(1) }
-                if let x = patch["scaleX"] { scale[0] = x }
-                if let y = patch["scaleY"] { scale[1] = y }
-                object["scale"] = (object["scale"] ?? .null).replacingPlain(with: .vector(scale))
-            }
-            if let rotation = patch["rotation"] {
-                var angles = object["angles"]?.vector ?? [0, 0, 0]
-                while angles.count < 3 { angles.append(0) }
-                angles[2] = -rotation * .pi / 180
-                object["angles"] = (object["angles"] ?? .null).replacingPlain(with: .vector(angles))
-            }
+        if patch["x"] != nil || patch["y"] != nil {
+            var origin = value(id, "origin")?.vector ?? [0, 0, 0]
+            while origin.count < 3 { origin.append(0) }
+            if let x = patch["x"] { origin[0] = x }
+            if let y = patch["y"] { origin[1] = y }
+            set(id, "origin", .vector(origin))
         }
+        if patch["scaleX"] != nil || patch["scaleY"] != nil {
+            var scale = value(id, "scale")?.vector ?? [1, 1, 1]
+            while scale.count < 3 { scale.append(1) }
+            if let x = patch["scaleX"] { scale[0] = x }
+            if let y = patch["scaleY"] { scale[1] = y }
+            set(id, "scale", .vector(scale))
+        }
+        if let rotation = patch["rotation"] {
+            var angles = value(id, "angles")?.vector ?? [0, 0, 0]
+            while angles.count < 3 { angles.append(0) }
+            angles[2] = -rotation * .pi / 180
+            set(id, "angles", .vector(angles))
+        }
+    }
+
+    /// Where the animations of the scene stand on the timeline, for the frame over an object to
+    /// start from; nil when the object is as the scene says.
+    func animatedPlace(of id: Int, _ name: String) -> Double? {
+        guard showsTimeline else { return nil }
+        func part(_ key: String, _ index: Int) -> Double? {
+            guard document.animation(of: id, .value(key)) != nil, let numbers = value(id, key)?.vector, index < numbers.count else { return nil }
+            return numbers[index]
+        }
+        switch name {
+        case "x": return part("origin", 0)
+        case "y": return part("origin", 1)
+        case "scaleX": return part("scale", 0)
+        case "scaleY": return part("scale", 1)
+        case "rotation": return part("angles", 2).map { -$0 * 180 / .pi }
+        default: return nil
+        }
+    }
+
+    /// Has the scene show the moment of the timeline, or go on as it plays.
+    func showTimelineMoment() {
+        preview?.showAnimations(at: showsTimeline ? timelineSeconds : nil)
     }
 
     // MARK: - The lock screen
@@ -227,7 +349,50 @@ final class EngineEditorModel: ObservableObject {
         )
     }
 
+    // MARK: - The view of the scene
+
+    /// Enlarges the scene around a point, given from the middle of the preview, which stays
+    /// under the pointer. It does not get smaller than the space it is shown in.
+    func zoomView(by factor: CGFloat, around point: CGSize) {
+        let zoom = min(max(viewZoom * factor, 1), 4)
+        let share = zoom / viewZoom
+        viewPan = zoom == 1 ? .zero : CGSize(width: viewPan.width + point.width * (1 - share),
+                                             height: viewPan.height + point.height * (1 - share))
+        viewZoom = zoom
+    }
+
+    /// Moves the scene, not further than its middle reaching the edge of what is shown of it.
+    func panView(by distance: CGSize, within size: CGSize) {
+        guard viewZoom > 1 else { return }
+        viewPan = CGSize(width: min(max(viewPan.width + distance.width, -size.width / 2), size.width / 2),
+                         height: min(max(viewPan.height + distance.height, -size.height / 2), size.height / 2))
+    }
+
+    func fitView() {
+        viewZoom = 1
+        viewPan = .zero
+    }
+
     // MARK: - Objects
+
+    /// The rows of the list of layers with what its search field leaves. The ones it finds are
+    /// shown side by side, as what they hang on need not be among them.
+    var shownRows: [(id: Int, depth: Int)] {
+        let wanted = layerFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return rows }
+        return rows.filter { name(of: $0.id).localizedStandardContains(wanted) }.map { ($0.id, 0) }
+    }
+
+    /// Puts the rows of the list of layers in another order by dragging them. What hangs on
+    /// another keeps hanging on it; the list has the one in front first, the scene last.
+    func moveRows(fromOffsets source: IndexSet, toOffset destination: Int) {
+        var ids = rows.map(\.id)
+        let moved = source.map { ids[$0] }
+        let before = ids[..<destination].filter { !moved.contains($0) }
+        let after = ids[destination...].filter { !moved.contains($0) }
+        ids = before + moved + after
+        change { $0.reorder(ids.reversed()) }
+    }
 
     /// The objects as the list shows them: the one in front first, each followed by those that
     /// hang on it, one step further in.

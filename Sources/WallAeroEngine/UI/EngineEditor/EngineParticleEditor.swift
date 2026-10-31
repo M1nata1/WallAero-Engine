@@ -153,54 +153,31 @@ struct ParticleComponentKind: Identifiable {
 
 /// Changes the file of a system of particles: its parts and their values. The system shows in
 /// the scene as it changes.
-struct EngineParticleEditor: View {
+struct EngineParticleSystemSections: View {
     @ObservedObject var model: EngineEditorModel
     let object: Int
-    @Environment(\.dismiss) private var dismiss
 
     private var fileName: String? { model.document.object(object)?["particle"]?.plain.stringValue }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Particle System").font(.headline)
-                Spacer()
-                if let fileName {
-                    Text(verbatim: fileName).font(.caption).foregroundStyle(.secondary)
+        if let fileName, model.document.file(fileName) != nil {
+            Section("Whole System") {
+                NumberRow("Most Particles", value: systemNumber(fileName, "maxcount", 100), in: 1...5000)
+                NumberRow("Warmed Up For", value: systemNumber(fileName, "starttime", 0), in: 0...60, step: 0.1, suffix: NSLocalizedString("s", comment: "Seconds, after a number"))
+                Picker("Blending", selection: blending(fileName)) {
+                    Text("Add Light").tag("additive")
+                    Text("Over What Is Behind").tag("translucent")
+                    Text("Normal").tag("normal")
                 }
             }
-            .padding()
-            Divider()
-            if let fileName, model.document.file(fileName) != nil {
-                Form {
-                    Section("Whole System") {
-                        NumberRow("Most Particles", value: systemNumber(fileName, "maxcount", 100), in: 1...5000)
-                        NumberRow("Warmed Up For", value: systemNumber(fileName, "starttime", 0), in: 0...60, step: 0.1, suffix: "s")
-                        Picker("Blending", selection: blending(fileName)) {
-                            Text("Add Light").tag("additive")
-                            Text("Over What Is Behind").tag("translucent")
-                            Text("Normal").tag("normal")
-                        }
-                    }
-                    ForEach(ParticleComponentKind.Section.allCases, id: \.self) { section in
-                        componentSection(section, fileName: fileName)
-                    }
-                }
-                .formStyle(.grouped)
-            } else {
-                Spacer()
+            ForEach(ParticleComponentKind.Section.allCases, id: \.self) { section in
+                componentSection(section, fileName: fileName)
+            }
+        } else {
+            Section {
                 Text("The system's file is not in the project.").foregroundStyle(.secondary)
-                Spacer()
             }
-            Divider()
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding()
         }
-        .frame(width: 560, height: 680)
     }
 
     @ViewBuilder

@@ -23,9 +23,10 @@ extension WallpaperLibrary {
 }
 
 /// The app's main window: the library or the Steam Workshop, with the settings of the library's
-/// wallpapers at its side when they are asked for.
+/// wallpapers at its side when they are asked for, or the Workshop item that was clicked.
 struct MainView: View {
     @EnvironmentObject private var state: MainWindowState
+    @EnvironmentObject private var workshop: WorkshopStore
     let actions: LibraryActions
 
     var body: some View {
@@ -33,14 +34,12 @@ struct MainView: View {
             if #available(macOS 14.0, *) {
                 // The system's own side panel: it looks the way the Mac's version of macOS has them.
                 sections
-                    .inspector(isPresented: showsSettings) {
-                        SettingsPanel(edit: actions.edit)
+                    .inspector(isPresented: showsSidePanel) {
+                        sidePanel
                             .inspectorColumnWidth(MainWindowState.settingsWidth)
                             .toolbar {
                                 Spacer()
-                                if state.section == .library {
-                                    SettingsToggle(isOn: $state.showsSettings)
-                                }
+                                SettingsToggle(isOn: showsSidePanel)
                             }
                     }
                     .toolbar {
@@ -55,9 +54,9 @@ struct MainView: View {
                     HStack(spacing: 0) {
                         sections
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        if showsSettings.wrappedValue {
+                        if showsSidePanel.wrappedValue {
                             Divider()
-                            SettingsPanel(edit: actions.edit)
+                            sidePanel
                                 .frame(width: MainWindowState.settingsWidth)
                                 .background(Color(nsColor: .windowBackgroundColor))
                         }
@@ -71,13 +70,28 @@ struct MainView: View {
         }
     }
 
-    /// The settings are of the library's wallpapers, so the Workshop has the room to itself;
-    /// whether they are open comes back with the library.
-    private var showsSettings: Binding<Bool> {
+    /// The settings are of the library's wallpapers, so the Workshop shows its own item there,
+    /// once one is clicked; whether the settings are open comes back with the library.
+    private var showsSidePanel: Binding<Bool> {
         Binding(
-            get: { state.showsSettings && state.section == .library },
-            set: { if state.section == .library { state.showsSettings = $0 } }
+            get: { state.section == .library ? state.showsSettings : workshop.selected != nil },
+            set: { shown in
+                if state.section == .library {
+                    state.showsSettings = shown
+                } else if !shown {
+                    workshop.selected = nil
+                }
+            }
         )
+    }
+
+    @ViewBuilder
+    private var sidePanel: some View {
+        if state.section == .library {
+            SettingsPanel(edit: actions.edit)
+        } else {
+            WorkshopDetailsPanel()
+        }
     }
 
     private var sectionPicker: some View {
@@ -177,11 +191,13 @@ struct LibraryView: View {
     }
     /// The wallpapers selected, of those shown and in their order.
     private var selectedShown: [Wallpaper] { shownItems.filter { state.picked.ids.contains($0.id) } }
-    /// The wallpapers the search and the ticked tags leave.
+    /// The wallpapers the search, the ticked tags and the type leave, in the order chosen.
     private var shownItems: [Wallpaper] {
         // The ticked tags by category: within one any will do, between them each counts.
         let groups = Dictionary(grouping: state.selectedTags) { library.category(of: $0) ?? "" }.values.map(Set.init)
-        return library.items.filter { $0.matches(search: state.searchText, tagGroups: groups) }
+        return library.items
+            .filter { $0.matches(search: state.searchText, tagGroups: groups) && isOfChosenKind($0) }
+            .ordered(by: state.libraryOrder)
     }
     private var currentID: UUID? { manager.wallpaperID(for: target) }
 
@@ -248,8 +264,9 @@ struct LibraryView: View {
 
     // MARK: - Layout
 
-    /// The buttons are the window's toolbar where the system takes one from the content
-    /// (macOS 14); before that they are a line at the top of the window.
+    /// What brings wallpapers in is at the top of the window, what goes on the desktop at its
+    /// bottom. The top buttons are the window's toolbar where the system takes one from the
+    /// content (macOS 14); before that they are a line at the top of the window.
     @ViewBuilder
     private var layout: some View {
         if #available(macOS 14.0, *) {
@@ -257,11 +274,7 @@ struct LibraryView: View {
                 .bottomBar { footer }
                 .toolbar {
                     if state.section == .library {
-                        if manager.displays.count > 1 {
-                            ToolbarItem(placement: .navigation) { displayPicker }
-                        }
                         ToolbarItemGroup(placement: .primaryAction) {
-                            pauseButton
                             newSceneButton
                             addButton
                         }
@@ -282,7 +295,8 @@ struct LibraryView: View {
     private var filterable: some View {
         droppable.topBar {
             LibraryFilterBar(searchText: $state.searchText, groups: library.tagGroups,
-                             selection: $state.selectedTags, showsTags: $state.showsTagFilter)
+                             selection: $state.selectedTags, showsTags: $state.showsTagFilter,
+                             kind: $state.kindFilter, order: $state.libraryOrder)
         }
     }
 
@@ -307,11 +321,7 @@ struct LibraryView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            if manager.displays.count > 1 {
-                displayPicker
-            }
             Spacer()
-            pauseButton
             newSceneButton
             addButton
             SettingsToggle(isOn: $state.showsSettings)
@@ -320,15 +330,33 @@ struct LibraryView: View {
         .padding(.vertical, 10)
     }
 
-    private var displayPicker: some View {
-        Picker("Display:", selection: $target) {
-            Text("All Displays").tag(DisplayTarget.all)
-            Divider()
-            ForEach(manager.displays) { display in
-                Text(display.name).tag(DisplayTarget.display(display.id))
-            }
+    private var targetTitle: Text {
+        if case .display(let id) = target, let display = manager.displays.first(where: { $0.id == id }) {
+            return Text(verbatim: display.name)
         }
-        .pickerStyle(.menu)
+        return Text("All Displays")
+    }
+
+    /// Which display the bar at the bottom is about, and, for one with a wallpaper of its own,
+    /// the way back to what all the others show.
+    private var displayMenu: some View {
+        Menu {
+            Picker("Display:", selection: $target) {
+                Text("All Displays").tag(DisplayTarget.all)
+                Divider()
+                ForEach(manager.displays) { display in
+                    Text(display.name).tag(DisplayTarget.display(display.id))
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+            if case .display(let displayID) = target, manager.hasOwnWallpaper(displayID) {
+                Divider()
+                Button("Same as All Displays") { manager.followAllDisplays(displayID) }
+            }
+        } label: {
+            targetTitle
+        }
         .fixedSize()
     }
 
@@ -339,8 +367,10 @@ struct LibraryView: View {
         } label: {
             Label(title, systemImage: symbol)
         }
+        .labelStyle(.iconOnly)
+        .barButtonStyle()
         .disabled(!manager.hasWallpaper)
-        // In the toolbar the buttons are pictures only; their names show when the pointer rests.
+        // The button is a picture only; its name shows when the pointer rests.
         .help(title)
     }
 
@@ -477,8 +507,17 @@ struct LibraryView: View {
 
     // MARK: - Footer
 
+    /// What is on the desktop: of which display, how to stop it, and what stands for putting
+    /// the selected wallpaper there. The buttons keep their places whatever is selected.
     private var footer: some View {
         HStack(spacing: 12) {
+            if manager.displays.count > 1 {
+                displayMenu
+            }
+            pauseButton
+            Button("Turn Off") { manager.setWallpaper(nil, for: target) }
+                .barButtonStyle()
+                .disabled(currentID == nil)
             if let job = importer.jobs.first {
                 ProgressView(value: job.progress)
                     .progressViewStyle(.linear)
@@ -495,26 +534,20 @@ struct LibraryView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
-            if case .display(let displayID) = target, manager.hasOwnWallpaper(displayID) {
-                Button("Same as All Displays") { manager.followAllDisplays(displayID) }
-                    .barButtonStyle()
-            }
             if selectedShown.count > 1 {
+                // Several cannot be put on the desktop, so the place is for what they can do.
                 Button(deleteSelectedTitle) { deletingIDs = selectedShown.map(\.id) }
                     .barButtonStyle()
-            }
-            if currentID != nil {
-                Button("Turn Off") { manager.setWallpaper(nil, for: target) }
-                    .barButtonStyle()
-            }
-            Button("Set as Wallpaper") {
-                if let item = selectedItem {
-                    apply(item)
+            } else {
+                Button("Set as Wallpaper") {
+                    if let item = selectedItem {
+                        apply(item)
+                    }
                 }
+                .keyboardShortcut(.defaultAction)
+                .barButtonStyle(isMainAction: true)
+                .disabled(selectedItem == nil || selectedItem?.id == currentID)
             }
-            .keyboardShortcut(.defaultAction)
-            .barButtonStyle(isMainAction: true)
-            .disabled(selectedItem == nil || selectedItem?.id == currentID)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -534,6 +567,16 @@ struct LibraryView: View {
     }
 
     // MARK: - Actions
+
+    private func isOfChosenKind(_ item: Wallpaper) -> Bool {
+        switch state.kindFilter {
+        case .all: return true
+        case .scene: return item.kind == .web && library.isScene(item)
+        case .video: return item.kind == .video
+        case .web: return item.kind == .web && !library.isScene(item)
+        case .image: return item.kind == .image
+        }
+    }
 
     private func apply(_ item: Wallpaper) {
         selection = item.id

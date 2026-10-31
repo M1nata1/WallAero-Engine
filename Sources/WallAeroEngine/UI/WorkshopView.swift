@@ -124,21 +124,37 @@ struct WorkshopView: View {
         } else {
             GeometryReader { area in
                 let columns = LibraryView.columnCount(forWidth: area.size.width)
-                ScrollView {
-                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(LibraryView.tileWidth), spacing: LibraryView.tileSpacing), count: columns),
-                              alignment: .leading, spacing: 20) {
-                        ForEach(store.items) { item in
-                            WorkshopTile(item: item)
-                                .onAppear {
-                                    if item.id == store.items.last?.id {
-                                        store.loadMore()
+                let room = area.size.height - area.safeAreaInsets.top - area.safeAreaInsets.bottom
+                ScrollViewReader { scroller in
+                    ScrollView {
+                        LazyVGrid(columns: Array(repeating: GridItem(.fixed(LibraryView.tileWidth), spacing: LibraryView.tileSpacing), count: columns),
+                                  alignment: .leading, spacing: 20) {
+                            ForEach(store.items) { item in
+                                WorkshopTile(item: item)
+                                    .onAppear {
+                                        if item.id == store.items.last?.id {
+                                            store.loadMore()
+                                        }
                                     }
-                                }
+                            }
+                        }
+                        .frame(width: CGFloat(columns) * (LibraryView.tileWidth + LibraryView.tileSpacing) - LibraryView.tileSpacing)
+                        .padding(16)
+                        // As high as the room there is at least: a click below the rows closes
+                        // the panel too.
+                        .frame(maxWidth: .infinity, minHeight: max(0, room - 1), alignment: .top)
+                        .background {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture { store.selected = nil }
                         }
                     }
-                    .frame(width: CGFloat(columns) * (LibraryView.tileWidth + LibraryView.tileSpacing) - LibraryView.tileSpacing)
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .top)
+                    // The panel opening takes a column away: the clicked item stays in sight.
+                    .onChange(of: columns) { _ in
+                        if let id = store.selected?.id {
+                            scroller.scrollTo(id)
+                        }
+                    }
                 }
             }
         }
@@ -187,6 +203,8 @@ private struct WorkshopTile: View {
             .padding(.horizontal, 2)
         }
         .help(item.title)
+        .contentShape(Rectangle())
+        .onTapGesture { store.selected = item }
         .contextMenu {
             Button("Open in Steam") { NSWorkspace.shared.open(item.pageURL) }
             if store.download(for: item)?.phase == .waiting {
@@ -195,6 +213,7 @@ private struct WorkshopTile: View {
         }
     }
 
+    /// How it stands with the item. Getting it is for the panel at the side.
     @ViewBuilder
     private var action: some View {
         if store.isInLibrary(item) {
@@ -202,13 +221,9 @@ private struct WorkshopTile: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else if let download = store.download(for: item) {
-            // No button here: one in the place of Download would catch a second click on it.
             Text(download.phase == .waiting ? "In Queue" : "Downloading…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        } else {
-            Button("Download") { store.get(item) }
-                .controlSize(.small)
         }
     }
 
@@ -234,9 +249,208 @@ private struct WorkshopTile: View {
                 }
             }
             .overlay {
+                let isSelected = store.selected?.id == item.id
+                RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor : Color.primary.opacity(0.12), lineWidth: isSelected ? 3 : 1)
+            }
+    }
+}
+
+/// The panel at the side of the window: what the clicked item is, and getting it.
+struct WorkshopDetailsPanel: View {
+    @EnvironmentObject private var store: WorkshopStore
+
+    var body: some View {
+        if let item = store.selected {
+            WorkshopDetails(item: item)
+                .id(item.id)
+        }
+    }
+}
+
+private struct WorkshopDetails: View {
+    @EnvironmentObject private var store: WorkshopStore
+    let item: SteamWorkshop.Item
+    @State private var page: SteamWorkshop.Page?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    WorkshopMovingPreview(item: item)
+                        .frame(maxWidth: .infinity)
+                    Text(verbatim: item.title)
+                        .font(.title3.weight(.semibold))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    properties
+                    if !shownTags.isEmpty {
+                        FlowLayout {
+                            ForEach(shownTags, id: \.self) { tag in
+                                Text(verbatim: tag)
+                                    .font(.caption)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(.quaternary, in: Capsule())
+                            }
+                        }
+                    }
+                    if !item.description.isEmpty {
+                        Text(verbatim: item.description)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button("Open in Steam") { NSWorkspace.shared.open(item.pageURL) }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider()
+            action
+                .frame(minHeight: 28)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+        }
+        .task {
+            page = try? await SteamWorkshop.page(of: item)
+        }
+    }
+
+    /// What the tags say beyond the type, and beyond what all of them have.
+    private var shownTags: [String] {
+        item.tags.filter { $0 != item.kindTag && $0 != "Wallpaper" && $0 != "Everyone" }
+    }
+
+    private var properties: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+            if let author = page?.author {
+                row("Author") { Text(verbatim: author).textSelection(.enabled) }
+            }
+            if let stars = page?.stars {
+                row("Rating") {
+                    Text(verbatim: String(repeating: "★", count: stars) + String(repeating: "☆", count: 5 - min(stars, 5)))
+                        .accessibilityLabel(Text(verbatim: "\(stars)/5"))
+                }
+            }
+            if let kind = kind {
+                row("Type") { Text(kind) }
+            }
+            row("Size") { Text(verbatim: ByteCountFormatter.string(fromByteCount: item.fileSize, countStyle: .file)) }
+            row("Subscribers") { Text(verbatim: item.subscriptions.formatted()) }
+            row("In Favorites") { Text(verbatim: item.favorites.formatted()) }
+            if let updated = item.updated {
+                row("Updated") { Text(verbatim: updated.formatted(date: .long, time: .omitted)) }
+            }
+        }
+    }
+
+    private func row<Value: View>(_ title: LocalizedStringKey, @ViewBuilder value: () -> Value) -> some View {
+        GridRow {
+            Text(title)
+                .foregroundStyle(.secondary)
+            value()
+        }
+    }
+
+    private var kind: LocalizedStringKey? {
+        switch item.kindTag {
+        case "Scene": "Scene"
+        case "Video": "Video"
+        case "Web": "Web Page"
+        default: nil
+        }
+    }
+
+    /// Cancel takes the other end of the row from Download, which it follows on: a second click
+    /// on the same spot is not to stop what the first one started.
+    @ViewBuilder
+    private var action: some View {
+        if store.isInLibrary(item) {
+            Label("In Library", systemImage: "checkmark")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if let download = store.download(for: item) {
+            HStack(spacing: 10) {
+                Button("Cancel") { store.cancel(item) }
+                    .disabled(download.phase == .adding)
+                switch download.phase {
+                case .waiting:
+                    Text("In Queue")
+                        .foregroundStyle(.secondary)
+                case .downloading(let part):
+                    ProgressView(value: part)
+                        .progressViewStyle(.linear)
+                    Text(verbatim: "\(Int((part * 100).rounded(.down)))%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                case .adding:
+                    Text("Adding…")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Button("Download") { store.get(item) }
+                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+}
+
+/// The item's preview in motion. Until it has arrived, the tile's still picture stands in.
+private struct WorkshopMovingPreview: View {
+    /// The side of the square: nearly all previews are square, and the moving ones only about
+    /// 200 pixels, which any bigger comes out as a blur.
+    private static let side: CGFloat = 300
+
+    @EnvironmentObject private var store: WorkshopStore
+    let item: SteamWorkshop.Item
+    @State private var picture: NSImage?
+
+    var body: some View {
+        Color.black
+            .frame(width: Self.side, height: Self.side)
+            .overlay {
+                if let picture {
+                    MovingPicture(image: picture)
+                } else {
+                    WorkshopPreview(url: item.previewURL, contentMode: .fit)
+                }
+            }
+            .allowsHitTesting(false)
+            .clipShape(RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous))
+            .overlay {
                 RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
             }
+            .task {
+                guard let url = item.originalPreviewURL else { return }
+                let previews = store.previews
+                var data = await Task.detached { previews.keptOriginal(for: url) }.value
+                if data == nil, let (got, _) = try? await URLSession.shared.data(from: url) {
+                    await Task.detached { previews.keepOriginal(got, for: url) }.value
+                    data = got
+                }
+                picture = data.flatMap(NSImage.init(data:))
+            }
+    }
+}
+
+/// A picture that plays if it can, drawn by AppKit as a GIF is not in SwiftUI.
+private struct MovingPicture: NSViewRepresentable {
+    let image: NSImage
+
+    func makeNSView(context: Context) -> NSImageView {
+        let view = NSImageView()
+        view.imageScaling = .scaleProportionallyUpOrDown
+        view.animates = true
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        return view
+    }
+
+    func updateNSView(_ view: NSImageView, context: Context) {
+        view.image = image
     }
 }
 
@@ -246,6 +460,7 @@ private struct WorkshopPreview: View {
 
     @EnvironmentObject private var store: WorkshopStore
     let url: URL?
+    var contentMode = ContentMode.fill
     @State private var image: NSImage?
 
     var body: some View {
@@ -253,7 +468,7 @@ private struct WorkshopPreview: View {
             if let image {
                 Image(nsImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .aspectRatio(contentMode: contentMode)
             } else {
                 Image(systemName: "photo")
                     .font(.largeTitle)

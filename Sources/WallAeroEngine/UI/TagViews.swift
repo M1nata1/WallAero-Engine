@@ -2,18 +2,20 @@ import AppKit
 import SwiftUI
 import WallpaperCore
 
-/// The row above the wallpapers that narrows the library down: a search field, and a button
-/// that drops down the library's tags to tick.
+/// The row above the wallpapers that narrows the library down and orders it, laid out as the
+/// Workshop's: a search field and the tags to tick on the left, the type and the order on the right.
 struct LibraryFilterBar: View {
     @Binding var searchText: String
     let groups: [TagGroup]
     @Binding var selection: Set<String>
     @Binding var showsTags: Bool
+    @Binding var kind: MainWindowState.KindFilter
+    @Binding var order: WallpaperOrder
 
     var body: some View {
         HStack(spacing: 12) {
             SearchField(text: $searchText)
-                .frame(width: 200)
+                .frame(minWidth: 130, maxWidth: 200)
             Button {
                 showsTags.toggle()
             } label: {
@@ -31,6 +33,22 @@ struct LibraryFilterBar: View {
                 TagChecklist(groups: groups, selection: $selection)
             }
             Spacer(minLength: 0)
+            Picker("Type:", selection: $kind) {
+                Text("All Types").tag(MainWindowState.KindFilter.all)
+                Text("Scenes").tag(MainWindowState.KindFilter.scene)
+                Text("Videos").tag(MainWindowState.KindFilter.video)
+                Text("Web Pages").tag(MainWindowState.KindFilter.web)
+                Text("Pictures").tag(MainWindowState.KindFilter.image)
+            }
+            .labelsHidden()
+            .fixedSize()
+            Picker("Sort:", selection: $order) {
+                Text("Newest").tag(WallpaperOrder.newest)
+                Text("Oldest").tag(WallpaperOrder.oldest)
+                Text("By Name").tag(WallpaperOrder.name)
+            }
+            .labelsHidden()
+            .fixedSize()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 7)

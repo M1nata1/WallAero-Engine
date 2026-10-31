@@ -14,6 +14,8 @@ final class EngineEditorPreviewController {
     private var overlay: EngineEditorOverlay?
     private weak var model: EngineEditorModel?
     private var colorsObserver: NSObjectProtocol?
+    private var keyMonitor: Any?
+    private var wheelMonitor: Any?
 
     init(model: EngineEditorModel) {
         self.model = model
@@ -34,9 +36,15 @@ final class EngineEditorPreviewController {
             overlay.onSelect = { [weak model] id in model?.selection = id }
             overlay.onChange = { [weak model] id, patch in model?.applyFromPreview(object: id, patch: patch) }
             overlay.onCommit = { [weak model] in model?.endGesture() }
+            overlay.animatedPlace = { [weak model] id, name in model?.animatedPlace(of: id, name) }
+            overlay.onZoom = { [weak model] factor, point in model?.zoomView(by: factor, around: point) }
+            overlay.onPan = { [weak model, weak overlay] distance in
+                model?.panView(by: distance, within: overlay?.bounds.size ?? .zero)
+            }
             scene.onRestart = { [weak self] in self?.sceneRestarted() }
             if scene.show(folder: model.folder, watchingForChanges: false) {
                 model.preview = self
+                listenForKeys()
                 return
             }
             container.subviews.forEach { $0.removeFromSuperview() }
@@ -68,12 +76,89 @@ final class EngineEditorPreviewController {
                                                                 object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.showAccentColor() }
         }
+        listenForKeys()
     }
 
     deinit {
         if let colorsObserver {
             NotificationCenter.default.removeObserver(colorsObserver)
         }
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+        }
+        if let wheelMonitor {
+            NSEvent.removeMonitor(wheelMonitor)
+        }
+    }
+
+    private func listenForKeys() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // Keys arrive on the main thread.
+            nonisolated(unsafe) let pressed = event
+            let handled = MainActor.assumeIsolated { self?.handleKey(pressed) == true }
+            return handled ? nil : event
+        }
+        wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            nonisolated(unsafe) let turned = event
+            let handled = MainActor.assumeIsolated { self?.handleWheel(turned) == true }
+            return handled ? nil : event
+        }
+    }
+
+    /// The wheel over the timeline, as in Wallpaper Engine: it enlarges the time, and with Shift
+    /// or Control the heights of the curves. Two fingers sideways go along the time.
+    private func handleWheel(_ event: NSEvent) -> Bool {
+        guard let model, model.showsTimeline, let window = view.window, event.window === window, let content = window.contentView else { return false }
+        let at = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+        return turnWheel(at: at, across: event.scrollingDeltaX, along: event.scrollingDeltaY, precise: event.hasPreciseScrollingDeltas,
+                         heights: !event.modifierFlags.intersection([.shift, .control]).isEmpty)
+    }
+
+    /// The wheel turned over a point of the window, from its top left.
+    func turnWheel(at: CGPoint, across: CGFloat, along: CGFloat, precise: Bool, heights: Bool) -> Bool {
+        guard let model else { return false }
+        let area = model.timelineArea
+        guard area.contains(at) else { return false }
+        if precise, abs(across) > abs(along) {
+            model.panTimeline(bySeconds: -Double(across) / max(Double(area.width), 1) * model.timelineShown)
+            return true
+        }
+        let factor = pow(precise ? 1.01 : 1.1, Double(along))
+        if heights {
+            model.zoomCurvesFromWheel(by: factor)
+        } else {
+            model.zoomTimeline(by: factor, atShare: Double((at.x - area.minX) / max(area.width, 1)))
+        }
+        return true
+    }
+
+    /// The editor's keys, by their place on the keyboard, so that they work in any layout. They
+    /// are not for a text being typed, a window on top, or the puppet warp, which has its own.
+    private func handleKey(_ event: NSEvent) -> Bool {
+        guard let model, model.puppetObject == nil, let window = view.window, event.window === window,
+              window.attachedSheet == nil, !(window.firstResponder is NSText) else { return false }
+        let keys = event.modifierFlags.intersection([.command, .control, .option])
+        if keys == .command, event.keyCode == 2, let selection = model.selection {
+            model.duplicate(selection)
+            return true
+        }
+        if model.showsTimeline, handleTimelineKey(event, keys) { return true }
+        guard keys.isEmpty else { return false }
+        switch event.keyCode {
+        case 13 where overlay != nil: model.tool = .multi
+        case 5 where overlay != nil: model.tool = .move
+        case 15 where overlay != nil: model.tool = .rotate
+        case 1 where overlay != nil: model.tool = .scale
+        case 53 where overlay != nil && model.tool != .multi: model.tool = .multi
+        case 17 where overlay != nil: model.showsTimeline.toggle()
+        case 4:
+            guard let selection = model.selection else { return false }
+            model.toggleVisibility(of: selection)
+        case 49: model.isPlaying.toggle()
+        case 115: model.fitView()
+        default: return false
+        }
+        return true
     }
 
     /// A new player: the frame asks it, and the editor learns what the scene has once it plays.
@@ -88,6 +173,13 @@ final class EngineEditorPreviewController {
               let description = try? JSONDecoder().decode(EngineSceneDescription.self, from: Data(text.utf8)) else { return }
         model.playerDidStart(description)
         overlay.selectObject(model.selection)
+        model.showTimelineMoment()
+    }
+
+    /// Has the scene show a moment of its animations; with nil they go on as they were.
+    func showAnimations(at seconds: Double?) {
+        sceneView?.scenePlayer?.showAnimations(at: seconds)
+        overlay?.needsDisplay = true
     }
 
     /// Returns once the preview has loaded; a scene the app draws starts at once.
@@ -199,9 +291,42 @@ final class EngineEditorPreviewController {
         webView?.evaluate("window.wallaeroEditor && window.wallaeroEditor.selectObject(\(id.map(String.init) ?? "null"))")
     }
 
+    /// The timeline's keys, as Wallpaper Engine has them, while it is open.
+    private func handleTimelineKey(_ event: NSEvent, _ keys: NSEvent.ModifierFlags) -> Bool {
+        guard let model else { return false }
+        switch (event.keyCode, keys) {
+        case (40, []): model.toggleKey()                       // K
+        case (0, []): model.autoKey.toggle()                   // A
+        case (49, []): model.setTimelinePlaying(!model.timelinePlaying)
+        case (123, []) where model.activeAnimation != nil: model.stepFrame(-1)
+        case (124, []) where model.activeAnimation != nil: model.stepFrame(1)
+        case (123, [.control]): model.jumpToKey(forward: false)
+        case (124, [.control]): model.jumpToKey(forward: true)
+        case (51, []) where !model.selectedKeys.isEmpty, (117, []) where !model.selectedKeys.isEmpty: model.deleteSelectedKeys()
+        case (8, [.command]) where !model.selectedKeys.isEmpty: model.copySelectedKeys()
+        case (9, [.command]) where !model.timelineClipboard.isEmpty: model.pasteKeys()
+        default: return false
+        }
+        return true
+    }
+
+    func setTool(_ tool: EngineEditorModel.Tool) {
+        overlay?.tool = tool
+    }
+
     func setPlaying(_ playing: Bool) {
         webView?.setPlaying(playing, rate: 1)
         sceneView?.setPlaying(playing, rate: 1)
+    }
+
+    /// Where an object's middle is on the page, for tests.
+    func outlineMiddle(of id: Int) -> [Double] {
+        (sceneView?.scenePlayer?.ask("outline", [id]) as? [String: Any]).flatMap { $0["middle"] as? [Double] } ?? []
+    }
+
+    /// What the player works out of an animation, for tests.
+    func curveValue(_ animation: JSONValue, seconds: Double, base: [Double]) -> [Double]? {
+        sceneView?.scenePlayer?.ask("curveValue", [animation.any, seconds, base]) as? [Double]
     }
 
     private func handle(_ message: [String: Any]) {
@@ -244,6 +369,7 @@ final class EngineEditorPreviewController {
 
 /// The preview at the proportions of the scene, centred in the space it is given.
 struct EngineEditorPreview: View {
+    @ObservedObject var model: EngineEditorModel
     let controller: EngineEditorPreviewController
     let aspectRatio: CGFloat
 
@@ -252,11 +378,13 @@ struct EngineEditorPreview: View {
             let available = CGSize(width: max(geometry.size.width - 32, 100), height: max(geometry.size.height - 32, 100))
             let width = min(available.width, available.height * aspectRatio)
             EnginePreviewHost(view: controller.view)
-                .frame(width: width, height: width / aspectRatio)
+                .frame(width: width * model.viewZoom, height: width / aspectRatio * model.viewZoom)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
+                .offset(model.viewPan)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .clipped()
         .background(Color(nsColor: .underPageBackgroundColor))
     }
 }

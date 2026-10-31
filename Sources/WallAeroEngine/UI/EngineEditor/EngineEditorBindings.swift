@@ -6,12 +6,18 @@ import WallpaperCore
 /// A value that stands behind a setting of the wallpaper, a script or an animation keeps what
 /// it stands behind; only its value changes.
 extension EngineEditorModel {
-    /// A value of an object, as it is in the scene.
+    /// A value of an object, as it is in the scene; an animated one, at the moment of the timeline.
     func value(_ id: Int, _ key: String) -> JSONValue? {
-        document.object(id)?[key]?.plain
+        let plain = document.object(id)?[key]?.plain
+        if let base = plain?.vector, let numbers = numbers(of: id, .value(key), base: base) {
+            return numbers.count == 1 ? .number(numbers[0]) : .vector(numbers)
+        }
+        return plain
     }
 
-    private func set(_ id: Int, _ key: String, _ value: JSONValue) {
+    /// Writes a value; for an animated one, a moment on the timeline.
+    func set(_ id: Int, _ key: String, _ value: JSONValue) {
+        if let numbers = value.vector, writeAnimated(id, .value(key), numbers: numbers) { return }
         document.update(id) { object in
             object[key] = (object[key] ?? .null).replacingPlain(with: value)
         }
@@ -85,8 +91,7 @@ extension EngineEditorModel {
     }
 
     func isScripted(_ id: Int, _ key: String) -> Bool {
-        guard let raw = document.object(id)?[key], let dictionary = raw.objectValue else { return false }
-        return dictionary["script"] != nil || dictionary["animation"] != nil
+        document.object(id)?[key]?.objectValue?["script"] != nil
     }
 
     // MARK: - Turning
@@ -171,17 +176,31 @@ extension EngineEditorModel {
                 guard let self, let effect = self.document.object(id)?["effects"]?[index] else { return value.value }
                 for pass in effect["passes"]?.arrayValue ?? [] {
                     if let set = pass["constantshadervalues"]?[value.name]?.plain {
-                        if let numbers = set.vector { return numbers }
+                        if let numbers = set.vector {
+                            let target = self.document.effectTarget(named: value.name, effect: index, of: id)
+                            return self.numbers(of: id, target, base: numbers) ?? numbers
+                        }
                         if let flag = set.boolValue { return [flag ? 1 : 0] }
                     }
                 }
                 return value.value
             },
             set: { [weak self] numbers in
+                guard let self else { return }
+                if self.writeAnimated(id, self.document.effectTarget(named: value.name, effect: index, of: id), numbers: numbers) { return }
                 let written: JSONValue = numbers.count == 1 ? .number(numbers[0]) : .string(numbers.map { Self.short($0) }.joined(separator: " "))
-                self?.document.setEffectValue(written, named: value.name, effect: index, of: id)
+                self.document.setEffectValue(written, named: value.name, effect: index, of: id)
             }
         )
+    }
+
+    /// Writes down a value of an effect the scene leaves to the effect, so that it can have an
+    /// animation.
+    func prepareEffectValue(_ value: EngineSceneDescription.Value, effect index: Int, of id: Int) {
+        let target = document.effectTarget(named: value.name, effect: index, of: id)
+        guard document.rawValue(of: id, target) == nil else { return }
+        let written: JSONValue = value.value.count == 1 ? .number(value.value[0]) : .string(value.value.map { Self.short($0) }.joined(separator: " "))
+        document.setEffectValue(written, named: value.name, effect: index, of: id)
     }
 
     func effectVisible(_ id: Int, effect index: Int) -> Binding<Bool> {
