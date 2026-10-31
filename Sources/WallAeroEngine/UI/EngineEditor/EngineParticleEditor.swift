@@ -156,6 +156,8 @@ struct ParticleComponentKind: Identifiable {
 struct EngineParticleSystemSections: View {
     @ObservedObject var model: EngineEditorModel
     let object: Int
+    /// The parts of the system unfolded, each by its section and place.
+    @State private var open: Set<String> = []
 
     private var fileName: String? { model.document.object(object)?["particle"]?.plain.stringValue }
 
@@ -186,31 +188,30 @@ struct EngineParticleSystemSections: View {
         Section {
             ForEach(Array(parts.indices), id: \.self) { index in
                 let name = parts[index]["name"]?.stringValue ?? ""
-                DisclosureGroup {
+                FoldingRows(isOpen: $open.contains("\(section.rawValue) \(index)")) {
+                    Text(verbatim: ParticleComponentKind.named(name)?.title ?? name)
+                    Spacer()
+                    if section != .renderer || parts.count > 1 {
+                        Button {
+                            open = []
+                            change(fileName) { system in
+                                var list = system[section.rawValue]?.arrayValue ?? []
+                                list.remove(at: index)
+                                system[section.rawValue] = .array(list)
+                            }
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Remove")
+                    }
+                } content: {
                     if let kind = ParticleComponentKind.named(name) {
                         ForEach(kind.values, id: \.key) { value in
                             valueRow(value, section: section, index: index, fileName: fileName)
                         }
                     } else {
                         Text("Its values are kept as they are.").font(.callout).foregroundStyle(.secondary)
-                    }
-                } label: {
-                    HStack {
-                        Text(verbatim: ParticleComponentKind.named(name)?.title ?? name)
-                        Spacer()
-                        if section != .renderer || parts.count > 1 {
-                            Button {
-                                change(fileName) { system in
-                                    var list = system[section.rawValue]?.arrayValue ?? []
-                                    list.remove(at: index)
-                                    system[section.rawValue] = .array(list)
-                                }
-                            } label: {
-                                Image(systemName: "minus.circle")
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Remove")
-                        }
                     }
                 }
             }
@@ -268,6 +269,7 @@ struct EngineParticleSystemSections: View {
                         .frame(width: 58)
                     }
                 }
+                .padding(.trailing, NumberRow.beyondNumber)
             } label: {
                 Text(verbatim: value.title)
             }

@@ -34,6 +34,7 @@ final class WorkshopStore: ObservableObject {
     private static let accountKey = "steamAccount"
 
     @Published var query = SteamWorkshop.Query()
+    @Published var showsTagFilter = false
     @Published private(set) var items: [SteamWorkshop.Item] = []
     @Published private(set) var isLoading = false
     @Published private(set) var cannotLoad = false

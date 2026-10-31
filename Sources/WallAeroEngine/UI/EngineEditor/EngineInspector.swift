@@ -422,7 +422,30 @@ private struct EngineEffectsSection: View {
             }
             ForEach(Array(effects.indices), id: \.self) { index in
                 let described = model.description?.object(id)?.effects.first { $0.id == index }
-                DisclosureGroup(isExpanded: isOpen(index)) {
+                FoldingRows(isOpen: $open.contains(index)) {
+                    Toggle("", isOn: model.effectVisible(id, effect: index))
+                        .labelsHidden()
+                        .toggleStyle(.checkbox)
+                    Text(verbatim: title(of: effects[index], described: described))
+                    Spacer()
+                    Image(systemName: "line.3.horizontal")
+                        .foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
+                        .help("Drag to change the order")
+                        .draggable(String(index))
+                    Menu {
+                        Button("Move Up") { model.change { $0.moveEffect(from: index, to: index - 1, of: id) } }
+                            .disabled(index == 0)
+                        Button("Move Down") { model.change { $0.moveEffect(from: index, to: index + 1, of: id) } }
+                            .disabled(index == effects.count - 1)
+                        Divider()
+                        Button("Remove", role: .destructive) { model.change { $0.removeEffect(at: index, of: id) } }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                } content: {
                     if let described {
                         ForEach(described.values) { value in
                             EngineEffectValueRows(value: value, numbers: model.effectValue(id, effect: index, value))
@@ -432,37 +455,12 @@ private struct EngineEffectsSection: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
-                } label: {
-                    HStack {
-                        Toggle("", isOn: model.effectVisible(id, effect: index))
-                            .labelsHidden()
-                            .toggleStyle(.checkbox)
-                        Text(verbatim: title(of: effects[index], described: described))
-                        Spacer()
-                        Image(systemName: "line.3.horizontal")
-                            .foregroundStyle(.secondary)
-                            .contentShape(Rectangle())
-                            .help("Drag to change the order")
-                            .draggable(String(index))
-                        Menu {
-                            Button("Move Up") { model.change { $0.moveEffect(from: index, to: index - 1, of: id) } }
-                                .disabled(index == 0)
-                            Button("Move Down") { model.change { $0.moveEffect(from: index, to: index + 1, of: id) } }
-                                .disabled(index == effects.count - 1)
-                            Divider()
-                            Button("Remove", role: .destructive) { model.change { $0.removeEffect(at: index, of: id) } }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                        }
-                        .menuStyle(.borderlessButton)
-                        .fixedSize()
-                    }
-                    .dropDestination(for: String.self) { dropped, _ in
-                        guard let source = dropped.first.flatMap(Int.init), source != index else { return false }
-                        model.change { $0.moveEffect(from: source, to: index, of: id) }
-                        open = []
-                        return true
-                    }
+                }
+                .dropDestination(for: String.self) { dropped, _ in
+                    guard let source = dropped.first.flatMap(Int.init), source != index else { return false }
+                    model.change { $0.moveEffect(from: source, to: index, of: id) }
+                    open = []
+                    return true
                 }
             }
         } header: {
@@ -479,19 +477,6 @@ private struct EngineEffectsSection: View {
             }
         }
         .onChange(of: id) { _ in open = [] }
-    }
-
-    private func isOpen(_ index: Int) -> Binding<Bool> {
-        Binding(
-            get: { open.contains(index) },
-            set: { isOpen in
-                if isOpen {
-                    open.insert(index)
-                } else {
-                    open.remove(index)
-                }
-            }
-        )
     }
 
     private func title(of effect: JSONValue, described: EngineSceneDescription.Effect?) -> String {

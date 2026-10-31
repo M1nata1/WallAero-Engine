@@ -109,14 +109,17 @@ enum ScreenshotMode {
             // `--workshop` pictures the Steam Workshop's part of the window, as Steam lists it
             // now, `--workshop-sign-in` what it asks for signing in, `--workshop-select <n>` the
             // panel of the n-th item of the list, `--workshop-general` the app's settings there,
-            // and `--workshop-progress` tiles on their way and a click on one, with
-            // `--workshop-cross` as they look under the pointer.
+            // `--workshop-progress` tiles on their way and a click on one, with
+            // `--workshop-cross` as they look under the pointer; `--workshop-tag <tag>` ticks a
+            // tag, `--workshop-tags` opens the list of them and `--workshop-tags-click` clicks there.
             if CommandLine.arguments.contains("--workshop") {
                 state.section = .workshop
                 state.settingsTab = CommandLine.arguments.contains("--workshop-general") ? .general : .wallpaper
                 workshop.showsSignIn = CommandLine.arguments.contains("--workshop-sign-in")
                 // Steam takes a few seconds to list them, and more for their pictures.
                 workshop.query.search = values(of: "--search").last ?? ""
+                workshop.query.setTags(Set(values(of: "--workshop-tag")))
+                workshop.showsTagFilter = CommandLine.arguments.contains("--workshop-tags")
                 workshop.reload()
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 if CommandLine.arguments.contains("--workshop-progress") {
@@ -151,13 +154,18 @@ enum ScreenshotMode {
                 if let index = values(of: "--workshop-select").last.flatMap(Int.init), workshop.items.indices.contains(index) {
                     workshop.selected = workshop.items[index]
                 }
+                let clicksTags = CommandLine.arguments.contains("--workshop-tags-click")
                 await shoot(AnyView(mainView), title: "WallAero Engine",
-                            size: NSSize(width: 1180, height: 700), to: directory.appendingPathComponent("workshop.png"), waiting: 12) { window in
+                            size: NSSize(width: values(of: "--workshop-width").last.flatMap(Double.init) ?? 1180, height: 700),
+                            to: directory.appendingPathComponent("workshop.png"), waiting: 12) { window in
                     if workshop.selected != nil {
                         Task {
                             try? await Task.sleep(nanoseconds: 8_000_000_000)
                             printPreviewFrames(in: window)
                         }
+                    }
+                    if clicksTags {
+                        Task { await clickTagList(in: window, store: workshop) }
                     }
                 }
                 NSApp.terminate(nil)
@@ -496,6 +504,26 @@ enum ScreenshotMode {
         }
     }
 
+    /// `--workshop-tags-click`, with `--workshop`: opens the tags with a real click, and clicks the
+    /// two things at the top of it, saying what each click did.
+    private static func clickTagList(in window: NSWindow, store: WorkshopStore) async {
+        setlinebuf(stdout)
+        click(NSPoint(x: 270, y: 56), in: window, isButton: true)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        print("the tags are " + (store.showsTagFilter ? "open" : "NOT open"))
+        guard let list = NSApp.windows.first(where: { $0 !== window && $0.isVisible && $0.contentView.map { $0.bounds.height > 200 } == true }) else {
+            print("no list")
+            return
+        }
+        // The rows below the heading of the list, counted from its top.
+        for (name, y) in [("18+", 35.0), ("anime", 58), ("18+", 35), ("anime", 58)] {
+            let before = store.query
+            click(NSPoint(x: 40, y: y), in: list, isButton: true)
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            print("\(name): shows anime \(before.includesAnime) -> \(store.query.includesAnime), shows 18+ \(before.includesMature) -> \(store.query.includesMature)")
+        }
+    }
+
     /// `--workshop-click`, with `--workshop`: clicks each tile with a real mouse event, saying
     /// which of them show up in the panel, and then Download in the panel of the last one. With no
     /// account in this helper that click opens the sign-in and starts nothing.
@@ -798,6 +826,35 @@ enum ScreenshotMode {
         }
     }
 
+    private static func pictureInspectorPages(of window: NSWindow, to output: URL) async {
+        guard let content = window.contentView else { return }
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            view.subviews.flatMap { subview in
+                (subview as? NSScrollView).map { [$0] } ?? scrollViews(in: subview)
+            }
+        }
+        let inspector = scrollViews(in: content).filter { $0.convert($0.bounds, to: nil).minX > content.bounds.midX }
+            .max { $0.documentView?.frame.height ?? 0 < $1.documentView?.frame.height ?? 0 }
+        guard let inspector, let document = inspector.documentView else { return }
+        let page = inspector.contentView.bounds.height - 40
+        let start = document.isFlipped ? inspector.contentView.bounds.minY : document.frame.height - inspector.contentView.bounds.height
+        for number in 2...12 {
+            let moved = page * CGFloat(number - 1)
+            guard moved < document.frame.height - inspector.contentView.bounds.height + page else { break }
+            inspector.contentView.scroll(to: NSPoint(x: 0, y: document.isFlipped ? start + moved : max(0, start - moved)))
+            inspector.reflectScrolledClipView(inspector.contentView)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            var image: CGImage?
+            if #available(macOS 14.4, *) {
+                image = try? await captureWithScreenCaptureKit(window)
+            }
+            if let image = image ?? drawViews(of: window) {
+                let name = output.deletingPathExtension().lastPathComponent + "-\(number)"
+                write(image, to: output.deletingLastPathComponent().appendingPathComponent(name).appendingPathExtension("png"))
+            }
+        }
+    }
+
     private static func shoot(_ content: AnyView, title: String, size: NSSize, to url: URL,
                               waiting seconds: Double = 0, prepare: ((NSWindow) -> Void)? = nil) async {
         let window = AppWindow.make(title: title, content: content, size: size)
@@ -1059,6 +1116,10 @@ enum ScreenshotMode {
                 write(image, to: request.output)
                 print("wrote \(request.output.path) (\(image.width)×\(image.height))")
             }
+            // `--inspector-pages`: the properties a screen at a time, as <output>-2.png and on.
+            if CommandLine.arguments.contains("--inspector-pages") {
+                await pictureInspectorPages(of: window, to: request.output)
+            }
             model.saveNow()
             exit(0)
         }
@@ -1091,7 +1152,9 @@ enum ScreenshotMode {
                 model.selection = number
             }
             // `--tool <move|rotate|scale>`, `--tab <kind|effects>`, `--scene-tab <view|environment|settings>`,
-            // `--zoom <factor>` and `--find <text>`: the editor with that chosen.
+            // `--zoom <factor>` and `--find <text>`: the editor with that chosen; `--open-rows`
+            // with everything in the properties unfolded.
+            FoldingRowsLook.opensAll = CommandLine.arguments.contains("--open-rows")
             switch values(of: "--tool").last {
             case "move": model.tool = .move
             case "rotate": model.tool = .rotate
@@ -1268,6 +1331,10 @@ enum ScreenshotMode {
             if let image = image ?? drawViews(of: window) {
                 write(image, to: request.output)
                 print("wrote \(request.output.path) (\(image.width)×\(image.height))")
+            }
+            // `--inspector-pages`: the properties a screen at a time, as <output>-2.png and on.
+            if CommandLine.arguments.contains("--inspector-pages") {
+                await pictureInspectorPages(of: window, to: request.output)
             }
             model.saveNow()
             exit(0)
