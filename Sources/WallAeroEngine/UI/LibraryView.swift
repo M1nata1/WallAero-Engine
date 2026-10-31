@@ -22,11 +22,10 @@ extension WallpaperLibrary {
     }
 }
 
-/// The app's main window: the library or the Steam Workshop, with the settings of the library's
-/// wallpapers at its side when they are asked for, or the Workshop item that was clicked.
+/// The app's main window: the library or the Steam Workshop, with the panel of the wallpaper
+/// selected there and the app's settings at its side, the same panel for both.
 struct MainView: View {
     @EnvironmentObject private var state: MainWindowState
-    @EnvironmentObject private var workshop: WorkshopStore
     let actions: LibraryActions
 
     var body: some View {
@@ -34,12 +33,12 @@ struct MainView: View {
             if #available(macOS 14.0, *) {
                 // The system's own side panel: it looks the way the Mac's version of macOS has them.
                 sections
-                    .inspector(isPresented: showsSidePanel) {
-                        sidePanel
+                    .inspector(isPresented: $state.showsSettings) {
+                        SettingsPanel(edit: actions.edit)
                             .inspectorColumnWidth(MainWindowState.settingsWidth)
                             .toolbar {
                                 Spacer()
-                                SettingsToggle(isOn: showsSidePanel)
+                                SettingsToggle(isOn: $state.showsSettings)
                             }
                     }
                     .toolbar {
@@ -54,9 +53,9 @@ struct MainView: View {
                     HStack(spacing: 0) {
                         sections
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        if showsSidePanel.wrappedValue {
+                        if state.showsSettings {
                             Divider()
-                            sidePanel
+                            SettingsPanel(edit: actions.edit)
                                 .frame(width: MainWindowState.settingsWidth)
                                 .background(Color(nsColor: .windowBackgroundColor))
                         }
@@ -67,30 +66,6 @@ struct MainView: View {
         .onChange(of: state.section) { _ in
             // The keys are not to stay in a search field that is no longer on show.
             NSApp.keyWindow?.makeFirstResponder(nil)
-        }
-    }
-
-    /// The settings are of the library's wallpapers, so the Workshop shows its own item there,
-    /// once one is clicked; whether the settings are open comes back with the library.
-    private var showsSidePanel: Binding<Bool> {
-        Binding(
-            get: { state.section == .library ? state.showsSettings : workshop.selected != nil },
-            set: { shown in
-                if state.section == .library {
-                    state.showsSettings = shown
-                } else if !shown {
-                    workshop.selected = nil
-                }
-            }
-        )
-    }
-
-    @ViewBuilder
-    private var sidePanel: some View {
-        if state.section == .library {
-            SettingsPanel(edit: actions.edit)
-        } else {
-            WorkshopDetailsPanel()
         }
     }
 

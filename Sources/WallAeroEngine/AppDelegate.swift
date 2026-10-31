@@ -621,7 +621,7 @@ extension AppDelegate: NSMenuItemValidation {
     /// when none is, or when the keys go to a text.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleSettingsPanel(_:)) {
-            menuItem.state = windows.state.showsSettings && windows.state.section == .library ? .on : .off
+            menuItem.state = windows.state.showsSettings ? .on : .off
         }
         if menuItem.action == #selector(deleteSelectedWallpapers(_:)) {
             return libraryTakesCommands && !windows.state.picked.ids.isEmpty

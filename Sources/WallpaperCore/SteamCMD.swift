@@ -32,15 +32,6 @@ public struct SteamCMD: Sendable {
         downloadsURL.appendingPathComponent("steamapps/workshop/content/\(SteamWorkshop.appID)/\(id)", isDirectory: true)
     }
 
-    /// How much of what is being downloaded has arrived, in bytes.
-    public func downloadedBytes() -> Int64 {
-        let workshop = downloadsURL.appendingPathComponent("steamapps/workshop", isDirectory: true)
-        guard let files = FileManager.default.enumerator(at: workshop, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
-        return files.compactMap { $0 as? URL }.reduce(0) { sum, file in
-            sum + Int64((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-        }
-    }
-
     /// Fetches the program from Valve. It fetches the rest of itself when first started.
     public func install() async throws {
         let (archive, _) = try await URLSession.shared.download(from: Self.installerURL)
@@ -70,9 +61,9 @@ public struct SteamCMD: Sendable {
 
     /// Downloads items into `downloadsURL`. A Windows machine's files are the ones wallpapers
     /// have, so that is the kind of machine the program is told it is on.
-    public func download(_ ids: [String], account: String) throws -> Run {
+    public func download(_ ids: [String], account: String, app: String = SteamWorkshop.appID) throws -> Run {
         try FileManager.default.createDirectory(at: downloadsURL, withIntermediateDirectories: true)
-        let items = ids.flatMap { ["+workshop_download_item", SteamWorkshop.appID, $0] }
+        let items = ids.flatMap { ["+workshop_download_item", app, $0] }
         return try start(["+@sSteamCmdForcePlatformType", "windows", "+force_install_dir", downloadsURL.path,
                           "+login", account] + items + ["+quit"])
     }
@@ -115,6 +106,8 @@ public struct SteamCMD: Sendable {
         private let continuation: AsyncStream<Event>.Continuation
         private let process = Process()
         private let master: Int32
+        /// What the program had written by the time it was signed in.
+        private let writtenBefore = OSAllocatedUnfairLock<Int64?>(initialState: nil)
 
         init(script: URL, arguments: [String], directory: URL, environment: [String: String]) throws {
             var master: Int32 = -1, slave: Int32 = -1
@@ -158,11 +151,35 @@ public struct SteamCMD: Sendable {
         /// Stops the program. The script only waits for it and would not pass the word on.
         public func cancel() {
             guard process.isRunning else { return }
+            children.forEach { kill($0, SIGTERM) }
+            process.terminate()
+        }
+
+        /// The processes the script has started.
+        private var children: [pid_t] {
             var children = [pid_t](repeating: 0, count: 8)
             let found = proc_listchildpids(process.processIdentifier, &children,
                                            Int32(children.count * MemoryLayout<pid_t>.size))
-            children.prefix(Int(max(found, 0))).filter { $0 > 0 }.forEach { kill($0, SIGTERM) }
-            process.terminate()
+            return children.prefix(Int(max(found, 0))).filter { $0 > 0 }
+        }
+
+        /// How much the program has written since it signed in, in bytes: nearly all of that is
+        /// what it downloads. The files say nothing of this, since Steam gives them their full
+        /// size before the first byte arrives.
+        public var bytesDownloaded: Int64 {
+            guard let before = writtenBefore.withLock({ $0 }) else { return 0 }
+            return max(0, bytesWritten - before)
+        }
+
+        private var bytesWritten: Int64 {
+            guard process.isRunning else { return 0 }
+            return children.reduce(0) { sum, child in
+                var usage = rusage_info_v4()
+                let result = withUnsafeMutablePointer(to: &usage) {
+                    $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(child, RUSAGE_INFO_V4, $0) }
+                }
+                return result == 0 ? sum + Int64(usage.ri_logical_writes) : sum
+            }
         }
 
         private func readOutput() {
@@ -176,7 +193,13 @@ public struct SteamCMD: Sendable {
                     continue
                 }
                 guard count > 0 else { break }
-                output.append(String(decoding: buffer[..<count], as: UTF8.self)).forEach { continuation.yield($0) }
+                for event in output.append(String(decoding: buffer[..<count], as: UTF8.self)) {
+                    if case .signedIn = event {
+                        let written = bytesWritten
+                        writtenBefore.withLock { $0 = written }
+                    }
+                    continuation.yield(event)
+                }
             }
             SteamCMD.log.notice("last said: \(output.lastLine, privacy: .public)")
             close(master)

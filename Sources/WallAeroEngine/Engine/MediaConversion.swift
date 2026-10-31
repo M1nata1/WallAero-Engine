@@ -11,7 +11,8 @@ final class MediaConversion {
     /// What is being done; each conversion waits for the one before it, since each uses every core.
     private var last: Task<Void, Never>?
 
-    /// Converts what the folder needs and returns when that is done.
+    /// Converts what the folder needs and returns when that is done, or soon after the task
+    /// calling it is cancelled: then the file under way is left as it was.
     func convert(_ folder: URL, progress: @escaping @Sendable (Double) -> Void = { _ in }) async {
         let before = last
         let task = Task.detached(priority: .userInitiated) {
@@ -22,7 +23,11 @@ final class MediaConversion {
             }
         }
         last = task
-        await task.value
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     /// Converts what the folder needs, without waiting.
