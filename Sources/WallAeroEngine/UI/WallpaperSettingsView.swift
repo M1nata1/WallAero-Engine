@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 import WallpaperCore
 
-/// The settings of one wallpaper: what it is, how it fills the screen and how fast it plays,
-/// and, for a scene, the variables it puts up for changing. They are for the wallpaper selected
-/// in the library, or for the one on the desktop when none is selected.
+/// The settings of one wallpaper: a short line on what it is, then what changes how it looks
+/// (how it fills the screen, how fast it plays, a scene's variables and pictures), then its music
+/// and tags. They are for the wallpaper selected in the library, or for the one on the desktop
+/// when none is selected.
 struct WallpaperSettingsView: View {
     @EnvironmentObject private var library: WallpaperLibrary
     @EnvironmentObject private var manager: WallpaperManager
@@ -31,14 +32,8 @@ struct WallpaperSettingsView: View {
                     Section {
                         summary(of: item)
                     }
-                    Section("Tags") {
-                        TagEditor(item: item)
-                    }
                     Section("Properties") {
                         properties(of: item)
-                    }
-                    Section("Music") {
-                        MusicSettingsRows(item: item)
                     }
                     if let scene = scene(of: item), !scene.variables.isEmpty {
                         Section("Scene") {
@@ -55,6 +50,12 @@ struct WallpaperSettingsView: View {
                                 pictureRow(picture)
                             }
                         }
+                    }
+                    Section("Music") {
+                        MusicSettingsRows(item: item)
+                    }
+                    Section("Tags") {
+                        TagEditor(item: item)
                     }
                 }
                 .formStyle(.grouped)
@@ -107,32 +108,37 @@ struct WallpaperSettingsView: View {
 
     // MARK: - What the wallpaper is
 
+    /// The picture is the size of a wallpaper's in the library at most: it is there to say which
+    /// wallpaper this is, and the settings below are what the panel is for.
     @ViewBuilder
     private func summary(of item: Wallpaper) -> some View {
-        Color.black
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .overlay {
-                if let url = library.thumbnailURL(for: item), let image = ThumbnailCache.image(at: url) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFill()
+        HStack(spacing: 12) {
+            Color.black
+                .aspectRatio(16 / 10, contentMode: .fit)
+                .frame(width: 112)
+                .overlay {
+                    if let url = library.thumbnailURL(for: item), let image = ThumbnailCache.image(at: url) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    }
                 }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous))
-        // The name goes under its label, as wide as the row, and wraps onto as many lines as it needs.
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Name")
-            Text(verbatim: item.name.split(whereSeparator: \.isWhitespace).joined(separator: " "))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        LabeledContent("Kind") {
-            Text(kindTitle(of: item))
-        }
-        if !item.detailsText.isEmpty {
-            LabeledContent("Details") {
-                Text(verbatim: item.detailsText)
+                .clipShape(RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous))
+            // The name wraps onto as many lines as it needs.
+            VStack(alignment: .leading, spacing: 3) {
+                Text(verbatim: item.name.split(whereSeparator: \.isWhitespace).joined(separator: " "))
+                    .font(.body.weight(.medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(kindTitle(of: item))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !item.detailsText.isEmpty {
+                    Text(verbatim: item.detailsText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         if library.canEdit(item) {
@@ -142,7 +148,6 @@ struct WallpaperSettingsView: View {
                 Text(library.editTitle(for: item))
                     .frame(maxWidth: .infinity)
             }
-            .controlSize(.large)
         }
     }
 

@@ -266,6 +266,14 @@ public final class MetalScenePlayer {
         return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
     }
 
+    /// Has the scene's animations show a moment, in seconds, also while the scene is paused; with
+    /// nil they go on as they were.
+    public func showAnimations(at seconds: Double?) {
+        _ = ask("seek", [seconds ?? NSNull()])
+        call("__frame", [(CACurrentMediaTime() - started) * 1000])
+        gl.present()
+    }
+
     /// Frames copied to other screens so far.
     public var mirroredFrames: Int { gl.mirroredFrames }
 

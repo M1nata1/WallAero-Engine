@@ -4,7 +4,8 @@ import ImageIO
 
 /// The pictures of Workshop items, kept on disk for a day so that going through the list again
 /// costs no traffic. What is kept is the first frame at the size of a tile: many previews are
-/// GIFs of a megabyte, which Steam does not scale.
+/// GIFs of a megabyte, which Steam does not scale. An item opened by the user has its preview
+/// kept whole as well, for as long.
 public struct SteamWorkshopPreviews: Sendable {
     /// Twice the width of a tile, for a Retina display.
     private static let pixels = 432
@@ -24,9 +25,9 @@ public struct SteamWorkshopPreviews: Sendable {
             .appendingPathComponent("com.fadevec.WallAeroEngine/WorkshopPreviews", isDirectory: true)
     }
 
-    private func file(for url: URL) -> URL {
+    private func file(for url: URL, extension kind: String = "jpg") -> URL {
         let name = SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
-        return folder.appendingPathComponent(name).appendingPathExtension("jpg")
+        return folder.appendingPathComponent(name).appendingPathExtension(kind)
     }
 
     private func isExpired(_ file: URL, at date: Date) -> Bool {
@@ -54,6 +55,17 @@ public struct SteamWorkshopPreviews: Sendable {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? Thumbnailer.writeJPEG(frame, to: file(for: url))
         return frame
+    }
+
+    /// The preview at `url` as it was downloaded, if it is no older than a day.
+    public func keptOriginal(for url: URL, at date: Date = Date()) -> Data? {
+        let file = file(for: url, extension: "original")
+        return isExpired(file, at: date) ? nil : try? Data(contentsOf: file)
+    }
+
+    public func keepOriginal(_ data: Data, for url: URL) {
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? data.write(to: file(for: url, extension: "original"), options: .atomic)
     }
 
     /// Lets go of the pictures that are more than a day old.

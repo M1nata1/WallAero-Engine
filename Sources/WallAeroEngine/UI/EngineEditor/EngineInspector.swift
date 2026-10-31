@@ -3,17 +3,76 @@ import SwiftUI
 import WallpaperCore
 
 /// The right-hand side of the editor: the properties of the selected object, or of the scene
-/// when none is selected.
+/// when none is selected, by topic: a scene can have hundreds of effects, and its properties in
+/// one column would have to be looked through every time.
 struct EngineInspector: View {
     @ObservedObject var model: EngineEditorModel
 
     var body: some View {
-        Form {
+        VStack(spacing: 0) {
             if let id = model.selection, model.document.object(id) != nil {
-                EngineObjectProperties(model: model, id: id)
+                EngineObjectTabs(model: model, id: id)
             } else {
-                EngineSceneProperties(model: model)
+                tabs(selection: $model.sceneTab) {
+                    Text("Scene").tag(EngineEditorModel.SceneTab.scene)
+                    Text("View").tag(EngineEditorModel.SceneTab.view)
+                    Text("Environment").tag(EngineEditorModel.SceneTab.environment)
+                    Text("Settings").tag(EngineEditorModel.SceneTab.settings)
+                }
+                Form {
+                    EngineSceneProperties(model: model)
+                }
+                .formStyle(.grouped)
             }
+        }
+    }
+}
+
+/// The row of topics at the top of the properties.
+@ViewBuilder
+private func tabs<Tab: Hashable, Content: View>(selection: Binding<Tab>, @ViewBuilder content: () -> Content) -> some View {
+    Picker("", selection: selection, content: content)
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+}
+
+/// The topics an object has. One takes the name of the object's kind, as what it holds does.
+private struct EngineObjectTabs: View {
+    @ObservedObject var model: EngineEditorModel
+    let id: Int
+
+    private var kind: WallpaperEngineDocument.ObjectKind { model.kind(of: id) }
+    private var hasKindTab: Bool { ![.model, .group, .fullscreen].contains(kind) }
+    private var hasEffects: Bool { [.image, .text, .solid, .composition, .fullscreen].contains(kind) }
+
+    /// The topic left open, unless this object has no such thing.
+    private var tab: Binding<EngineEditorModel.ObjectTab> {
+        Binding(
+            get: {
+                switch model.objectTab {
+                case .kind where !hasKindTab, .effects where !hasEffects: return .object
+                default: return model.objectTab
+                }
+            },
+            set: { model.objectTab = $0 }
+        )
+    }
+
+    var body: some View {
+        tabs(selection: tab) {
+            Text("Object").tag(EngineEditorModel.ObjectTab.object)
+            if hasKindTab {
+                Text(verbatim: EngineEditorModel.kindTitle(kind)).tag(EngineEditorModel.ObjectTab.kind)
+            }
+            if hasEffects {
+                Text("Effects").tag(EngineEditorModel.ObjectTab.effects)
+            }
+        }
+        Form {
+            EngineObjectProperties(model: model, id: id, tab: tab.wrappedValue)
         }
         .formStyle(.grouped)
     }
@@ -24,10 +83,20 @@ struct EngineInspector: View {
 private struct EngineObjectProperties: View {
     @ObservedObject var model: EngineEditorModel
     let id: Int
+    let tab: EngineEditorModel.ObjectTab
 
     private var kind: WallpaperEngineDocument.ObjectKind { model.kind(of: id) }
 
     var body: some View {
+        switch tab {
+        case .object: objectTab
+        case .kind: kindSection
+        case .effects: EngineEffectsSection(model: model, id: id)
+        }
+    }
+
+    @ViewBuilder
+    private var objectTab: some View {
         Section {
             TextField("Name", text: model.text(id, "name"))
             LabeledContent("Kind") { Text(EngineEditorModel.kindTitle(kind)) }
@@ -70,11 +139,7 @@ private struct EngineObjectProperties: View {
                 }
             }
         }
-        kindSection
         EngineObjectLinks(model: model, id: id)
-        if [.image, .text, .solid, .composition, .fullscreen].contains(kind) {
-            EngineEffectsSection(model: model, id: id)
-        }
         Section {
             HStack {
                 Button("Duplicate") { model.duplicate(id) }
@@ -95,7 +160,7 @@ private struct EngineObjectProperties: View {
                         .foregroundStyle(.secondary)
                 }
                 Button("Replace Picture…") { model.replacePicture(of: id) }
-                Button("Puppet Warp…") { model.sheet = .puppet(object: id) }
+                Button("Puppet Warp…") { model.puppetObject = id }
             }
             if model.document.material(ofObject: id) != nil {
                 lightingSection
@@ -199,8 +264,8 @@ private struct EngineObjectProperties: View {
                 if let hex = color.wrappedValue {
                     ColorRow("Color", hex: Binding(get: { hex }, set: { color.wrappedValue = $0 }))
                 }
-                Button("Edit Particle System…") { model.sheet = .particles(object: id) }
             }
+            EngineParticleSystemSections(model: model, object: id)
         case .sound:
             Section("Sound") {
                 NumberRow("Volume", value: model.part(id, "volume", 0, default: [1], scale: 100), in: 0...100, suffix: "%")
@@ -340,17 +405,24 @@ private struct EngineObjectProperties: View {
 
 // MARK: - Effects
 
-/// The effects of an object, in the order they are applied, each with its values.
+/// The effects of an object, in the order they are applied, each with its values. They are
+/// folded, so that the order can be seen, and the button that adds one stays at the top.
 private struct EngineEffectsSection: View {
     @ObservedObject var model: EngineEditorModel
     let id: Int
+    @State private var open: Set<Int> = []
 
     var body: some View {
         let effects = model.document.object(id)?["effects"]?.arrayValue ?? []
         Section {
+            Button {
+                model.sheet = .effects(object: id)
+            } label: {
+                Label("Add Effect…", systemImage: "plus")
+            }
             ForEach(Array(effects.indices), id: \.self) { index in
                 let described = model.description?.object(id)?.effects.first { $0.id == index }
-                DisclosureGroup {
+                DisclosureGroup(isExpanded: isOpen(index)) {
                     if let described {
                         ForEach(described.values) { value in
                             EngineEffectValueRows(value: value, numbers: model.effectValue(id, effect: index, value))
@@ -367,6 +439,11 @@ private struct EngineEffectsSection: View {
                             .toggleStyle(.checkbox)
                         Text(verbatim: title(of: effects[index], described: described))
                         Spacer()
+                        Image(systemName: "line.3.horizontal")
+                            .foregroundStyle(.secondary)
+                            .contentShape(Rectangle())
+                            .help("Drag to change the order")
+                            .draggable(String(index))
                         Menu {
                             Button("Move Up") { model.change { $0.moveEffect(from: index, to: index - 1, of: id) } }
                                 .disabled(index == 0)
@@ -380,16 +457,41 @@ private struct EngineEffectsSection: View {
                         .menuStyle(.borderlessButton)
                         .fixedSize()
                     }
+                    .dropDestination(for: String.self) { dropped, _ in
+                        guard let source = dropped.first.flatMap(Int.init), source != index else { return false }
+                        model.change { $0.moveEffect(from: source, to: index, of: id) }
+                        open = []
+                        return true
+                    }
                 }
             }
-            Button {
-                model.sheet = .effects(object: id)
-            } label: {
-                Label("Add Effect…", systemImage: "plus")
-            }
         } header: {
-            Text("Effects")
+            HStack {
+                Text("Effects")
+                Spacer()
+                if !effects.isEmpty {
+                    Button(open.isEmpty ? "Expand All" : "Collapse All") {
+                        open = open.isEmpty ? Set(effects.indices) : []
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.callout)
+                }
+            }
         }
+        .onChange(of: id) { _ in open = [] }
+    }
+
+    private func isOpen(_ index: Int) -> Binding<Bool> {
+        Binding(
+            get: { open.contains(index) },
+            set: { isOpen in
+                if isOpen {
+                    open.insert(index)
+                } else {
+                    open.remove(index)
+                }
+            }
+        )
     }
 
     private func title(of effect: JSONValue, described: EngineSceneDescription.Effect?) -> String {
@@ -470,6 +572,16 @@ private struct EngineSceneProperties: View {
     @ObservedObject var model: EngineEditorModel
 
     var body: some View {
+        switch model.sceneTab {
+        case .scene: sceneTab
+        case .view: viewTab
+        case .environment: environmentTab
+        case .settings: EngineUserProperties(model: model)
+        }
+    }
+
+    @ViewBuilder
+    private var sceneTab: some View {
         Section("Scene") {
             TextField("Title", text: Binding(get: { model.document.title }, set: { model.document.title = $0 }))
             LabeledContent("Size") {
@@ -478,6 +590,10 @@ private struct EngineSceneProperties: View {
             }
             ColorRow("Background Color", hex: model.generalColor("clearcolor", default: [0, 0, 0]))
         }
+    }
+
+    @ViewBuilder
+    private var viewTab: some View {
         Section("Camera") {
             Toggle("Parallax", isOn: model.generalFlag("cameraparallax", default: false))
             if model.document[general: "cameraparallax"]?.plain.boolValue == true {
@@ -500,6 +616,10 @@ private struct EngineSceneProperties: View {
                 NumberRow("Threshold", value: model.general("bloomthreshold", default: 0.65), in: 0...1, step: 0.01)
             }
         }
+    }
+
+    @ViewBuilder
+    private var environmentTab: some View {
         Section("Physics") {
             NumberRow("Gravity", value: model.general("gravitystrength", default: 1), in: 0...5, step: 0.01)
             Toggle("Wind", isOn: model.generalFlag("windenabled", default: false))
@@ -512,6 +632,5 @@ private struct EngineSceneProperties: View {
             ColorRow("Ambient Light", hex: model.generalColor("ambientcolor", default: [0.3, 0.3, 0.3]))
             ColorRow("Sky Light", hex: model.generalColor("skylightcolor", default: [0.3, 0.3, 0.3]))
         }
-        EngineUserProperties(model: model)
     }
 }

@@ -10,9 +10,17 @@ public enum SteamWorkshop {
         public let id: String
         public let title: String
         public let previewURL: URL?
+        /// The preview as its author made it: moving, when it is a GIF. Those are small squares
+        /// of a megabyte, which Steam does not scale.
+        public let originalPreviewURL: URL?
         /// Size of its files, in bytes.
         public let fileSize: Int64
         public let tags: [String]
+        /// What the author says about it, as plain text.
+        public let description: String
+        public let subscriptions: Int
+        public let favorites: Int
+        public let updated: Date?
 
         /// The page of the item on Steam.
         public var pageURL: URL {
@@ -23,6 +31,13 @@ public enum SteamWorkshop {
         public var kindTag: String? {
             tags.first(where: Kind.tags.contains)
         }
+    }
+
+    /// What only the item's page on Steam says.
+    public struct Page: Equatable, Sendable {
+        public let author: String?
+        /// From one to five; nothing until enough people have voted.
+        public let stars: Int?
     }
 
     public enum Sort: String, CaseIterable, Sendable {
@@ -122,9 +137,54 @@ public enum SteamWorkshop {
             guard !tags.contains("Application"), query.includesMature || tags.contains("Everyone") else { return nil }
             let size = (detail["file_size"] as? Int64) ?? Int64(detail["file_size"] as? String ?? "") ?? 0
             // Twice the size of a tile, as Steam scales them for its own pages.
-            let preview = (detail["preview_url"] as? String).flatMap { URL(string: $0 + "?imw=432&imh=270&ima=fit&impolicy=Letterbox&letterbox=false") }
-            return Item(id: id, title: title, previewURL: preview, fileSize: size, tags: tags)
+            let original = detail["preview_url"] as? String
+            let preview = original.flatMap { URL(string: $0 + "?imw=432&imh=270&ima=fit&impolicy=Letterbox&letterbox=false") }
+            return Item(id: id, title: title, previewURL: preview, originalPreviewURL: original.flatMap(URL.init(string:)),
+                        fileSize: size, tags: tags, description: plainText(ofDescription: detail["description"] as? String ?? ""),
+                        subscriptions: detail["subscriptions"] as? Int ?? 0, favorites: detail["favorited"] as? Int ?? 0,
+                        updated: (detail["time_updated"] as? Int).map { Date(timeIntervalSince1970: TimeInterval($0)) })
         }
+    }
+
+    /// A description without Steam's markup. Only its own tags go: a title in brackets stays.
+    static func plainText(ofDescription description: String) -> String {
+        let tags = "h1|h2|h3|b|i|u|s|strike|spoiler|noparse|hr|url|list|olist|quote|code|table|tr|td|th"
+        let rules = [(#"(?is)\[(img|previewyoutube)[^\]]*\].*?\[/\1\]"#, ""),
+                     (#"\[\*\]"#, "• "),
+                     ("(?i)\\[/?(\(tags))(=[^\\]]*)?\\]", "")]
+        let text = rules.reduce(description) {
+            $0.replacingOccurrences(of: $1.0, with: $1.1, options: .regularExpression)
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// What the page of an item says beyond the API, as far as it can be made out.
+    static func page(inHTML html: String) -> Page {
+        var author: String?
+        if let block = html.range(of: "class=\"creatorsBlock\""),
+           let name = html[block.upperBound...].range(of: "class=\"friendBlockContent\">") {
+            let text = html[name.upperBound...].prefix { $0 != "<" }.trimmingCharacters(in: .whitespacesAndNewlines)
+            author = text.isEmpty ? nil : text
+                .replacingOccurrences(of: "&lt;", with: "<")
+                .replacingOccurrences(of: "&gt;", with: ">")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&#39;", with: "'")
+                .replacingOccurrences(of: "&amp;", with: "&")
+        }
+        var stars: Int?
+        if let rating = html.range(of: "class=\"fileRatingDetails\""),
+           let star = html[rating.upperBound...].range(of: "-star_large") {
+            stars = html[..<star.lowerBound].last?.wholeNumberValue
+        }
+        return Page(author: author, stars: stars)
+    }
+
+    /// Reads the item's page; asked for only when the user opens the item.
+    public static func page(of item: Item) async throws -> Page {
+        var request = URLRequest(url: item.pageURL)
+        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return page(inHTML: String(decoding: data, as: UTF8.self))
     }
 
     /// One page of what the query finds. Empty past the last page.

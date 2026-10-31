@@ -37,6 +37,24 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("General") {
+                Toggle("Open at login", isOn: $opensAtLogin)
+                    .onChange(of: opensAtLogin) { enabled in
+                        updateLoginItem(enabled)
+                    }
+                if let loginItemError {
+                    Text(loginItemError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Toggle("Show the wallpaper on the lock screen", isOn: $preferences.setsSystemWallpaper)
+                LabeledContent("Library folder") {
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.open(library.rootURL)
+                    }
+                }
+            }
+
             Section("Playback") {
                 Toggle("Play sound", isOn: $preferences.playsSound)
                 Slider(value: $preferences.volume, in: 0...1) {
@@ -65,25 +83,8 @@ struct SettingsView: View {
                 }
             }
 
+            // Last, as the one that grows with a pack's cursors.
             CursorSettingsSection()
-
-            Section("General") {
-                Toggle("Open at login", isOn: $opensAtLogin)
-                    .onChange(of: opensAtLogin) { enabled in
-                        updateLoginItem(enabled)
-                    }
-                if let loginItemError {
-                    Text(loginItemError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                Toggle("Show the wallpaper on the lock screen", isOn: $preferences.setsSystemWallpaper)
-                LabeledContent("Library folder") {
-                    Button("Show in Finder") {
-                        NSWorkspace.shared.open(library.rootURL)
-                    }
-                }
-            }
         }
         .formStyle(.grouped)
         .frame(maxHeight: .infinity)

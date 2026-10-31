@@ -2,8 +2,9 @@ import SwiftUI
 import WallpaperCore
 
 /// The editor of a Wallpaper Engine scene: the objects on the left, the scene in the middle,
-/// what is selected on the right — as Wallpaper Engine's own editor lays them out, in the
-/// manner of a Mac app.
+/// what is selected on the right. What there is to edit and what it is called is Wallpaper
+/// Engine's; the way of working is Blender's: tools on the scene and a line saying what they do,
+/// properties by topic, keys that stand for tools. Its look is that of a Mac app.
 struct EngineEditorView: View {
     @ObservedObject var model: EngineEditorModel
     let preview: EngineEditorPreviewController
@@ -15,10 +16,10 @@ struct EngineEditorView: View {
                 switch sheet {
                 case .effects(let object):
                     EngineEffectGallery(model: model, object: object)
-                case .particles(let object):
-                    EngineParticleEditor(model: model, object: object)
-                case .puppet(let object):
-                    EnginePuppetEditor(model: model, object: object)
+                case .animation(_, let target, let isNew, let fallback):
+                    EngineAnimationOptionsSheet(model: model, target: target, isNew: isNew, fallback: fallback)
+                case .events(let target):
+                    EngineAnimationEventsSheet(model: model, target: target)
                 }
             }
     }
@@ -27,14 +28,14 @@ struct EngineEditorView: View {
     private var layout: some View {
         if #available(macOS 14.0, *) {
             NavigationSplitView(columnVisibility: .constant(.all)) {
-                EngineHierarchy(model: model)
+                hierarchy
                     .toolbar(removing: .sidebarToggle)
                     .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 340)
             } detail: {
-                canvas
+                middle
                     .toolbar { toolbarContent }
             }
-            .inspector(isPresented: .constant(true)) {
+            .inspector(isPresented: showsInspector) {
                 EngineInspector(model: model)
                     .inspectorColumnWidth(min: 300, ideal: 340, max: 440)
                     .toolbar {
@@ -56,20 +57,95 @@ struct EngineEditorView: View {
                 .padding(.vertical, 8)
                 Divider()
                 HStack(spacing: 0) {
-                    EngineHierarchy(model: model).frame(width: 240)
+                    hierarchy.frame(width: 240)
                     Divider()
-                    canvas
-                    Divider()
-                    EngineInspector(model: model).frame(width: 340)
+                    middle
+                    if showsInspector.wrappedValue {
+                        Divider()
+                        EngineInspector(model: model).frame(width: 340)
+                    }
                 }
+            }
+        }
+    }
+
+    /// While a puppet warp is edited the layers stay in view but are not to be changed.
+    private var hierarchy: some View {
+        EngineHierarchy(model: model)
+            .disabled(model.puppetObject != nil)
+    }
+
+    /// The puppet warp has a panel of its own, so it takes the place of the properties too.
+    private var showsInspector: Binding<Bool> {
+        Binding(get: { model.puppetObject == nil }, set: { _ in })
+    }
+
+    /// The scene, which stays where it is under a puppet warp being edited.
+    private var middle: some View {
+        ZStack {
+            canvas
+            if let object = model.puppetObject {
+                EnginePuppetEditor(model: model, object: object)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .id(object)
             }
         }
     }
 
     private var canvas: some View {
         let size = model.document.size
-        return EngineEditorPreview(controller: preview, aspectRatio: size.height > 0 ? size.width / size.height : 16 / 9)
+        return EngineEditorPreview(model: model, controller: preview, aspectRatio: size.height > 0 ? size.width / size.height : 16 / 9)
+            .overlay(alignment: .topLeading) {
+                if preview.drawsNatively {
+                    EngineToolStrip(model: model)
+                }
+            }
             .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+            .bottomBar {
+                VStack(spacing: 0) {
+                    if model.showsTimeline {
+                        EngineTimelineView(model: model)
+                        Divider()
+                    }
+                    statusLine
+                }
+            }
+    }
+
+    /// What the tool in hand does, and how the scene is shown.
+    private var statusLine: some View {
+        HStack(spacing: 12) {
+            if preview.drawsNatively {
+                Text(model.tool.hint)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 12)
+            if preview.drawsNatively {
+                Toggle(isOn: $model.showsTimeline) {
+                    Label("Timeline", systemImage: "timeline.selection")
+                }
+                .toggleStyle(.button)
+                .help("Timeline (T)")
+            }
+            Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            if preview.drawsNatively {
+                Button {
+                    model.fitView()
+                } label: {
+                    Text(verbatim: "\(Int((model.viewZoom * 100).rounded()))%")
+                        .monospacedDigit()
+                }
+                .barButtonStyle()
+                .disabled(model.viewZoom == 1)
+                .help("Fit in Window (Home)")
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     @ToolbarContentBuilder
@@ -116,6 +192,7 @@ struct EngineEditorView: View {
             Label("Add", systemImage: "plus")
         }
         .labelStyle(.titleAndIcon)
+        .disabled(model.puppetObject != nil)
         .help("Add an object to the scene")
     }
 
@@ -124,7 +201,7 @@ struct EngineEditorView: View {
             Label("Undo", systemImage: "arrow.uturn.backward")
         }
         .labelStyle(.iconOnly)
-        .disabled(!model.canUndo)
+        .disabled(!model.canUndo || model.puppetObject != nil)
         .keyboardShortcut("z", modifiers: .command)
         .help("Undo")
     }
@@ -134,7 +211,7 @@ struct EngineEditorView: View {
             Label("Redo", systemImage: "arrow.uturn.forward")
         }
         .labelStyle(.iconOnly)
-        .disabled(!model.canRedo)
+        .disabled(!model.canRedo || model.puppetObject != nil)
         .keyboardShortcut("z", modifiers: [.command, .shift])
         .help("Redo")
     }
@@ -162,9 +239,36 @@ struct EngineEditorView: View {
     }
 }
 
+/// The tools that say what a drag over the scene does, standing on the scene.
+private struct EngineToolStrip: View {
+    @ObservedObject var model: EngineEditorModel
+
+    var body: some View {
+        VStack(spacing: 2) {
+            ForEach(EngineEditorModel.Tool.allCases, id: \.self) { tool in
+                Button {
+                    model.tool = tool
+                } label: {
+                    Image(systemName: tool.symbol)
+                        .frame(width: 30, height: 30)
+                        .foregroundStyle(tool == model.tool ? Color.white : Color.primary)
+                        .background(tool == model.tool ? Color.accentColor : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(tool.title)
+            }
+        }
+        .padding(4)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(10)
+    }
+}
+
 // MARK: - The objects
 
-/// The scene's objects, the one in front first, with what hangs on each under it.
+/// The scene at the head of its objects, the one in front first, with what hangs on each under it.
 struct EngineHierarchy: View {
     @ObservedObject var model: EngineEditorModel
     @State private var renaming: Int?
@@ -172,13 +276,22 @@ struct EngineHierarchy: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            SearchField(text: $model.layerFilter, prompt: NSLocalizedString("Find a Layer", comment: "Placeholder"))
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+                .padding(.bottom, 8)
+            sceneRow
+            Divider()
             List(selection: $model.selection) {
                 Section("Layers") {
-                    ForEach(model.rows, id: \.id) { row in
+                    ForEach(model.shownRows, id: \.id) { row in
                         self.row(row.id, depth: row.depth)
                             .tag(Optional(row.id))
                             .contextMenu { menu(for: row.id) }
                     }
+                    .onMove(perform: model.layerFilter.isEmpty ? { source, destination in
+                        model.moveRows(fromOffsets: source, toOffset: destination)
+                    } : nil)
                     if model.document.objects.isEmpty {
                         Text("Add a picture, text or particles with the + button.")
                             .font(.callout)
@@ -190,23 +303,6 @@ struct EngineHierarchy: View {
             .onDeleteCommand {
                 if let selection = model.selection { model.delete(selection) }
             }
-            Divider()
-            Button {
-                model.selection = nil
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "gearshape")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 18)
-                    Text("Scene")
-                    Spacer()
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-                .background(model.selection == nil ? Color.accentColor.opacity(0.25) : Color.clear)
-            }
-            .buttonStyle(.plain)
         }
         .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
@@ -216,6 +312,25 @@ struct EngineHierarchy: View {
             }
             Button("Cancel", role: .cancel) { renaming = nil }
         }
+    }
+
+    private var sceneRow: some View {
+        Button {
+            model.selection = nil
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "gearshape")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                Text("Scene")
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .background(model.selection == nil ? Color.accentColor.opacity(0.25) : Color.clear)
+        }
+        .buttonStyle(.plain)
     }
 
     private func row(_ id: Int, depth: Int) -> some View {

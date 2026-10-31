@@ -213,6 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cursorSettings.reapplyIfNeeded()
         statusMenu = StatusMenuController(library: library, manager: manager, actions: .init(
             openLibrary: { [unowned self] in showLibrary(nil) },
+            openWorkshop: { [unowned self] in showWorkshop(nil) },
             addFiles: { [unowned self] in addWallpapers(nil) },
             openSettings: { [unowned self] in showSettings(nil) },
             showAbout: { [unowned self] in showAbout(nil) }
@@ -277,6 +278,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showSettings(_ sender: Any?) {
         windows.showSettings()
+    }
+
+    @objc func toggleSettingsPanel(_ sender: Any?) {
+        windows.toggleSettingsPanel()
     }
 
     @objc func showSearch(_ sender: Any?) {
@@ -564,12 +569,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenu.addItem(withTitle: NSLocalizedString("New Scene", comment: "Menu item"), action: #selector(newScene(_:)), keyEquivalent: "n")
         fileMenu.addItem(withTitle: NSLocalizedString("Add Wallpapers…", comment: "Menu item"), action: #selector(addWallpapers(_:)), keyEquivalent: "o")
             .setSymbol("plus")
-        fileMenu.addItem(withTitle: NSLocalizedString("Open Library…", comment: "Menu item"), action: #selector(showLibrary(_:)), keyEquivalent: "l")
-            .setSymbol("square.grid.2x2")
-        fileMenu.addItem(withTitle: NSLocalizedString("Steam Workshop", comment: "Menu item"), action: #selector(showWorkshop(_:)), keyEquivalent: "l")
-            .keyEquivalentModifierMask = [.command, .shift]
-        fileMenu.addItem(withTitle: NSLocalizedString("Find", comment: "Menu item"), action: #selector(showSearch(_:)), keyEquivalent: "f")
-            .setSymbol("magnifyingglass")
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: NSLocalizedString("Close Window", comment: "Menu item"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
@@ -582,6 +581,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: NSLocalizedString("Copy", comment: "Menu item"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: NSLocalizedString("Paste", comment: "Menu item"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: NSLocalizedString("Select All", comment: "Menu item"), action: #selector(selectAllOfIt(_:)), keyEquivalent: "a")
+        editMenu.addItem(withTitle: NSLocalizedString("Find", comment: "Menu item"), action: #selector(showSearch(_:)), keyEquivalent: "f")
+            .setSymbol("magnifyingglass")
         editMenu.addItem(.separator())
         // The Delete key by itself, as in Photos and Mail, and with Command, as in the Finder.
         for keys in [[], [.command]] as [NSEvent.ModifierFlags] {
@@ -591,13 +592,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             delete.isAlternate = !keys.isEmpty
         }
 
+        let viewMenu = NSMenu(title: NSLocalizedString("View", comment: "Menu title"))
+        viewMenu.addItem(withTitle: NSLocalizedString("Library", comment: "Menu item"), action: #selector(showLibrary(_:)), keyEquivalent: "l")
+            .setSymbol("square.grid.2x2")
+        viewMenu.addItem(withTitle: NSLocalizedString("Steam Workshop", comment: "Menu item"), action: #selector(showWorkshop(_:)), keyEquivalent: "l")
+            .keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: NSLocalizedString("Settings Panel", comment: "Menu item"), action: #selector(toggleSettingsPanel(_:)), keyEquivalent: "i")
+            .keyEquivalentModifierMask = [.command, .option]
+
         let windowMenu = NSMenu(title: NSLocalizedString("Window", comment: "Menu title"))
         windowMenu.addItem(withTitle: NSLocalizedString("Minimize", comment: "Menu item"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: NSLocalizedString("Zoom", comment: "Menu item"), action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         NSApp.windowsMenu = windowMenu
 
         let mainMenu = NSMenu()
-        for submenu in [appMenu, fileMenu, editMenu, windowMenu] {
+        for submenu in [appMenu, fileMenu, editMenu, viewMenu, windowMenu] {
             let item = NSMenuItem()
             item.submenu = submenu
             mainMenu.addItem(item)
@@ -610,6 +620,9 @@ extension AppDelegate: NSMenuItemValidation {
     /// Delete is for the wallpapers selected in the library, and there is nothing to delete
     /// when none is, or when the keys go to a text.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleSettingsPanel(_:)) {
+            menuItem.state = windows.state.showsSettings && windows.state.section == .library ? .on : .off
+        }
         if menuItem.action == #selector(deleteSelectedWallpapers(_:)) {
             return libraryTakesCommands && !windows.state.picked.ids.isEmpty
         }

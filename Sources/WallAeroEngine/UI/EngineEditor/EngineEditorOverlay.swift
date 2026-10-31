@@ -15,6 +15,16 @@ final class EngineEditorOverlay: NSView {
     var onChange: ((Int, [String: Double]) -> Void)?
     /// The gesture is over: what it did is one step to take back.
     var onCommit: (() -> Void)?
+    /// The scene is to be enlarged by a factor around a point, given from the middle of this view.
+    var onZoom: ((CGFloat, CGSize) -> Void)?
+    /// The scene is to be moved.
+    var onPan: ((CGSize) -> Void)?
+    /// Where an object stands now if an animation has it elsewhere than the scene says.
+    var animatedPlace: ((Int, String) -> Double?)?
+    /// What a drag over the scene does.
+    var tool = EngineEditorModel.Tool.multi {
+        didSet { needsDisplay = true }
+    }
 
     /// The selected object, by its number.
     private(set) var object: Int?
@@ -92,6 +102,7 @@ final class EngineEditorOverlay: NSView {
     }
 
     private func value(_ id: Int, _ name: String) -> Double {
+        if let animated = animatedPlace?(id, name) { return animated }
         for each in changes["objects"] as? [[String: Any]] ?? [] where (each["id"] as? NSNumber)?.intValue == id {
             if let value = (each[name] as? NSNumber)?.doubleValue { return value }
         }
@@ -123,7 +134,7 @@ final class EngineEditorOverlay: NSView {
 
     /// Where each handle is, in the view: the corners, and the round one above the top edge.
     private var handles: [(name: String, point: CGPoint)] {
-        guard let outline, outline.corners != nil, let shape else { return [] }
+        guard tool == .multi, let outline, outline.corners != nil, let shape else { return [] }
         let local: [(String, CGPoint)] = [("nw", CGPoint(x: -shape.width / 2, y: -shape.height / 2)),
                                           ("ne", CGPoint(x: shape.width / 2, y: -shape.height / 2)),
                                           ("sw", CGPoint(x: -shape.width / 2, y: shape.height / 2)),
@@ -150,6 +161,14 @@ final class EngineEditorOverlay: NSView {
         if !outline.visible { frame.setLineDash([5, 3], count: 2, phase: 0) }
         accent.setStroke()
         frame.stroke()
+        if tool == .rotate {
+            // The ring the object is turned on, round its middle.
+            let radius = max(40, min(max(shape.width, shape.height) / 2, min(bounds.width, bounds.height) * 0.4))
+            let ring = NSBezierPath(ovalIn: NSRect(x: outline.middle.x - radius, y: outline.middle.y - radius,
+                                                   width: radius * 2, height: radius * 2))
+            ring.lineWidth = 1.5
+            ring.stroke()
+        }
         for handle in handles {
             let rect = NSRect(x: handle.point.x - 5, y: handle.point.y - 5, width: 10, height: 10)
             let mark = handle.name == "rotate" ? NSBezierPath(ovalIn: rect) : NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
@@ -179,6 +198,11 @@ final class EngineEditorOverlay: NSView {
         let at = point(event)
         player?.pointer("down", x: at.x, y: at.y)
         if object != nil {
+            // These two take hold anywhere; a click without a drag picks what is under it.
+            if tool == .rotate || tool == .scale {
+                startDrag(at, mode: tool == .rotate ? "rotate" : "scale")
+                return
+            }
             if let handle = handles.first(where: { abs($0.point.x - at.x) <= 7 && abs($0.point.y - at.y) <= 7 }) {
                 startDrag(at, mode: handle.name)
                 return
@@ -214,8 +238,12 @@ final class EngineEditorOverlay: NSView {
         switch drag.mode {
         case "move":
             if let place = player?.ask("placeAt", [object, at.x, at.y]) as? [NSNumber], place.count >= 2 {
-                patch["x"] = Self.round(drag.x + place[0].doubleValue - drag.place.x)
-                patch["y"] = Self.round(drag.y + place[1].doubleValue - drag.place.y)
+                var by = CGPoint(x: place[0].doubleValue - drag.place.x, y: place[1].doubleValue - drag.place.y)
+                if tool == .move, event.modifierFlags.contains(.shift) {
+                    if abs(by.x) < abs(by.y) { by.x = 0 } else { by.y = 0 }
+                }
+                patch["x"] = Self.round(drag.x + by.x)
+                patch["y"] = Self.round(drag.y + by.y)
             }
         case "rotate":
             let from = atan2(drag.pointer.y - drag.middle.y, drag.pointer.x - drag.middle.x)
@@ -241,13 +269,45 @@ final class EngineEditorOverlay: NSView {
     override func mouseUp(with event: NSEvent) {
         let at = point(event)
         player?.pointer("up", x: at.x, y: at.y)
-        guard drag != nil else { return }
-        drag = nil
+        guard let drag else { return }
+        self.drag = nil
+        if tool != .multi, drag.mode != "move", hypot(at.x - drag.pointer.x, at.y - drag.pointer.y) < 3 {
+            let hit = (player?.ask("hit", [at.x, at.y]) as? NSNumber)?.intValue
+            if hit != object { selectObject(hit, tellingTheApp: true) }
+            return
+        }
         // After the change that carries the last move.
         DispatchQueue.main.async { [weak self] in
             self?.flushReports()
             self?.onCommit?()
         }
+    }
+
+    // MARK: - The view
+
+    /// From the middle of this view, where the scene is enlarged around.
+    private func fromMiddle(_ event: NSEvent) -> CGSize {
+        let at = point(event)
+        return CGSize(width: at.x - bounds.midX, height: at.y - bounds.midY)
+    }
+
+    /// A mouse wheel enlarges the scene. On a trackpad two fingers move it, and enlarge it with
+    /// Command; so does pinching.
+    override func scrollWheel(with event: NSEvent) {
+        if event.hasPreciseScrollingDeltas, !event.modifierFlags.contains(.command) {
+            onPan?(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY))
+        } else {
+            onZoom?(pow(event.hasPreciseScrollingDeltas ? 1.01 : 1.1, event.scrollingDeltaY), fromMiddle(event))
+        }
+    }
+
+    override func magnify(with event: NSEvent) {
+        onZoom?(1 + event.magnification, fromMiddle(event))
+    }
+
+    /// With a mouse, the scene is moved by its middle button.
+    override func otherMouseDragged(with event: NSEvent) {
+        onPan?(CGSize(width: event.deltaX, height: event.deltaY))
     }
 
     override func keyDown(with event: NSEvent) {

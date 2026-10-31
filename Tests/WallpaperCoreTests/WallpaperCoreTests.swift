@@ -342,6 +342,141 @@ final class WallpaperLibraryTests: XCTestCase {
         XCTAssertTrue(reopened.tagGroups.isEmpty)
     }
 
+    func testAnAnimationIsReadAndWrittenAsWallpaperEngineWritesIt() throws {
+        var document = WallpaperEngineDocument(project: .object([:]), scene: .object(["objects": .array([
+            .object(["id": .number(7), "origin": .string("100.00000 50.00000 0.00000")]),
+        ])]))
+        document.bindAnimation(of: 7, .value("origin"), options: .init(fps: 30, length: 30, mode: .loop), fallback: [0, 0, 0])
+        var animation = try XCTUnwrap(document.animation(of: 7, .value("origin")))
+        XCTAssertEqual(animation.channelCount, 3)
+        XCTAssertEqual(animation.keys(0), [.init(frame: 0, value: 100, front: .init(x: 1, y: 0, magic: true), back: .init(x: -1, y: -0, magic: true))])
+        XCTAssertEqual(document.object(7)?["origin"]?.plain.stringValue, "100.00000 50.00000 0.00000")
+
+        animation.setKey(frame: 10, channel: 0, value: 200)
+        animation.setInterpolation(.linear, frame: 0)
+        animation.setInterpolation(.linear, frame: 10)
+        XCTAssertEqual(animation.numbers(atFrame: 5, base: [0, 0, 0]), [150, 50, 0])
+        XCTAssertEqual(animation.numbers(atFrame: 20, base: [0, 0, 0]), [200, 50, 0], "after its last moment a curve stays")
+        XCTAssertEqual(animation.numbers(atSeconds: 2.5 / 3, base: [0, 0, 0])[0], 200, accuracy: 1e-9, "a loop goes round by its length")
+        XCTAssertEqual(animation.keyFrames, [0, 10])
+
+        animation.moveKey(from: 10, to: 20)
+        XCTAssertEqual(animation.keys(0).map(\.frame), [0, 20])
+        animation.removeKey(frame: 20)
+        animation.removeKey(frame: 0)
+        XCTAssertEqual(animation.keys(0).map(\.frame), [0], "a number keeps its last moment")
+
+        document.setAnimation(animation, of: 7, .value("origin"))
+        XCTAssertEqual(document.animatedTargets(of: 7), [.value("origin")])
+        document.unbindAnimation(of: 7, .value("origin"))
+        XCTAssertEqual(document.object(7)?["origin"], .string("100.00000 50.00000 0.00000"))
+        XCTAssertEqual(document.animatedTargets(of: 7), [])
+    }
+
+    func testAHandleKeepsTheCurveAndTheOtherHandleOpposite() throws {
+        var animation = WallpaperEngineAnimation(values: [0], options: .init(fps: 30, length: 30, mode: .single))
+        animation.setKey(frame: 15, channel: 0, value: 10)
+        animation.setKey(frame: 30, channel: 0, value: 20)
+        let before = animation.numbers(atFrame: 7, base: [0])[0]
+
+        // As Wallpaper Engine works out a moment with the same way on both sides.
+        let automatic = try XCTUnwrap(animation.keys(0).first { $0.frame == 15 })
+        XCTAssertEqual(automatic.front, .init(x: 1, y: 2, magic: true))
+        XCTAssertEqual(automatic.back, .init(x: -1, y: -2, magic: true))
+
+        animation.setInterpolation(.both, frame: 15)
+        XCTAssertEqual(animation.interpolation(frame: 15), .both)
+        let key = try XCTUnwrap(animation.keys(0).first { $0.frame == 15 })
+        XCTAssertEqual(key.front, .init(x: 1, y: 2, magic: false))
+        XCTAssertEqual(animation.reach(.front, frame: 15, channel: 0), 7.5)
+        XCTAssertEqual(animation.numbers(atFrame: 7, base: [0])[0], before, accuracy: 1e-9, "the curve runs as it did")
+
+        animation.moveHandle(.front, frame: 15, channel: 0, x: 1.5, y: 4)
+        XCTAssertEqual(animation.keys(0).first { $0.frame == 15 }?.back, .init(x: -1.5, y: -4, magic: false), "locked handles stay opposite")
+        animation.moveHandle(.front, frame: 15, channel: 0, x: 9, y: 4)
+        XCTAssertEqual(animation.keys(0).first { $0.frame == 15 }?.front?.x, 2, "no further than the moment beside it")
+        animation.setLocks(angle: false, length: false, frame: 15, channel: 0)
+        animation.moveHandle(.front, frame: 15, channel: 0, x: 1, y: 1)
+        XCTAssertEqual(animation.keys(0).first { $0.frame == 15 }?.back?.x, -2, "unlocked it stays")
+        animation.setLocks(angle: true, length: true, frame: 15, channel: 0)
+
+        animation.setInterpolation(.front, frame: 15)
+        XCTAssertEqual(animation.interpolation(frame: 15), .front)
+        XCTAssertNil(animation.keys(0).first { $0.frame == 15 }?.back)
+        animation.setInterpolation(.linear, frame: 15)
+        XCTAssertEqual(animation.interpolation(frame: 15), .linear)
+        animation.setInterpolation(.automatic, frame: 15)
+        XCTAssertEqual(animation.interpolation(frame: 15), .automatic)
+    }
+
+    func testACurveIsDrawnByItsHandlesAsWallpaperEnginesEditorDrawsIt() throws {
+        // A handle of 1 reaches half the way, not one frame: from 0 to 100 in 30 frames, starting
+        // level with a handle that ends at frame 15, arriving level at one that starts there too.
+        let raw = try XCTUnwrap(JSONValue(data: Data("""
+        {"c0":[{"frame":0,"value":0,"front":{"enabled":true,"x":1,"y":0},"back":{"enabled":false}},
+               {"frame":30,"value":100,"back":{"enabled":true,"x":-1,"y":0},"front":{"enabled":false}}],
+         "options":{"fps":30,"length":30,"mode":"single"}}
+        """.utf8)))
+        let animation = try XCTUnwrap(WallpaperEngineAnimation(raw: raw))
+        XCTAssertEqual(animation.numbers(atFrame: 15, base: [0])[0], 50, accuracy: 1e-3)
+        // Worked out by hand: frame 7.5 is at t = 0.202 of 45t(1−t) + 30t³, where the height
+        // 100(3t² − 2t³) is 10.59. A line stands at 25, and handles of a frame long nearly there.
+        XCTAssertEqual(animation.numbers(atFrame: 7.5, base: [0])[0], 10.59, accuracy: 0.01)
+    }
+
+    func testAnAnimationPlaysAlongWithAnotherWrittenOnBoth() throws {
+        var document = WallpaperEngineDocument(project: .object([:]), scene: .object(["objects": .array([
+            .object(["id": .number(7), "origin": .string("0 0 0"), "scale": .string("1 1 1")]),
+        ])]))
+        document.bindAnimation(of: 7, .value("origin"), options: .init(fps: 15, length: 45, mode: .mirror), fallback: [])
+        document.bindAnimation(of: 7, .value("scale"), options: .init(), fallback: [])
+        document.linkAnimation(of: 7, "scale", to: "origin")
+        let follower = try XCTUnwrap(document.animation(of: 7, .value("scale")))
+        XCTAssertEqual(follower.leader, "origin")
+        XCTAssertEqual(follower.options.length, 45)
+        XCTAssertEqual(follower.options.mode, .mirror)
+        XCTAssertEqual(document.animation(of: 7, .value("origin"))?.followers, ["scale"])
+        document.linkAnimation(of: 7, "scale", to: nil)
+        XCTAssertNil(document.animation(of: 7, .value("scale"))?.leader)
+        XCTAssertEqual(document.animation(of: 7, .value("origin"))?.followers, [])
+    }
+
+    func testAnAnimationEventIsWrittenAsWallpaperEngineWritesIt() {
+        var animation = WallpaperEngineAnimation(values: [0], options: .init())
+        XCTAssertEqual(animation.events, [])
+        XCTAssertNil(animation.raw["options"]?["events"])
+        animation.events = [.init(frame: 12, name: "walk_end")]
+        XCTAssertEqual(animation.raw["options"]?["events"], .array([.object(["frame": .number(12), "name": .string("walk_end")])]))
+        XCTAssertEqual(animation.events, [.init(frame: 12, name: "walk_end")])
+    }
+
+    func testAnAnimationKeepsWhatTheAppDoesNotKnowOfIt() throws {
+        let raw = try XCTUnwrap(JSONValue(data: Data(#"{"c0":[{"frame":0,"value":1,"future":true}],"relative":true,"options":{"fps":15,"length":60,"mode":"mirror","events":[{"frame":3}],"smoothing":2}}"#.utf8)))
+        var animation = try XCTUnwrap(WallpaperEngineAnimation(raw: raw))
+        XCTAssertEqual(animation.options.mode, .mirror)
+        XCTAssertEqual(animation.numbers(atFrame: 0, base: [10]), [11], "counted from what the scene says")
+        XCTAssertEqual(animation.numbers(atSeconds: 6, base: [10]), [11])
+        animation.setKey(frame: 0, channel: 0, value: 2)
+        var options = animation.options
+        options.fps = 30
+        animation.options = options
+        XCTAssertEqual(animation.raw["c0"]?[0]?["future"], .bool(true))
+        XCTAssertEqual(animation.raw["options"]?["smoothing"], .number(2))
+        XCTAssertNotNil(animation.raw["options"]?["events"])
+    }
+
+    func testTheLibraryIsOrderedByAgeOrByNameWithNumbersCountedAsNumbers() {
+        func wallpaper(_ name: String) -> Wallpaper {
+            Wallpaper(id: UUID(), name: name, kind: .video, fileName: "a.mp4", thumbnailFileName: nil, sourceFormat: "MP4",
+                      wasConverted: false, pixelWidth: 1920, pixelHeight: 1080, duration: 5, hasAudio: false, fileSize: 1)
+        }
+        // Where one alphabet stands to another depends on the Mac's language, so there is one here.
+        let items = ["Lake 10", "moss", "Lake 2", "aurora"].map(wallpaper)
+        XCTAssertEqual(items.ordered(by: .newest).map(\.name), ["Lake 10", "moss", "Lake 2", "aurora"])
+        XCTAssertEqual(items.ordered(by: .oldest).map(\.name), ["aurora", "Lake 2", "moss", "Lake 10"])
+        XCTAssertEqual(items.ordered(by: .name).map(\.name), ["aurora", "Lake 2", "Lake 10", "moss"])
+    }
+
     func testSearchLooksInNamesAndTagsAndTheFilterTakesAnyTagOfEachGroup() {
         func wallpaper(_ name: String, _ tags: [String]?) -> Wallpaper {
             Wallpaper(id: UUID(), name: name, kind: .video, fileName: "a.mp4", thumbnailFileName: nil, sourceFormat: "MP4",
@@ -2058,8 +2193,8 @@ final class WallpaperEngineShaderTests: XCTestCase {
         // With handles the value leaves slowly and arrives slowly.
         let eased = context.evaluateScript("""
         (function () {
-          var curve = window.WallaeroEngine.curve({ c0: [{ frame: 0, value: 0, front: { enabled: true, x: 10, y: 0 } },
-                                                         { frame: 30, value: 10, back: { enabled: true, x: -10, y: 0 } }],
+          var curve = window.WallaeroEngine.curve({ c0: [{ frame: 0, value: 0, front: { enabled: true, x: 0.66666667, y: 0 } },
+                                                         { frame: 30, value: 10, back: { enabled: true, x: -0.66666667, y: 0 } }],
                                                     options: { fps: 30, length: 30, mode: 'loop' } });
           return [0.25, 0.5, 0.75].map(function (seconds) { return Math.round(curve(seconds, [0])[0] * 100) / 100; }).join(' ');
         })()
@@ -2720,6 +2855,38 @@ final class SteamWorkshopTests: XCTestCase {
         XCTAssertEqual(try SteamWorkshop.items(inDetails: data, query: all).map(\.id), ["1", "3"])
     }
 
+    func testAnItemSaysWhatThePanelShows() throws {
+        let detail: [String: Any] = ["publishedfileid": "1", "result": 1, "consumer_app_id": 431960, "title": "T", "file_size": "1",
+                                     "preview_url": "https://example.com/p.gif", "tags": [["tag": "Everyone"]],
+                                     "description": "[h1]Rain[/h1] on [url=https://x.y]glass[/url] [4K]", "subscriptions": 12,
+                                     "favorited": 3, "time_updated": 1000]
+        let data = try JSONSerialization.data(withJSONObject: ["response": ["publishedfiledetails": [detail]]])
+        let item = try XCTUnwrap(SteamWorkshop.items(inDetails: data, query: .init()).first)
+        XCTAssertEqual(item.originalPreviewURL?.absoluteString, "https://example.com/p.gif")
+        XCTAssertEqual(item.description, "Rain on glass [4K]")
+        XCTAssertEqual(item.subscriptions, 12)
+        XCTAssertEqual(item.favorites, 3)
+        XCTAssertEqual(item.updated, Date(timeIntervalSince1970: 1000))
+    }
+
+    func testADescriptionLosesSteamsMarkupOnly() {
+        let text = "[img]https://x.y/a.png[/img]\n[list][*]one[*]two[/list]\n[B]bold[/B] [previewyoutube=abc;full][/previewyoutube][RGB]"
+        XCTAssertEqual(SteamWorkshop.plainText(ofDescription: text), "• one• two\nbold [RGB]")
+    }
+
+    func testThePageOfAnItemNamesItsAuthorAndStars() {
+        let page = #"""
+        <div class="fileRatingDetails"><img src="https://x.y/images/sharedfiles/4-star_large.png?v=2" /></div>
+        <div class="friendBlockContent">Someone else<br></div>
+        <div class="creatorsBlock"><div class="friendBlockContent">
+            A &amp; B<br>
+            <span class="friendSmallText">Offline</span></div></div>
+        """#
+        XCTAssertEqual(SteamWorkshop.page(inHTML: page), .init(author: "A & B", stars: 4))
+        XCTAssertEqual(SteamWorkshop.page(inHTML: #"<div class="fileRatingDetails"><img src="not-yet_large.png" /></div>"#),
+                       .init(author: nil, stars: nil))
+    }
+
     func testTheProgramsWordsBecomeEvents() {
         var output = SteamCMD.Output()
         XCTAssertEqual(output.append("Cached credentials not found.\r\n\r\npass"), [])
@@ -2769,6 +2936,14 @@ final class SteamWorkshopPreviewsTests: XCTestCase {
         let now = Date()
         XCTAssertEqual(previews.kept(for: url, at: now.addingTimeInterval(23 * 60 * 60))?.width, 432)
         XCTAssertNil(previews.kept(for: url, at: now.addingTimeInterval(25 * 60 * 60)))
+    }
+
+    func testAWholePreviewIsKeptForADayToo() {
+        let previews = SteamWorkshopPreviews(folder: folder)
+        XCTAssertNil(previews.keptOriginal(for: url))
+        previews.keepOriginal(Data([1, 2, 3]), for: url)
+        XCTAssertEqual(previews.keptOriginal(for: url), Data([1, 2, 3]))
+        XCTAssertNil(previews.keptOriginal(for: url, at: Date().addingTimeInterval(25 * 60 * 60)))
     }
 
     func testOnlyWhatIsADayOldIsRemoved() throws {

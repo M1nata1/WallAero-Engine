@@ -7,6 +7,7 @@ import WallpaperCore
 final class StatusMenuController: NSObject, NSMenuDelegate {
     struct Actions {
         var openLibrary: () -> Void
+        var openWorkshop: () -> Void
         var addFiles: () -> Void
         var openSettings: () -> Void
         var showAbout: () -> Void
@@ -81,6 +82,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(item(NSLocalizedString("Add Wallpapers…", comment: "Menu item"), #selector(addFiles), key: "o", symbol: "plus"))
         menu.addItem(item(NSLocalizedString("Open Library…", comment: "Menu item"), #selector(openLibrary), key: "l",
                           symbol: "square.grid.2x2"))
+        menu.addItem(item(NSLocalizedString("Steam Workshop", comment: "Menu item"), #selector(openWorkshop), key: "", symbol: "shippingbox"))
         menu.addItem(item(NSLocalizedString("Settings…", comment: "Menu item"), #selector(openSettings), key: ",", symbol: "gearshape"))
         menu.addItem(.separator())
         menu.addItem(item(NSLocalizedString("About WallAero Engine", comment: "Menu item"), #selector(showAbout), key: "",
@@ -151,6 +153,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func turnOff() { manager.setWallpaper(nil, for: .all) }
     @objc private func addFiles() { actions.addFiles() }
     @objc private func openLibrary() { actions.openLibrary() }
+    @objc private func openWorkshop() { actions.openWorkshop() }
     @objc private func openSettings() { actions.openSettings() }
     @objc private func showAbout() { actions.showAbout() }
     @objc private func quit() { NSApp.terminate(nil) }

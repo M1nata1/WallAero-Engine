@@ -55,6 +55,9 @@ enum ScreenshotMode {
         // library as it is with that typed into the search field and those tags ticked.
         state.searchText = values(of: "--search").last ?? ""
         state.selectedTags = Set(values(of: "--tag"))
+        // `--kind <scene|video|web|image>` and `--order <newest|oldest|name>` likewise.
+        state.kindFilter = values(of: "--kind").last.flatMap(MainWindowState.KindFilter.init(rawValue:)) ?? .all
+        state.libraryOrder = values(of: "--order").last.flatMap(WallpaperOrder.init(rawValue:)) ?? .newest
         // `--show-tags` drops the list of tags down for the first picture.
         let showsTags = CommandLine.arguments.contains("--show-tags")
         let mainView = MainView(actions: LibraryActions(addFiles: {}))
@@ -79,7 +82,8 @@ enum ScreenshotMode {
                 return
             }
             // `--workshop` pictures the Steam Workshop's part of the window, as Steam lists it
-            // now, and `--workshop-sign-in` what it asks for signing in.
+            // now, `--workshop-sign-in` what it asks for signing in, and `--workshop-select <n>`
+            // the panel of the n-th item of the list.
             if CommandLine.arguments.contains("--workshop") {
                 state.section = .workshop
                 workshop.showsSignIn = CommandLine.arguments.contains("--workshop-sign-in")
@@ -87,12 +91,29 @@ enum ScreenshotMode {
                 workshop.query.search = values(of: "--search").last ?? ""
                 workshop.reload()
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if CommandLine.arguments.contains("--workshop-click") {
+                    // The app's own window, which makes room for the panel as it does for the settings.
+                    let windows = WindowManager(state: state, remembersFrames: false, main: { AnyView(mainView) })
+                    windows.showWorkshop()
+                    if let window = windows.libraryWindow {
+                        var frame = window.frame
+                        frame.size.width = 1000
+                        window.setFrame(frame, display: true)
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        await clickWorkshopButtons(in: window, store: workshop, in: directory)
+                    }
+                    NSApp.terminate(nil)
+                    return
+                }
+                if let index = values(of: "--workshop-select").last.flatMap(Int.init), workshop.items.indices.contains(index) {
+                    workshop.selected = workshop.items[index]
+                }
                 await shoot(AnyView(mainView), title: "WallAero Engine",
-                            size: NSSize(width: 1000, height: 700), to: directory.appendingPathComponent("workshop.png"), waiting: 12) { window in
-                    if CommandLine.arguments.contains("--workshop-click") {
+                            size: NSSize(width: workshop.selected == nil ? 1000 : 1180, height: 700), to: directory.appendingPathComponent("workshop.png"), waiting: 12) { window in
+                    if workshop.selected != nil {
                         Task {
-                            try? await Task.sleep(nanoseconds: 9_000_000_000)
-                            clickWorkshopButtons(in: window, store: workshop)
+                            try? await Task.sleep(nanoseconds: 8_000_000_000)
+                            printPreviewFrames(in: window)
                         }
                     }
                 }
@@ -414,31 +435,71 @@ enum ScreenshotMode {
         }
     }
 
-    /// `--workshop-click`, with `--workshop`: clicks each Download button with a real mouse event,
-    /// saying which of them take it. With no account in this helper a click opens the sign-in
-    /// and starts nothing.
-    private static func clickWorkshopButtons(in window: NSWindow, store: WorkshopStore) {
+    /// Says which frame the preview in the Workshop's panel is on, three times: they differ if it plays.
+    private static func printPreviewFrames(in window: NSWindow) {
+        func picture(in view: NSView) -> NSImageView? {
+            (view as? NSImageView).flatMap { $0.animates ? $0 : nil } ?? view.subviews.lazy.compactMap(picture(in:)).first
+        }
+        guard let view = window.contentView.flatMap(picture(in:)),
+              let bitmap = view.image?.representations.first as? NSBitmapImageRep
+        else {
+            print("no moving preview")
+            return
+        }
+        let total = bitmap.value(forProperty: .frameCount) as? Int ?? 1
+        for _ in 0..<3 {
+            print("frame \(bitmap.value(forProperty: .currentFrame) as? Int ?? 0) of \(total)")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.37))
+        }
+    }
+
+    /// `--workshop-click`, with `--workshop`: clicks each tile with a real mouse event, saying
+    /// which of them open their panel, and then Download in the panel of the last one. With no
+    /// account in this helper that click opens the sign-in and starts nothing.
+    private static func clickWorkshopButtons(in window: NSWindow, store: WorkshopStore, in directory: URL) async {
         setlinebuf(stdout)
-        // SwiftUI draws these buttons itself, so they are found by where the grid has them in a
-        // window of 1000×700: the middle of each button, counted from the top left.
-        let height = window.contentView?.bounds.height ?? 700
-        for y in [257.0, 451, 645] {
-            for x in [229.0, 461, 693, 925] {
-                let point = NSPoint(x: x, y: height - y)
-                let before = store.downloads.count
-                let mouse = { (type: NSEvent.EventType) in
-                    NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
-                }
-                // A button waits for the release once pressed, so that goes in the queue first.
-                mouse(.leftMouseUp).map { NSApp.postEvent($0, atStart: false) }
-                mouse(.leftMouseDown).map(window.sendEvent)
-                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-                print("(\(Int(x)), \(Int(y))): " + (store.downloads.count > before ? "clicked" : "NOT clicked"))
-                store.cancelSignIn()
-                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        // SwiftUI draws the tiles itself, so they are found by where the grid has them in a
+        // window of 1000×700: the middle of each picture, counted from the top left.
+        for y in [187.0, 381, 575] {
+            for x in [150.0, 382, 614, 846] {
+                store.selected = nil
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                click(NSPoint(x: x, y: y), in: window)
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                print("(\(Int(x)), \(Int(y))): " + (store.selected != nil ? "opened" : "NOT opened") + ", window \(Int(window.frame.width)) wide")
             }
         }
+        if let image = drawViews(of: window) {
+            write(image, to: directory.appendingPathComponent("workshop-panel.png"))
+        }
+        guard let content = window.contentView else { return }
+        // The button stands at the end of the panel's last row.
+        let before = store.downloads.count
+        click(NSPoint(x: content.bounds.width - 50, y: content.bounds.height - 24), in: window, isButton: true)
+        print("Download in the panel: " + (store.downloads.count > before ? "clicked" : "NOT clicked"))
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        print("the sign-in " + (window.attachedSheet != nil ? "opened" : "did NOT open"))
+        store.cancelSignIn()
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        print("the sign-in " + (window.attachedSheet == nil ? "closed" : "did NOT close"))
+    }
+
+    private static func click(_ point: NSPoint, in window: NSWindow, isButton: Bool = false) {
+        let height = window.contentView?.bounds.height ?? 700
+        let mouse = { (type: NSEvent.EventType) in
+            NSEvent.mouseEvent(with: type, location: NSPoint(x: point.x, y: height - point.y), modifierFlags: [],
+                               timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                               context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        }
+        if isButton {
+            // A button waits for the release once pressed, so that goes in the queue first.
+            mouse(.leftMouseUp).map { NSApp.postEvent($0, atStart: false) }
+            mouse(.leftMouseDown).map(window.sendEvent)
+        } else {
+            mouse(.leftMouseDown).map(window.sendEvent)
+            mouse(.leftMouseUp).map(window.sendEvent)
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
 
     /// `--steam-test <folder>` gets SteamCMD into the folder, signs in to no account and asks for
@@ -971,6 +1032,127 @@ enum ScreenshotMode {
             if let number = values(of: "--select-object").last.flatMap(Int.init) {
                 model.selection = number
             }
+            // `--tool <move|rotate|scale>`, `--tab <kind|effects>`, `--scene-tab <view|environment|settings>`,
+            // `--zoom <factor>` and `--find <text>`: the editor with that chosen.
+            switch values(of: "--tool").last {
+            case "move": model.tool = .move
+            case "rotate": model.tool = .rotate
+            case "scale": model.tool = .scale
+            default: break
+            }
+            switch values(of: "--tab").last {
+            case "kind": model.objectTab = .kind
+            case "effects": model.objectTab = .effects
+            default: break
+            }
+            switch values(of: "--scene-tab").last {
+            case "view": model.sceneTab = .view
+            case "environment": model.sceneTab = .environment
+            case "settings": model.sceneTab = .settings
+            default: break
+            }
+            if let zoom = values(of: "--zoom").last.flatMap(Double.init) {
+                model.zoomView(by: zoom, around: .zero)
+            }
+            model.layerFilter = values(of: "--find").last ?? ""
+            // `--move-row <from> <to>`: a row of the list of layers dragged to another place.
+            if let index = CommandLine.arguments.firstIndex(of: "--move-row"), index + 2 < CommandLine.arguments.count,
+               let from = Int(CommandLine.arguments[index + 1]), let to = Int(CommandLine.arguments[index + 2]) {
+                let names = { model.rows.prefix(5).map { model.name(of: $0.id) } }
+                print("rows before: \(names())")
+                model.moveRows(fromOffsets: IndexSet(integer: from), toOffset: to)
+                print("rows after: \(names()); objects \(model.document.objectIDs.count); undo \(model.canUndo)")
+            }
+            // `--timeline`, `--curves`: the timeline open, on its keys or on its curves.
+            model.showsTimeline = CommandLine.arguments.contains("--timeline")
+            model.timelineCurves = CommandLine.arguments.contains("--curves")
+            // `--window-drag <x0> <y0> <x1> <y1>`: the mouse pressed, dragged and let go, in points
+            // of the window from its bottom left, as the window gets it.
+            // Given several times, one after another.
+            for index in CommandLine.arguments.indices where CommandLine.arguments[index] == "--window-drag" && index + 4 < CommandLine.arguments.count {
+                let numbers = CommandLine.arguments[(index + 1)...(index + 4)].compactMap(Double.init)
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                for step in 0...8 {
+                    let share = Double(step) / 8
+                    let at = NSPoint(x: numbers[0] + (numbers[2] - numbers[0]) * share, y: numbers[1] + (numbers[3] - numbers[1]) * share)
+                    if let event = NSEvent.mouseEvent(with: step == 0 ? .leftMouseDown : .leftMouseDragged, location: at, modifierFlags: [],
+                                                      timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                      context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                        NSApp.postEvent(event, atStart: false)
+                    }
+                    try? await Task.sleep(nanoseconds: 40_000_000)
+                }
+                if let event = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: numbers[2], y: numbers[3]), modifierFlags: [],
+                                                  timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                  context: nil, eventNumber: 0, clickCount: 1, pressure: 0) {
+                    NSApp.postEvent(event, atStart: false)
+                }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                print("after the drag: frame \(model.timelineFrame), keys \(model.activeAnimation?.keyFrames ?? []), selected \(model.selectedKeys.map(\.frame).sorted()), undo \(model.canUndo), handles at 30 \(model.activeAnimation?.keys(0).first { $0.frame == 30 }.map { "\($0.back.map { [$0.x, $0.y] } ?? []) \($0.front.map { [$0.x, $0.y] } ?? [])" } ?? "")")
+            }
+            // `--wheel <x> <y> <lines>`: the wheel turned over a point of the window, from its top left;
+            // `--wheel-heights` as with Shift. A wheel event made here belongs to no window, so
+            // this starts past the point where the mouse's own are told from others.
+            if let index = CommandLine.arguments.firstIndex(of: "--wheel"), index + 3 < CommandLine.arguments.count {
+                let numbers = CommandLine.arguments[(index + 1)...(index + 3)].compactMap(Double.init)
+                // The timeline has to have come out first.
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                let heights = CommandLine.arguments.contains("--wheel-heights")
+                let taken = preview.turnWheel(at: CGPoint(x: numbers[0], y: numbers[1]), across: 0, along: numbers[2], precise: false, heights: heights)
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                print("the wheel taken: \(taken); curves \(model.curveRange.map { "\($0)" } ?? "fitted")")
+                print("after the wheel: start \(model.timelineStart), shown \(model.timelineShown) of \(model.timelineTotal), area \(model.timelineArea)")
+            }
+            // `--timeline-test`: an animation made and shown, checked against what the player says.
+            if CommandLine.arguments.contains("--timeline-test"), let id = model.selection {
+                await timelineTest(model, preview, object: id)
+            }
+            // `--curve-check`: every animation of the scene, worked out here and by the player.
+            if CommandLine.arguments.contains("--curve-check") {
+                curveCheck(model, preview)
+            }
+            // `--press <letters>`: the keys pressed in turn, as they come from the keyboard, saying
+            // what each did; `,` stands for the search field taking the keys, `.` for its leaving them.
+            if let letters = values(of: "--press").last {
+                let codes: [Character: UInt16] = ["w": 13, "g": 5, "r": 15, "s": 1, "h": 4, " ": 49, "k": 40, "a": 0, "t": 17, "<": 123, ">": 124,
+                                                  "C": 8, "V": 9, "x": 51]
+                for letter in letters {
+                    if letter == "," || letter == "." {
+                        func field(in view: NSView) -> NSSearchField? {
+                            (view as? NSSearchField) ?? view.subviews.lazy.compactMap(field(in:)).first
+                        }
+                        window.makeFirstResponder(letter == "," ? window.contentView.flatMap(field(in:)) : nil)
+                    } else if letter == "B" {
+                        model.setSelectedInterpolation(.both)
+                    } else if let code = codes[letter], let event = NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: letter.isUppercase ? [.command] : [],
+                        timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, characters: String(letter),
+                        charactersIgnoringModifiers: String(letter), isARepeat: false, keyCode: code) {
+                        NSApp.activate(ignoringOtherApps: true)
+                        window.makeKeyAndOrderFront(nil)
+                        NSApp.postEvent(event, atStart: false)
+                    }
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    print("“\(letter)”: frame \(model.timelineFrame), keys \(model.activeAnimation?.keyFrames ?? []), auto \(model.autoKey), timeline \(model.showsTimeline), tool \(model.tool), playing \(model.isPlaying), "
+                        + "visible \(model.selection.map(model.isVisible) ?? true), filter “\(model.layerFilter)”")
+                }
+                window.makeFirstResponder(nil)
+            }
+            // `--zoom-steps`: the scene enlarged and made small again step by step, as a pinch does,
+            // saying how late the app got behind the steps at worst.
+            if CommandLine.arguments.contains("--zoom-steps") {
+                var worst = 0.0
+                for step in 0..<60 {
+                    let before = ProcessInfo.processInfo.systemUptime
+                    model.zoomView(by: step < 30 ? 1.05 : 1 / 1.05, around: .zero)
+                    try? await Task.sleep(nanoseconds: 16_000_000)
+                    worst = max(worst, ProcessInfo.processInfo.systemUptime - before - 0.016)
+                }
+                print("zoom steps: at the end \(model.viewZoom), latest by \(Int(worst * 1000)) ms")
+            }
             // `--drag <x0> <y0> <x1> <y1>`: the mouse dragged over the preview, in shares of its size.
             let arguments0 = CommandLine.arguments
             if let index = arguments0.firstIndex(of: "--drag"), index + 4 < arguments0.count,
@@ -1001,8 +1183,13 @@ enum ScreenshotMode {
             if let sheet = values(of: "--sheet").last, let selection = model.selection {
                 switch sheet {
                 case "effects": model.sheet = .effects(object: selection)
-                case "particles": model.sheet = .particles(object: selection)
-                case "puppet": model.sheet = .puppet(object: selection)
+                case "puppet": model.puppetObject = selection
+                case "options":
+                    if let target = model.timelineTarget {
+                        model.sheet = .animation(object: selection, target: target, isNew: false, fallback: [])
+                    }
+                case "events":
+                    if let target = model.timelineTarget { model.sheet = .events(target: target) }
                 default: break
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -1027,6 +1214,56 @@ enum ScreenshotMode {
             model.saveNow()
             exit(0)
         }
+    }
+
+    private static func timelineTest(_ model: EngineEditorModel, _ preview: EngineEditorPreviewController, object id: Int) async {
+        @MainActor func middle() -> [Double] { preview.outlineMiddle(of: id) }
+        func pause(_ seconds: Double = 0.3) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+        let target = WallpaperEngineAnimationTarget.value("origin")
+        if model.document.animation(of: id, target) != nil { model.unbindAnimation(target) }
+        model.showsTimeline = true
+        await pause()
+        let before = middle()
+        model.bindAnimation(target, options: .init(fps: 30, length: 60, mode: .loop), fallback: [0, 0, 0])
+        model.timelineSeconds = 1
+        let start = model.value(id, "origin")?.vector ?? [0, 0, 0]
+        // The way the frame on the scene writes a move, at the moment the timeline stands at.
+        model.applyFromPreview(object: id, patch: ["x": start[0] + 300, "y": start[1]])
+        await pause()
+        let moved = middle()
+        print("frame 30: origin \(model.value(id, "origin")?.stringValue ?? "?"), keys \(model.activeAnimation?.keyFrames ?? []), on the page \(before) → \(moved)")
+        model.timelineSeconds = 0
+        await pause()
+        print("frame 0: on the page \(middle()), origin \(model.value(id, "origin")?.stringValue ?? "?")")
+        model.timelineSeconds = 0.5
+        await pause()
+        print("frame 15: on the page \(middle()), origin \(model.value(id, "origin")?.stringValue ?? "?")")
+        model.isPlaying = false
+        await pause()
+        model.timelineSeconds = 1
+        await pause()
+        print("frame 30, scene paused: on the page \(middle())")
+        model.isPlaying = true
+    }
+
+    private static func curveCheck(_ model: EngineEditorModel, _ preview: EngineEditorPreviewController) {
+        var checked = 0, wrong = 0, worst = 0.0
+        for id in model.document.objectIDs {
+            for target in model.document.animatedTargets(of: id) {
+                guard let animation = model.document.animation(of: id, target) else { continue }
+                let base = model.document.rawValue(of: id, target)?.vector ?? Array(repeating: 0, count: animation.channelCount)
+                for step in 0...40 {
+                    let seconds = Double(step) * max(animation.duration, 0.1) / 17
+                    let own = animation.numbers(atSeconds: seconds, base: base)
+                    guard let theirs = preview.curveValue(animation.raw, seconds: seconds, base: base) else { continue }
+                    checked += 1
+                    let off = zip(own, theirs).map { abs($0 - $1) }.max() ?? 0
+                    worst = max(worst, off)
+                    if off > 1e-3 * max(1, own.map(abs).max() ?? 1) { wrong += 1 }
+                }
+            }
+        }
+        print("curves: \(checked) moments compared, \(wrong) differ, by \(worst) at most")
     }
 
     /// A made-up sound: silence and a tone by turns, starting with silence and ending in it.

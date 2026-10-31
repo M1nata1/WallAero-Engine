@@ -4,11 +4,11 @@ import WallpaperCore
 
 /// Puppet warp, as Wallpaper Engine's editor has it: a mesh over the picture, bones that bend
 /// it, and animations made of keys the bones are turned and moved to. The picture bends here as
-/// it is changed; the scene shows it once the editor is done.
+/// it is changed; the scene shows it once the editor is done. It stands in the middle of the
+/// editor's window for as long as it is open, with the layers still in view.
 struct EnginePuppetEditor: View {
     @ObservedObject var model: EngineEditorModel
     let object: Int
-    @Environment(\.dismiss) private var dismiss
 
     enum Mode: String, CaseIterable {
         case mesh, bones, animate
@@ -53,7 +53,7 @@ struct EnginePuppetEditor: View {
                 Button("Remove Puppet Warp", role: .destructive) { removePuppet() }
                     .disabled(model.document.object(object).flatMap { model.document.file($0["image"]?.plain.stringValue ?? "") }?["puppet"] == nil)
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { model.puppetObject = nil }
                     .keyboardShortcut(.cancelAction)
                 Button("Done") { save() }
                     .keyboardShortcut(.defaultAction)
@@ -61,7 +61,7 @@ struct EnginePuppetEditor: View {
             }
             .padding()
         }
-        .frame(width: 1040, height: 720)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: load)
         .onReceive(timer) { _ in
             guard playing, mode == .animate, rig.animations.indices.contains(animation) else { return }
@@ -291,7 +291,7 @@ struct EnginePuppetEditor: View {
                     NumberRow("Length", value: Binding(
                         get: { Double(rig.animations[animation].length) / rig.animations[animation].framesPerSecond },
                         set: { rig.animations[animation].length = max(1, Int(($0 * rig.animations[animation].framesPerSecond).rounded())) }
-                    ), in: 0.5...30, step: 0.1, suffix: "s")
+                    ), in: 0.5...30, step: 0.1, suffix: NSLocalizedString("s", comment: "Seconds, after a number"))
                     Picker("Plays", selection: $rig.animations[animation].mode) {
                         Text("Over and Over").tag("loop")
                         Text("There and Back").tag("mirror")
@@ -427,7 +427,7 @@ struct EnginePuppetEditor: View {
         do {
             try model.change { try $0.setPuppet(rig, ofObject: object, projectFolder: model.projectFolder) }
             model.markNewFiles()
-            dismiss()
+            model.puppetObject = nil
         } catch {
             NSAlert(error: error).runModal()
         }
@@ -441,6 +441,6 @@ struct EnginePuppetEditor: View {
             document.update(object) { $0["animationlayers"] = nil }
         }
         model.markNewFiles()
-        dismiss()
+        model.puppetObject = nil
     }
 }

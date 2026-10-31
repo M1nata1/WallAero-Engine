@@ -148,3 +148,22 @@ public struct Wallpaper: Codable, Identifiable, Hashable, Sendable {
         self.workshopID = workshopID
     }
 }
+
+/// The orders the library can be looked through in.
+public enum WallpaperOrder: String, CaseIterable, Sendable {
+    /// As the library keeps them: the one added last comes first.
+    case newest
+    case oldest
+    case name
+}
+
+extension Array where Element == Wallpaper {
+    /// The wallpapers in the order given, taken to be as the library keeps them.
+    public func ordered(by order: WallpaperOrder) -> [Wallpaper] {
+        switch order {
+        case .newest: return self
+        case .oldest: return reversed()
+        case .name: return sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        }
+    }
+}
