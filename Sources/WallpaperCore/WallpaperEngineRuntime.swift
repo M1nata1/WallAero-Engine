@@ -8769,9 +8769,10 @@ public enum WallpaperEngineRuntime {
               var drag = number(said.drag, 0);
               return function (particle, seconds) {
                 var keep = Math.max(0, 1 - drag * seconds);
-                particle.vx = (particle.vx + gravity[0] * seconds) * keep;
-                particle.vy = (particle.vy + gravity[1] * seconds) * keep;
-                particle.vz = (particle.vz + gravity[2] * seconds) * keep;
+                var pull = system.speedBy * seconds;
+                particle.vx = (particle.vx + gravity[0] * pull) * keep;
+                particle.vy = (particle.vy + gravity[1] * pull) * keep;
+                particle.vz = (particle.vz + gravity[2] * pull) * keep;
                 particle.x += particle.vx * seconds;
                 particle.y += particle.vy * seconds;
                 particle.z += particle.vz * seconds;
@@ -9273,9 +9274,14 @@ public enum WallpaperEngineRuntime {
           system.settle = function () {
             over = thing.said.instanceoverride || {};
             // None at all when the scene says so.
-            system.each = Math.max(0, Math.min(20000, Math.round(ownMost * number(firstOf(overNow('count')), 1))));
+            // Wallpaper Engine's reference: count is the "factor to control emission rate", rate the
+            // "factor to control simulation rate", speed the factor of "initial velocity and forces".
+            // With only the room cut, a system short of it spends it at once and waits for all of
+            // it to die, and its particles come in waves.
+            system.countBy = Math.max(0, number(firstOf(overNow('count')), 1));
+            system.each = Math.min(20000, Math.round(ownMost * system.countBy));
             system.most = kind === 'static' ? system.each : Math.min(20000, system.each * Math.max(1, system.owner ? system.owner.most : 1));
-            system.rate = number(firstOf(overNow('rate')), 1);
+            system.pace = Math.max(0, number(firstOf(overNow('rate')), 1));
             system.sizeBy = number(firstOf(overNow('size')), 1);
             system.alphaBy = number(firstOf(overNow('alpha')), 1);
             system.speedBy = number(firstOf(overNow('speed')), 1);
@@ -9553,6 +9559,7 @@ public enum WallpaperEngineRuntime {
           system.step = function (seconds) {
             // What scripts make of the scene's change, taken up as it comes.
             if (steered) system.settle();
+            seconds *= system.pace;
             system.age += seconds;
             if (points.length) measurePoints(seconds);
             if (points.some(function (point) { return point.follows; })) findPointer();
@@ -9571,7 +9578,7 @@ public enum WallpaperEngineRuntime {
                 }
                 if (emitter.lasts > 0 && instance.age > emitter.waits + emitter.lasts) return;
                 var loud = emitter.hears ? emitter.hears() : 1;
-                instance.owed[index] = (instance.owed[index] || 0) + emitter.rate * system.rate * loud * seconds;
+                instance.owed[index] = (instance.owed[index] || 0) + emitter.rate * system.countBy * loud * seconds;
                 while (instance.owed[index] >= 1) {
                   instance.owed[index] -= 1;
                   if (room(instance)) make(emitter, instance);
@@ -9795,9 +9802,13 @@ public enum WallpaperEngineRuntime {
               var localX = particle.x + particle.shiftX, localY = particle.y + particle.shiftY;
               var x = originX + linear[0] * localX + linear[2] * localY;
               var y = originY + linear[1] * localX + linear[3] * localY;
-              var near = 1;
+              var near = 1, unseen = false;
               if (system.perspective) {
-                near = away / Math.max(away * 0.2, away - particle.z * deep);
+                // What has passed the eye is not seen. Drawn at the eye instead, it was a broad
+                // bright bar over the middle of the scene.
+                var ahead = away - particle.z * deep;
+                unseen = ahead < away * 0.05;
+                near = away / Math.max(away * 0.05, ahead);
                 x = middleX + (x - middleX) * near;
                 y = middleY + (y - middleY) * near;
               }
@@ -9810,7 +9821,7 @@ public enum WallpaperEngineRuntime {
               }
               data[at] = x;
               data[at + 1] = y;
-              data[at + 2] = particle.size * particle.sizeNow * system.sizeBy * near * PARTICLE_SIDE;
+              data[at + 2] = unseen ? 0 : particle.size * particle.sizeNow * system.sizeBy * near * PARTICLE_SIDE;
               data[at + 3] = turned;
               var shade = system.colorOf(particle, state);
               data[at + 4] = shade[0];

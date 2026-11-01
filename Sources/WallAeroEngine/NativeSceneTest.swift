@@ -3,7 +3,7 @@ import MetalScene
 import WallpaperCore
 
 /// `--native-test <scene folder> <picture.png> [--after <seconds>] [--size <w> <h>] [--pointer-at <s> <x> <y>]
-/// [--pointer-circle <seconds a turn>]`: plays a
+/// [--pointer-circle <seconds a turn>] [--shots <count> <seconds between>] [--screen <number>]`: plays a
 /// scene of Wallpaper Engine's with the app's own Metal renderer (`MetalScenePlayer`) in a window
 /// nothing covers, then takes a picture of a frame and prints what the player and the renderer
 /// have to say — as `--engine-test` does with Chromium, to be compared with it.
@@ -33,7 +33,12 @@ enum NativeSceneTest {
             print("no Metal here")
             exit(1)
         }
-        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: 40, y: 40), size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        // `--screen <number>`: which of the Mac's screens the window opens on, 0 being the main one —
+        // so that a long run does not cover the screen someone is working on.
+        let screens = NSScreen.screens
+        let screen = value("--screen").flatMap(Int.init).flatMap { screens.indices.contains($0) ? screens[$0] : nil }
+        let corner = screen.map { NSPoint(x: $0.frame.minX + 40, y: $0.frame.minY + 40) } ?? NSPoint(x: 40, y: 40)
+        let window = NSWindow(contentRect: NSRect(origin: corner, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
@@ -73,7 +78,22 @@ enum NativeSceneTest {
             guard let moment = Double(arguments[index + 1]), let x = Double(arguments[index + 2]), let y = Double(arguments[index + 3]) else { continue }
             DispatchQueue.main.asyncAfter(deadline: .now() + moment) { player.pointer("down", x: x, y: y) }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+        // `--shots <count> <seconds between>`: a row of pictures from then on, each named after the
+        // main picture plus its number — to see what moves or comes and goes from frame to frame.
+        var shotsTake = 0.0
+        if let index = arguments.firstIndex(of: "--shots"), index + 2 < arguments.count,
+           let count = Int(arguments[index + 1]), let between = Double(arguments[index + 2]) {
+            shotsTake = Double(count) * between
+            for shot in 0..<count {
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds + Double(shot) * between) {
+                    guard let image = player.snapshot() else { return }
+                    let name = request.output.deletingPathExtension().path + String(format: "-%03d.png", shot)
+                    try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: name))
+                    print("shot \(shot) at \(String(format: "%.3f", Date().timeIntervalSince(started)))")
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds + shotsTake) {
             if let image = player.snapshot() {
                 let bitmap = NSBitmapImageRep(cgImage: image)
                 try? bitmap.representation(using: .png, properties: [:])?.write(to: request.output)
