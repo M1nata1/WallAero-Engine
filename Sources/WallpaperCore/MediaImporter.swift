@@ -65,7 +65,7 @@ public enum MediaImporter {
         // On APFS this is a clone, so even large videos are copied instantly.
         try FileManager.default.copyItem(at: url, to: mediaURL)
 
-        let thumbnail = try? await Thumbnailer.frame(ofVideoAt: mediaURL, at: min(info.duration * 0.1, 2))
+        let thumbnail = await Thumbnailer.lightFrame(ofVideoAt: mediaURL, duration: info.duration)
         return Wallpaper(
             id: id,
             name: name,
@@ -131,7 +131,7 @@ public enum MediaImporter {
         guard
             let source = CGImageSourceCreateWithURL(url as CFURL, nil),
             CGImageSourceGetCount(source) > 0,
-            let thumbnail = Thumbnailer.image(at: url)
+            let thumbnail = Thumbnailer.lightImage(at: url)
         else {
             throw ImportError.unreadable
         }

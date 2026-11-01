@@ -108,47 +108,50 @@ struct WallpaperSettingsView: View {
 
     // MARK: - What the wallpaper is
 
-    /// The picture is the size of a wallpaper's in the library at most: it is there to say which
-    /// wallpaper this is, and the settings below are what the panel is for.
+    /// Laid out as the Workshop's panel: the picture across the panel, what the wallpaper is under
+    /// it, and the button that opens it in the editor on its own line in the middle.
     @ViewBuilder
     private func summary(of item: Wallpaper) -> some View {
-        HStack(spacing: 12) {
-            Color.black
-                .aspectRatio(16 / 10, contentMode: .fit)
-                .frame(width: 112)
-                .overlay {
-                    if let url = library.thumbnailURL(for: item), let image = ThumbnailCache.image(at: url) {
-                        Image(nsImage: image)
-                            .resizable()
-                            .scaledToFill()
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous))
+        VStack(spacing: 14) {
+            picture(of: item)
             // The name wraps onto as many lines as it needs.
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: item.name.split(whereSeparator: \.isWhitespace).joined(separator: " "))
-                    .font(.body.weight(.medium))
+                    .font(.title3.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(kindTitle(of: item))
-                    .font(.caption)
                     .foregroundStyle(.secondary)
                 if !item.detailsText.isEmpty {
                     Text(verbatim: item.detailsText)
-                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-        }
-        if library.canEdit(item) {
-            Button {
-                edit(item)
-            } label: {
-                Text(library.editTitle(for: item))
-                    .frame(maxWidth: .infinity)
+            if library.canEdit(item) {
+                Button(library.editTitle(for: item)) { edit(item) }
             }
         }
+    }
+
+    /// Keeps the proportions of the wallpaper; a tall one is held to the height of the Workshop's
+    /// square picture, so that the settings stay within reach.
+    @ViewBuilder
+    private func picture(of item: Wallpaper) -> some View {
+        let shape = RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous)
+        Group {
+            if let url = library.thumbnailURL(for: item), let image = ThumbnailCache.image(at: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Color.black
+                    .aspectRatio(16 / 10, contentMode: .fit)
+            }
+        }
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 1) }
+        .frame(maxWidth: .infinity, maxHeight: 300)
     }
 
     private func kindTitle(of item: Wallpaper) -> LocalizedStringKey {
