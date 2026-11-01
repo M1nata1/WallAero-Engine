@@ -5828,6 +5828,7 @@ public enum WallpaperEngineRuntime {
             if (owner) owner.moving = true;
             changed();
           };
+          puppet.restOf = function (index) { return atRest(index, 0); };
           puppet.worldOf = function (index) {
             var bone = bones[index];
             return bone ? (bone.moved || atRest(index, 0)) : null;
@@ -5947,12 +5948,17 @@ public enum WallpaperEngineRuntime {
           puppet.pose = function (seconds, placed) {
             var passed = lastSeconds === null ? 0 : Math.max(0, seconds - lastSeconds);
             lastSeconds = seconds;
-            advance(passed);
+            // The editor's timeline holds every animation at its moment.
+            if (timelineAt !== null) {
+              playing.forEach(function (layer) { layer.frame = timelineAt * layer.fps * layer.speed; });
+            } else {
+              advance(passed);
+            }
             playing.forEach(function (layer) {
               if (layer.shows) layer.visible = layer.shows.read() !== false;
             });
             var showing = playing.filter(function (layer) { return layer.visible; });
-            if (!showing.length && !puppet.overridden && !swaying) return;
+            if (!showing.length && !puppet.overridden && !swaying && !puppet.held) return;
             var setting = showing.filter(function (layer) { return !layer.adds; });
             var adding = showing.filter(function (layer) { return layer.adds; });
             var once = setting.filter(function (layer) { return layer.once && !layer.done; });
@@ -5961,10 +5967,12 @@ public enum WallpaperEngineRuntime {
             // Each bone from its parent in this frame: scaled, turned, then moved.
             bones.forEach(function (bone, index) {
               var pose = base ? sample(base, index) : bone.still.slice();
-              if (base && base.blend < 1) {
+              // What the editor is posing, in place of what plays.
+              if (puppet.held) pose = (puppet.held[index] || bone.still).slice();
+              else if (base && base.blend < 1) {
                 for (var part = 0; part < 7; part++) pose[part] = bone.still[part] + (pose[part] - bone.still[part]) * base.blend;
               }
-              adding.forEach(function (layer) {
+              if (!puppet.held) adding.forEach(function (layer) {
                 var more = sample(layer, index);
                 pose[0] += (more[0] - bone.still[0]) * layer.blend;
                 pose[1] += (more[1] - bone.still[1]) * layer.blend;
@@ -6000,7 +6008,7 @@ public enum WallpaperEngineRuntime {
               if (!bone.done) {
                 var parent = bones[bone.parent];
                 var above = parent && depth < 64 ? whole(bone.parent, depth + 1) : null;
-                if (bone.sway) sway(bone, above, placed, passed);
+                if (bone.sway && !puppet.held) sway(bone, above, placed, passed);
                 bone.moved = above ? joined(above, bone.now) : bone.now;
                 // From where the corner is at rest to where the bone has taken it.
                 bone.takes = joined(bone.moved, bone.back);
@@ -7462,7 +7470,8 @@ public enum WallpaperEngineRuntime {
           // A picture that bends, if its bones came with the scene and could be read.
           var bends = model && model.puppet ? puppets[key(model.puppet)] : null;
           if (bends) {
-            layer.puppet = buildPuppet(bends, object.animationlayers, layer.name, key(String(base.cullmode || 'normal')) !== 'nocull', layer);
+            layer.backsCulled = key(String(base.cullmode || 'normal')) !== 'nocull';
+            layer.puppet = buildPuppet(bends, object.animationlayers, layer.name, layer.backsCulled, layer);
             if (layer.puppet && layer.puppet.moving) layer.moving = true;
           } else if (model && model.puppet) {
             note('“' + layer.name + '” is a picture that bends, but its bones could not be read; it is shown still');
@@ -11147,6 +11156,36 @@ public enum WallpaperEngineRuntime {
             scriptLog = [];
             return { errors: scriptErrors, log: written };
           },
+          // A picture given other bones and a mesh as it is edited, or none, before they are written.
+          puppet: function (id, table, layers) {
+            var thing = byId[String(id)];
+            if (!thing) return false;
+            var old = thing.puppet;
+            thing.puppet = table ? buildPuppet(table, layers || [], thing.name, thing.backsCulled !== false, thing) : null;
+            if (old) gl.deleteVertexArray(old.shape);
+            if (thing.puppet) thing.moving = true;
+            dirty = true;
+            changed();
+            return !table || !!thing.puppet;
+          },
+          // Bones held where the editor has them, each from its parent — place (2), turn, scale
+          // (2), turns about x and y — or left to play again.
+          holdPuppet: function (id, pose) {
+            var thing = byId[String(id)];
+            if (!thing || !thing.puppet) return false;
+            thing.puppet.held = pose || null;
+            thing.moving = true;
+            dirty = true;
+            changed();
+            return true;
+          },
+          // Each bone of a picture as it stands, from the picture: six numbers to take a point of
+          // it there.
+          bones: function (id, atRest) {
+            var thing = byId[String(id)];
+            var puppet = thing && thing.puppet;
+            return puppet ? puppet.bones.map(function (bone, index) { return atRest ? puppet.restOf(index) : puppet.worldOf(index); }) : null;
+          },
           // A texture given new pixels as it is painted, four bytes each.
           paintTexture: function (name, width, pixels) {
             var stored = pictures[key(name)] || pictures['materials/' + key(name)];
@@ -11391,6 +11430,9 @@ public enum WallpaperEngineRuntime {
         hit: ofCurrent('hit'),
         outline: ofCurrent('outline'),
         paintTexture: ofCurrent('paintTexture'),
+        puppet: ofCurrent('puppet'),
+        holdPuppet: ofCurrent('holdPuppet'),
+        bones: ofCurrent('bones'),
         scriptReport: ofCurrent('scriptReport'),
         checkScript: checkScript,
         scriptDeclares: scriptDeclares,

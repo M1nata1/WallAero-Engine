@@ -167,6 +167,14 @@ final class WallpaperManager: NSObject, ObservableObject {
         for item in library.items where item.kind == .web {
             refreshPicturesIfOutdated(of: item)
         }
+        // Wallpapers imported before a black thumbnail had anything to stand in for it.
+        Task {
+            for item in library.items {
+                if let picture = await library.lighterThumbnail(for: item) {
+                    setThumbnail(picture, of: item)
+                }
+            }
+        }
     }
 
     // MARK: - Choosing wallpapers
@@ -430,14 +438,23 @@ final class WallpaperManager: NSObject, ObservableObject {
         else {
             return
         }
-        if let picture = await WebSnapshotter.render(project, size: NSSize(width: 960, height: 540)) {
-            if let old = library.thumbnailURL(for: current) {
-                ThumbnailCache.forget(old)
-            }
-            library.setThumbnail(WebSnapshotter.thumbnail(from: picture), for: current.id)
+        let rendered = await WebSnapshotter.render(project, size: NSSize(width: 960, height: 540))
+        // A scene that has not come up yet, or is dark to begin with, says nothing in the library;
+        // the picture its author made for it does.
+        if let rendered, !Thumbnailer.isNearlyBlack(rendered) {
+            setThumbnail(WebSnapshotter.thumbnail(from: rendered), of: current)
+        } else if let picture = library.comesWithPreview(current) ?? rendered.map({ WebSnapshotter.thumbnail(from: $0) }) {
+            setThumbnail(picture, of: current)
         }
         library.removeStill(for: current)
         resyncSystemWallpapers()
+    }
+
+    private func setThumbnail(_ picture: CGImage, of item: Wallpaper) {
+        if let old = library.thumbnailURL(for: item) {
+            ThumbnailCache.forget(old)
+        }
+        library.setThumbnail(picture, for: item.id)
     }
 
     /// The still of a web wallpaper, rendered at the display's size if there is none yet.

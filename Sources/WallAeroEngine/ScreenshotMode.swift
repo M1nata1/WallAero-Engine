@@ -1437,7 +1437,6 @@ enum ScreenshotMode {
             if let sheet = values(of: "--sheet").last, let selection = model.selection {
                 switch sheet {
                 case "effects": model.sheet = .effects(object: selection)
-                case "puppet": model.puppetObject = selection
                 case "options":
                     if let target = model.timelineTarget {
                         model.sheet = .animation(object: selection, target: target, isNew: false, fallback: [])
@@ -1447,6 +1446,45 @@ enum ScreenshotMode {
                 default: break
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            // `--rig-steps "mode:rig;tool:addBone;drag:x,y,x,y;bone:0;time:1;key;undo;timeline"`: the
+            // modes of the rig, step by step, with places as shares of the scene.
+            for step in (values(of: "--rig-steps").last ?? "").split(separator: ";") {
+                let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+                let said = parts.count > 1 ? parts[1] : ""
+                switch parts[0] {
+                case "mode":
+                    if let mode = EngineEditorModel.Mode(rawValue: said) { model.enter(mode) }
+                case "tool":
+                    model.tool = ["multi": .multi, "move": .move, "rotate": .rotate, "addBone": .addBone][said] ?? .multi
+                case "drag":
+                    let n = said.split(separator: ",").compactMap { Double($0) }
+                    if n.count == 4 { preview.drag(from: CGPoint(x: n[0], y: n[1]), to: CGPoint(x: n[2], y: n[3])) }
+                case "bone": model.selectBone(Int(said))
+                case "time": model.timelineSeconds = Double(said) ?? 0
+                case "key": model.toggleKey()
+                case "save": model.saveNow()
+                case "compare":
+                    // The bones as the rig has them against those the player works out.
+                    if let rig = model.selectedRig, let selection = model.selection {
+                        let ours = model.standingBones(of: rig)
+                        let theirs = preview.boneMoves(of: selection, atRest: true)
+                        let far = zip(ours, theirs).map { hypot($0.tx - $1.tx, $0.ty - $1.ty) + 100 * (abs($0.a - $1.a) + abs($0.b - $1.b)) }.max() ?? -1
+                        print("rig: compared \(theirs.count) bones of #\(selection), most apart \(far)")
+                    }
+                case "undo": model.undo()
+                case "redo": model.redo()
+                case "timeline": model.showsTimeline.toggle()
+                case "autokey": model.autoKey = said != "off"
+                case "curves": model.timelineCurves = true
+                case "wait": try? await Task.sleep(nanoseconds: UInt64((Double(said) ?? 1) * 1e9))
+                default: break
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            if let rig = model.selectedRig {
+                let keys = rig.animations.map { "\($0.name): " + $0.keys.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.map(\.frame))" }.joined(separator: " ") }
+                print("rig: \(rig.points.count) corners, \(rig.bones.count) bones, \(rig.animations.count) animations, mode \(model.mode.rawValue); " + keys.joined(separator: " | "))
             }
             print("selection: \(model.selection.map(String.init) ?? "scene"); undo: \(model.canUndo)")
             for row in model.rows {

@@ -35,7 +35,7 @@ struct EngineEditorView: View {
                 middle
                     .toolbar { toolbarContent }
             }
-            .inspector(isPresented: showsInspector) {
+            .inspector(isPresented: .constant(true)) {
                 inspector
                     .inspectorColumnWidth(min: 320, ideal: 360, max: 440)
                     .toolbar {
@@ -46,6 +46,7 @@ struct EngineEditorView: View {
         } else {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
+                    if preview.drawsNatively { EngineModeMenu(model: model) }
                     addMenu.fixedSize()
                     undoButton
                     redoButton
@@ -60,54 +61,42 @@ struct EngineEditorView: View {
                     hierarchy.frame(width: 240)
                     Divider()
                     middle
-                    if showsInspector.wrappedValue {
-                        Divider()
-                        inspector.frame(width: 360)
-                    }
+                    Divider()
+                    inspector.frame(width: 360)
                 }
             }
         }
     }
 
-    /// While a puppet warp is edited or a mask painted, the layers stay in view but are not to
-    /// be changed.
+    /// The layers, which stay in view but are not to be changed while a part of one is worked
+    /// on; where that is its bones, they take the place of the layers.
+    @ViewBuilder
     private var hierarchy: some View {
-        EngineHierarchy(model: model)
-            .disabled(model.puppetObject != nil || model.painting != nil)
+        if model.mode == .rig || model.mode == .weights || model.mode == .pose {
+            EngineBoneList(model: model)
+        } else {
+            EngineHierarchy(model: model)
+                .disabled(model.mode != .object)
+        }
     }
 
-    /// The properties, or the brush while a mask is painted.
+    /// The properties, or what the mode has at the side.
     @ViewBuilder
     private var inspector: some View {
         if let painting = model.painting {
             EngineBrushPanel(model: model, paint: painting)
+        } else if model.mode.isRig {
+            EngineRigPanel(model: model)
         } else {
             EngineInspector(model: model)
         }
     }
 
-    /// The puppet warp has a panel of its own, so it takes the place of the properties too.
-    private var showsInspector: Binding<Bool> {
-        Binding(get: { model.puppetObject == nil }, set: { _ in })
-    }
-
-    /// The scene, which stays where it is under a puppet warp being edited.
     private var middle: some View {
-        ZStack {
-            canvas
-            if let object = model.puppetObject {
-                EnginePuppetEditor(model: model, object: object)
-                    .background(Color(nsColor: .windowBackgroundColor))
-                    .id(object)
-            }
-        }
-    }
-
-    private var canvas: some View {
         let size = model.document.size
         return EngineEditorPreview(model: model, controller: preview, aspectRatio: size.height > 0 ? size.width / size.height : 16 / 9)
             .overlay(alignment: .topLeading) {
-                if preview.drawsNatively, model.painting == nil {
+                if preview.drawsNatively, !model.mode.tools.isEmpty {
                     EngineToolStrip(model: model)
                 }
             }
@@ -131,7 +120,7 @@ struct EngineEditorView: View {
     private var statusLine: some View {
         HStack(spacing: 12) {
             if preview.drawsNatively {
-                Text(model.painting == nil ? model.tool.hint : "Paint over the object. Control and drag changes the size, Shift and drag the opacity.")
+                Text(statusHint)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -168,8 +157,25 @@ struct EngineEditorView: View {
         .padding(.vertical, 8)
     }
 
+    /// What a drag over the scene does in the mode the editor is in.
+    private var statusHint: LocalizedStringKey {
+        switch model.mode {
+        case .paint: return "Paint over the object. Control and drag changes the size, Shift and drag the opacity."
+        case .mesh: return "Drag corners of the mesh, or a box round several. X deletes those selected."
+        case .weights: return "Paint how much the selected bone holds the picture."
+        case .pose: return model.tool == .move ? "Drag a bone to move it. Moving bends a picture more than turning." : "Drag a bone to turn it about its joint. Shift turns by 15°."
+        case .rig where model.tool == .multi: return "Drag a joint, an end or a whole bone. X deletes the selected one."
+        default: return model.tool.hint
+        }
+    }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        if preview.drawsNatively {
+            ToolbarItem {
+                EngineModeMenu(model: model)
+            }
+        }
         ToolbarItemGroup {
             addMenu
         }
@@ -212,7 +218,7 @@ struct EngineEditorView: View {
             Label("Add", systemImage: "plus")
         }
         .labelStyle(.titleAndIcon)
-        .disabled(model.puppetObject != nil || model.painting != nil)
+        .disabled(model.mode != .object)
         .help("Add an object to the scene")
     }
 
@@ -221,7 +227,7 @@ struct EngineEditorView: View {
             Label("Undo", systemImage: "arrow.uturn.backward")
         }
         .labelStyle(.iconOnly)
-        .disabled((!model.canUndo && !model.showsScripts) || model.puppetObject != nil)
+        .disabled(!model.canUndo && !model.showsScripts)
         .keyboardShortcut("z", modifiers: .command)
         .help("Undo")
     }
@@ -231,7 +237,7 @@ struct EngineEditorView: View {
             Label("Redo", systemImage: "arrow.uturn.forward")
         }
         .labelStyle(.iconOnly)
-        .disabled((!model.canRedo && !model.showsScripts) || model.puppetObject != nil)
+        .disabled(!model.canRedo && !model.showsScripts)
         .keyboardShortcut("z", modifiers: [.command, .shift])
         .help("Redo")
     }
@@ -265,7 +271,7 @@ private struct EngineToolStrip: View {
 
     var body: some View {
         VStack(spacing: 2) {
-            ForEach(EngineEditorModel.Tool.allCases, id: \.self) { tool in
+            ForEach(model.mode.tools, id: \.self) { tool in
                 Button {
                     model.tool = tool
                 } label: {

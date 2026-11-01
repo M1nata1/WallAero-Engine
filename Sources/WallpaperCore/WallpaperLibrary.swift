@@ -253,7 +253,8 @@ public final class WallpaperLibrary: ObservableObject {
                 try? FileManager.default.removeItem(at: folder)
                 throw error
             }
-            // The app draws the thumbnail itself: the preview that comes with a scene is small.
+            // The app draws the thumbnail itself: the preview that comes with a scene is small,
+            // and stands in only when the drawing comes out black, see `comesWithPreview`.
             let item = addScene(id, named: name, preview: nil)
             if !leftOut.isEmpty {
                 leftOutOnImport[id] = leftOut
@@ -265,7 +266,7 @@ public final class WallpaperLibrary: ObservableObject {
     /// Adds the scene in the folder named after `id` to the top of the list.
     private func addScene(_ id: UUID, named name: String, preview: URL?) -> Wallpaper {
         var thumbnailFileName: String?
-        if let preview, let image = Thumbnailer.image(at: preview) {
+        if let preview, let image = Thumbnailer.lightImage(at: preview) {
             thumbnailFileName = "\(id.uuidString).jpg"
             try? Thumbnailer.writeJPEG(image, to: thumbnailsURL.appendingPathComponent(thumbnailFileName!))
         }
@@ -477,8 +478,41 @@ public final class WallpaperLibrary: ObservableObject {
         guard (try? Thumbnailer.writeJPEG(image, to: thumbnailsURL.appendingPathComponent(fileName))) != nil else { return }
         // A new value even when the name is the same, so that views showing the picture refresh.
         items[index].thumbnailFileName = fileName
-        items[index].fileSize = Self.size(ofFolder: projectURL(for: items[index]))
+        if items[index].kind == .web {
+            items[index].fileSize = Self.size(ofFolder: projectURL(for: items[index]))
+        }
         save()
+    }
+
+    /// The picture a scene came with from Wallpaper Engine, kept in its project.
+    public func comesWithPreview(_ item: Wallpaper) -> CGImage? {
+        guard item.kind == .web else { return nil }
+        for name in [WallpaperEngineProjectFolder.folderName, SceneProject.pageFolderName] {
+            let folder = projectURL(for: item).appendingPathComponent(name, isDirectory: true)
+            guard let data = try? Data(contentsOf: folder.appendingPathComponent("project.json")),
+                  let project = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let preview = project["preview"] as? String, !preview.isEmpty, Archive.staysInside(preview)
+            else {
+                continue
+            }
+            return Thumbnailer.lightImage(at: folder.appendingPathComponent(preview))
+        }
+        return nil
+    }
+
+    /// A lighter picture for a wallpaper whose thumbnail is black, if there is one.
+    public func lighterThumbnail(for item: Wallpaper) async -> CGImage? {
+        guard let url = thumbnailURL(for: item), let shown = Thumbnailer.image(at: url),
+              Thumbnailer.isNearlyBlack(shown)
+        else {
+            return nil
+        }
+        let lighter = item.kind == .video
+            ? await Thumbnailer.lightFrame(ofVideoAt: fileURL(for: item), duration: item.duration ?? 0)
+            : comesWithPreview(item)
+        // A margin, for the picture written last time not to count as new at every launch.
+        guard let lighter, Thumbnailer.brightness(of: lighter) > Thumbnailer.brightness(of: shown) + 0.005 else { return nil }
+        return lighter
     }
 
     /// Keeps the picture a display showed when the screen was locked, for the lock screen. Each

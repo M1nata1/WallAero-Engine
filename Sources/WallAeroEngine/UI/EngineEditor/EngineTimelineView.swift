@@ -18,7 +18,7 @@ struct EngineTimelineView: View {
             if object == nil {
                 placeholder("Select an object to animate it.")
             } else if model.timelineTargets.isEmpty {
-                placeholder("Nothing of this object is animated. Choose what to animate with the Animate button.")
+                placeholder(model.mode == .pose ? "Select a bone, or turn one on the scene." : "Nothing of this object is animated. Choose what to animate with the Animate button.")
             } else {
                 HStack(spacing: 0) {
                     properties
@@ -48,6 +48,9 @@ struct EngineTimelineView: View {
     private var header: some View {
         HStack(spacing: 8) {
             EngineAnimateMenu(model: model)
+            if let rig = model.selectedRig, !rig.animations.isEmpty {
+                EngineBoneAnimationMenu(model: model, rig: rig)
+            }
             Divider().frame(height: 16)
             Button { model.jump(toEnd: false) } label: { Image(systemName: "backward.end.fill") }
                 .help("Jump to Start")
@@ -128,13 +131,17 @@ struct EngineTimelineView: View {
                 }
             }
             .padding(.top, EngineTimelineKeys.rulerHeight)
+            .background(GeometryReader { list in
+                Color.clear.preference(key: TimelineRowsOffset.self, value: list.frame(in: .named("rows")).minY)
+            })
         }
+        .coordinateSpace(name: "rows")
+        .onPreferenceChange(TimelineRowsOffset.self) { model.timelineRowsOffset = max(0, -$0) }
     }
 
     private func row(_ target: WallpaperEngineAnimationTarget) -> some View {
         Button {
-            model.timelineTarget = target
-            model.selectedKeys = []
+            model.pickTrack(target)
         } label: {
             Text(verbatim: model.title(of: target))
                 .lineLimit(1)
@@ -151,8 +158,48 @@ struct EngineTimelineView: View {
                 if let object { model.sheet = .animation(object: object, target: target, isNew: false, fallback: []) }
             }
             Divider()
-            Button("Remove Animation", role: .destructive) { model.unbindAnimation(target) }
+            if case .bone = target {
+                Button("Remove Keys of the Bone", role: .destructive) { model.unbindAnimation(target) }
+            } else {
+                Button("Remove Animation", role: .destructive) { model.unbindAnimation(target) }
+            }
         }
+    }
+}
+
+/// Which animation of its bones the picture is on, as Blender's actions, and those to add.
+private struct EngineBoneAnimationMenu: View {
+    @ObservedObject var model: EngineEditorModel
+    let rig: WallpaperEnginePuppetRig
+
+    var body: some View {
+        Menu {
+            ForEach(rig.animations.indices, id: \.self) { index in
+                Toggle(isOn: Binding(get: { model.rigAnimation == index }, set: { _ in model.setRigAnimation(index) })) {
+                    Text(verbatim: rig.animations[index].name)
+                }
+            }
+            Divider()
+            Button("New Animation of Bones") { model.addRigAnimation() }
+            Button("Animation Options…") {
+                if let object = model.selection {
+                    model.sheet = .animation(object: object, target: .bone(animation: model.rigAnimation, bone: 0), isNew: false, fallback: [])
+                }
+            }
+            Toggle("Only Selected Bone", isOn: $model.timelineOnlySelected)
+            Divider()
+            Button("Delete Animation of Bones", role: .destructive) { model.removeRigAnimation() }
+        } label: {
+            Label {
+                Text(verbatim: rig.animations.indices.contains(model.rigAnimation) ? rig.animations[model.rigAnimation].name : "")
+            } icon: {
+                Image(systemName: "figure.walk")
+            }
+        }
+        .labelStyle(.titleAndIcon)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("The animation of the bones")
     }
 }
 
@@ -212,6 +259,12 @@ private struct EngineAnimateMenu: View {
         }
         .disabled(model.document.animation(of: id, target) != nil)
     }
+}
+
+/// How far the rows of the timeline are scrolled.
+private struct TimelineRowsOffset: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 /// How the time of the timeline lies across its width.
@@ -328,7 +381,8 @@ struct EngineTimelineKeys: View {
                 drawRuler(context, scale, model: model, full: size.height)
                 for (row, target) in model.timelineTargets.enumerated() {
                     guard let animation = model.animation(target) else { continue }
-                    let top = Self.rulerHeight + CGFloat(row) * Self.rowHeight
+                    let top = Self.rulerHeight + CGFloat(row) * Self.rowHeight - model.timelineRowsOffset
+                    guard top + Self.rowHeight > Self.rulerHeight else { continue }
                     if target == model.timelineTarget {
                         context.fill(Path(CGRect(x: 0, y: top, width: size.width, height: Self.rowHeight)), with: .color(.accentColor.opacity(0.12)))
                     }
@@ -360,7 +414,7 @@ struct EngineTimelineKeys: View {
     }
 
     private func key(at point: CGPoint, _ scale: TimelineScale) -> EngineTimelineKey? {
-        let row = Int((point.y - Self.rulerHeight) / Self.rowHeight)
+        let row = Int((point.y - Self.rulerHeight + model.timelineRowsOffset) / Self.rowHeight)
         guard point.y >= Self.rulerHeight, model.timelineTargets.indices.contains(row) else { return nil }
         let target = model.timelineTargets[row]
         guard let animation = model.animation(target) else { return nil }
@@ -371,7 +425,7 @@ struct EngineTimelineKeys: View {
     private func changed(_ drag: DragGesture.Value, _ scale: TimelineScale) {
         if hold == nil {
             if let found = key(at: drag.startLocation, scale) {
-                model.timelineTarget = found.target
+                model.pickTrack(found.target)
                 if extendsSelection {
                     if model.selectedKeys.remove(found) == nil { model.selectedKeys.insert(found) }
                 } else if !model.selectedKeys.contains(found) {
@@ -401,7 +455,7 @@ struct EngineTimelineKeys: View {
             if let box, box.width > 2 || box.height > 2 {
                 for (row, target) in model.timelineTargets.enumerated() {
                     guard let animation = model.animation(target) else { continue }
-                    let y = Self.rulerHeight + (CGFloat(row) + 0.5) * Self.rowHeight
+                    let y = Self.rulerHeight + (CGFloat(row) + 0.5) * Self.rowHeight - model.timelineRowsOffset
                     for frame in animation.keyFrames where box.contains(CGPoint(x: scale.x(frame / animation.rate), y: y)) {
                         found.insert(EngineTimelineKey(target: target, frame: frame, channel: nil))
                     }
@@ -425,7 +479,7 @@ struct EngineTimelineCurves: View {
     /// The heights the drag started with: they stay while a moment is dragged past them.
     @State private var frozen: ClosedRange<Double>?
 
-    private static let colors: [Color] = [.red, .green, .blue, .yellow]
+    private static let colors: [Color] = [.red, .green, .blue, .yellow, .purple]
     private static let top: CGFloat = EngineTimelineKeys.rulerHeight + 8
 
     /// The heights the curves reach, with room above and below.
@@ -474,7 +528,9 @@ struct EngineTimelineCurves: View {
     /// The ends of the handles of a selected moment, where the screen has them.
     private func handles(_ animation: WallpaperEngineAnimation, _ key: WallpaperEngineAnimation.Key, channel: Int, _ scale: TimelineScale,
                          _ range: ClosedRange<Double>, height: CGFloat) -> [(side: WallpaperEngineAnimation.Side, at: CGPoint)] {
-        [(WallpaperEngineAnimation.Side.back, key.back), (.front, key.front)].compactMap { side, handle in
+        // A bone's keys ease by themselves: there is nothing to drag.
+        if case .bone? = model.timelineTarget { return [] }
+        return [(WallpaperEngineAnimation.Side.back, key.back), (.front, key.front)].compactMap { side, handle in
             guard let handle, !handle.magic else { return nil }
             let reach = animation.reach(side, frame: key.frame, channel: channel)
             return (side, CGPoint(x: scale.x((key.frame + handle.x * reach) / animation.rate), y: y(key.value + handle.y, range, height: height)))
@@ -657,6 +713,11 @@ struct EngineAnimationOptionsSheet: View {
     @State private var leader: String?
 
     private var isLinked: Bool { leader != nil }
+    /// A bone's animation has only what Wallpaper Engine writes of one.
+    private var isBone: Bool {
+        if case .bone = target { return true }
+        return false
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -687,8 +748,10 @@ struct EngineAnimationOptionsSheet: View {
                     }
                     .disabled(isLinked)
                     TextField("Name", text: $options.name)
-                    Toggle("Start Paused", isOn: $options.startsPaused)
-                    if options.mode == .loop {
+                    if !isBone {
+                        Toggle("Start Paused", isOn: $options.startsPaused)
+                    }
+                    if options.mode == .loop, !isBone {
                         Toggle("Smooth Loop", isOn: $options.wrapsLoop)
                             .disabled(isLinked)
                     }

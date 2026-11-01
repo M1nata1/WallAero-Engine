@@ -160,7 +160,9 @@ private struct EngineObjectProperties: View {
                         .foregroundStyle(.secondary)
                 }
                 Button("Replace Picture…") { model.replacePicture(of: id) }
-                Button("Puppet Warp…") { model.puppetObject = id }
+                if model.canEnter(.rig) {
+                    Button("Puppet Warp…") { model.enter(model.document.rig(ofObject: id) == nil ? .mesh : .rig) }
+                }
             }
             if model.document.material(ofObject: id) != nil {
                 lightingSection

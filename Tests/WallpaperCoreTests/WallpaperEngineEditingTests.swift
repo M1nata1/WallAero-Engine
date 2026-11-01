@@ -566,4 +566,68 @@ final class StockFontTests: XCTestCase {
         XCTAssertNotNil(WallpaperEngineScene.stockFont(named: "fonts/Segment7Standard.otf"))
         XCTAssertNil(WallpaperEngineScene.stockFont(named: "fonts/Atami-Regular.otf"))
     }
+
+    private func twoBones() -> WallpaperEnginePuppetRig {
+        var rig = WallpaperEnginePuppetRig(width: 200, height: 200)
+        rig.points = [.init(x: -100, y: -100), .init(x: 100, y: -100), .init(x: -100, y: 100), .init(x: 100, y: 100)]
+        rig.triangles = [0, 1, 2, 1, 3, 2]
+        rig.addBone(at: .init(x: 0, y: -100), parent: nil)
+        rig.addBone(at: .init(x: 0, y: 0), parent: 0)
+        rig.bones[1].tail = .init(x: 0, y: 90)
+        rig.animations = [.init(id: 7, name: "Wave")]
+        return rig
+    }
+
+    func testBonesTurnedAtRestComeBackFromTheFile() throws {
+        var rig = twoBones()
+        rig.bones[0].restTurn = 0.5
+        rig.setKey(.init(frame: 10, angle: 0.25, dx: 3), bone: 1, animation: 0)
+        let read = try XCTUnwrap(WallpaperEnginePuppetRig(mdl: rig.mdl(material: "m"), width: 200, height: 200))
+        XCTAssertEqual(read.bones[1].joint.x, 0, accuracy: 0.001)
+        XCTAssertEqual(read.bones[1].joint.y, 0, accuracy: 0.001)
+        XCTAssertEqual(read.bones[1].tail?.y ?? 0, 90, accuracy: 0.01)
+        XCTAssertEqual(read.bones[0].restAngle, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(read.animations[0].keys[1]?.last?.angle ?? 0, 0.25, accuracy: 0.0001)
+        // At rest nothing is moved, however the bones are turned.
+        let moved = read.posedPoints(animation: nil, frame: 0)
+        for (point, now) in zip(read.points, moved) {
+            XCTAssertEqual(point.x, now.x, accuracy: 0.01)
+            XCTAssertEqual(point.y, now.y, accuracy: 0.01)
+        }
+    }
+
+    func testPaintedWeightsStayAndAddUp() throws {
+        var rig = twoBones()
+        rig.paintWeight(bone: 1, at: .init(x: -100, y: -100), radius: 50, strength: 1, target: 1)
+        let holds = try XCTUnwrap(rig.holds)
+        XCTAssertEqual(rig.weights(of: 1)[0], 1, accuracy: 0.001)
+        for hold in holds { XCTAssertEqual(hold.weights.reduce(0, +), 1, accuracy: 0.001) }
+        let read = try XCTUnwrap(WallpaperEnginePuppetRig(mdl: rig.mdl(material: "m"), width: 200, height: 200))
+        XCTAssertEqual(read.weights(of: 1)[0], 1, accuracy: 0.001)
+    }
+
+    func testKeysOfBonesGoThroughTheTimelineAndBack() throws {
+        var rig = twoBones()
+        rig.setKey(.init(frame: 0), bone: 1, animation: 0)
+        rig.setKey(.init(frame: 30, angle: .pi / 2), bone: 1, animation: 0)
+        var animation = try XCTUnwrap(rig.timelineAnimation(0, bone: 1))
+        XCTAssertEqual(animation.keyFrames, [0, 30])
+        // The curve the timeline draws is the way the bone eases.
+        let middle = animation.numbers(atFrame: 10, base: [0, 0, 0, 0, 0])[0]
+        XCTAssertEqual(middle * .pi / 180, rig.pose(of: 1, in: rig.animations[0], at: 10).angle, accuracy: 0.002)
+        animation.moveKey(from: 30, to: 45)
+        rig.setTimelineAnimation(animation, animation: 0, bone: 1)
+        XCTAssertEqual(rig.animations[0].keys[1]?.map(\.frame), [0, 45])
+        XCTAssertEqual(rig.animations[0].keys[1]?.last?.angle ?? 0, .pi / 2, accuracy: 0.0001)
+        XCTAssertEqual(rig.animations[0].name, "Wave")
+    }
+
+    func testRemovedCornersTakeTheirTrianglesAlong() {
+        var rig = twoBones()
+        rig.paintWeight(bone: 1, at: .init(x: 100, y: 100), radius: 10, strength: 1, target: 1)
+        rig.removePoints([0])
+        XCTAssertEqual(rig.points.count, 3)
+        XCTAssertEqual(rig.triangles, [0, 2, 1])
+        XCTAssertEqual(rig.holds?.count, 3)
+    }
 }

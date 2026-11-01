@@ -29,6 +29,11 @@ final class EngineEditorOverlay: NSView {
         didSet { needsDisplay = true }
     }
 
+    /// The editor, for the mode it is in and the rig of the selected picture.
+    weak var model: EngineEditorModel?
+    var rigGesture: RigGesture?
+    var weightCache: (rig: WallpaperEnginePuppetRig, bone: Int, values: [Double])?
+
     /// The mask painted over the scene, which takes the mouse for as long as it is.
     var painting: EngineMaskPaint? {
         didSet {
@@ -38,7 +43,7 @@ final class EngineEditorOverlay: NSView {
             needsDisplay = true
         }
     }
-    private var brushAt: CGPoint?
+    var brushAt: CGPoint?
     private var gestureKeys = NSEvent.ModifierFlags()
     /// A press with Option moves the view: every other drag paints.
     private var paintPans = false
@@ -52,7 +57,7 @@ final class EngineEditorOverlay: NSView {
     private var described: [Int: [String: Any]] = [:]
     /// What the editor changed of the scene and has not yet been written: `{"objects": [...]}`.
     private(set) var changes: [String: Any] = [:]
-    private var outline: (middle: CGPoint, corners: [CGPoint]?, visible: Bool)?
+    private(set) var outline: (middle: CGPoint, corners: [CGPoint]?, visible: Bool)?
     private var objectSize: CGSize?
     private var drag: Drag?
     private var follow: Timer?
@@ -173,6 +178,7 @@ final class EngineEditorOverlay: NSView {
             drawPainting(painting)
             return
         }
+        if drawRig() { return }
         guard let outline, let shape else { return }
         let accent = NSColor.controlAccentColor
         let transform = NSAffineTransform()
@@ -208,12 +214,12 @@ final class EngineEditorOverlay: NSView {
 
     // MARK: - The mouse
 
-    private func point(_ event: NSEvent) -> CGPoint { convert(event.locationInWindow, from: nil) }
+    func point(_ event: NSEvent) -> CGPoint { convert(event.locationInWindow, from: nil) }
 
     override func mouseMoved(with event: NSEvent) {
         let at = point(event)
         player?.pointer("move", x: at.x, y: at.y)
-        if painting != nil {
+        if painting != nil || model?.mode == .weights {
             brushAt = at
             needsDisplay = true
         }
@@ -226,11 +232,11 @@ final class EngineEditorOverlay: NSView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        painting == nil ? onMenu?(point(event)) : nil
+        painting == nil && model?.mode == .object ? onMenu?(point(event)) : nil
     }
 
     override func resetCursorRects() {
-        if painting != nil { addCursorRect(bounds, cursor: .crosshair) }
+        if painting != nil || model?.mode == .weights { addCursorRect(bounds, cursor: .crosshair) }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -240,6 +246,7 @@ final class EngineEditorOverlay: NSView {
             pressBrush(painting, at, event)
             return
         }
+        if rigMouseDown(at, event) { return }
         player?.pointer("down", x: at.x, y: at.y)
         if object != nil {
             // These two take hold anywhere; a click without a drag picks what is under it.
@@ -282,6 +289,7 @@ final class EngineEditorOverlay: NSView {
             }
             return
         }
+        if rigMouseDragged(at, event) { return }
         guard let drag, let object else {
             player?.pointer("move", x: at.x, y: at.y)
             return
@@ -326,6 +334,7 @@ final class EngineEditorOverlay: NSView {
             painting.endStroke()
             return
         }
+        if rigMouseUp(at, event) { return }
         player?.pointer("up", x: at.x, y: at.y)
         guard let drag else { return }
         self.drag = nil
@@ -522,7 +531,7 @@ final class EngineEditorOverlay: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        guard let object else { return super.keyDown(with: event) }
+        guard let object, model?.mode == .object else { return super.keyDown(with: event) }
         // A pixel of the scene at a time, or ten; the scene counts upwards.
         let by: Double = event.modifierFlags.contains(.shift) ? 10 : 1
         var patch: [String: Double]

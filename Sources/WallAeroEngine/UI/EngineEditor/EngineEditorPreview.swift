@@ -33,6 +33,7 @@ final class EngineEditorPreviewController {
             view = container
             sceneView = scene
             self.overlay = overlay
+            overlay.model = model
             overlay.onSelect = { [weak model] id in model?.selection = id }
             overlay.onChange = { [weak model] id, patch in model?.applyFromPreview(object: id, patch: patch) }
             overlay.onCommit = { [weak model] in model?.endGesture() }
@@ -218,6 +219,23 @@ final class EngineEditorPreviewController {
         overlay?.painting = paint
     }
 
+    /// A picture's mesh and bones as they are edited; nil makes it a plain picture.
+    func showPuppet(_ id: Int, table: [String: Any]?, layers: Any?) {
+        sceneView?.scenePlayer?.askAndShow("puppet", [id, table ?? NSNull(), layers ?? NSNull()])
+        overlay?.needsDisplay = true
+    }
+
+    /// Holds a picture's bones where the editor has them, or lets them play again.
+    func holdBones(_ id: Int, _ poses: [[Double]]?) {
+        sceneView?.scenePlayer?.askAndShow("holdPuppet", [id, poses ?? NSNull()])
+        overlay?.needsDisplay = true
+    }
+
+    /// The mode changed, or what is selected in it.
+    func modeChanged() {
+        overlay?.modeChanged()
+    }
+
     /// New values of a texture being painted.
     func showMask(_ texture: String, _ mask: WallpaperEngineMask) {
         sceneView?.scenePlayer?.paintTexture(texture, width: mask.width, byteCount: mask.width * mask.height * 4) { mask.writeColors(to: $0) }
@@ -234,11 +252,21 @@ final class EngineEditorPreviewController {
     }
 
     /// The editor's keys, by their place on the keyboard, so that they work in any layout. They
-    /// are not for a text being typed, a window on top, or the puppet warp, which has its own.
+    /// are not for a text being typed or a window on top.
     private func handleKey(_ event: NSEvent) -> Bool {
-        guard let model, model.puppetObject == nil, let window = view.window, event.window === window,
+        guard let model, let window = view.window, event.window === window,
               window.attachedSheet == nil, !(window.firstResponder is NSText) else { return false }
         let keys = event.modifierFlags.intersection([.command, .control, .option])
+        if event.keyCode == 48, overlay != nil {                  // Tab
+            if keys == [.control] {
+                model.enter(model.mode == .pose ? .object : .pose)
+                return true
+            }
+            if keys.isEmpty {
+                model.toggleEditMode()
+                return true
+            }
+        }
         if let painting = model.painting {
             guard keys.isEmpty else { return false }
             switch event.keyCode {
@@ -256,12 +284,29 @@ final class EngineEditorPreviewController {
         }
         if model.showsTimeline, handleTimelineKey(event, keys) { return true }
         guard keys.isEmpty else { return false }
+        func pick(_ tool: EngineEditorModel.Tool) -> Bool {
+            guard overlay != nil, model.mode.tools.contains(tool) else { return false }
+            model.tool = tool
+            return true
+        }
+        if model.mode.isRig, event.keyCode == 7 || event.keyCode == 51 || event.keyCode == 117 {  // X, Delete
+            if model.mode == .rig { model.deleteSelectedBone() }
+            if model.mode == .mesh, !model.selectedPoints.isEmpty {
+                let gone = model.selectedPoints
+                model.selectedPoints = []
+                model.editRig { $0.removePoints(gone) }
+                model.endGesture()
+            }
+            return true
+        }
         switch event.keyCode {
-        case 13 where overlay != nil: model.tool = .multi
-        case 5 where overlay != nil: model.tool = .move
-        case 15 where overlay != nil: model.tool = .rotate
-        case 1 where overlay != nil: model.tool = .scale
-        case 53 where overlay != nil && model.tool != .multi: model.tool = .multi
+        case 13: return pick(.multi)
+        case 5: return pick(.move)
+        case 15: return pick(.rotate)
+        case 1: return pick(.scale)
+        case 14: return pick(.addBone)
+        case 53 where overlay != nil && model.mode.tools.first != nil && model.tool != model.mode.tools.first:
+            model.tool = model.mode.tools[0]
         case 17 where overlay != nil: model.showsTimeline.toggle()
         case 4:
             guard let selection = model.selection else { return false }
@@ -347,6 +392,8 @@ final class EngineEditorPreviewController {
         for (name, value) in document.files where old.file(name) != value {
             changed[Self.key(name)] = value.text
         }
+        // A rig alone reaches the scene by itself, without its being played anew.
+        guard !changed.isEmpty || document.scene != old.scene || document.project != old.project || playsAnewOnNextChange else { return }
         let scene = document.scene.text
         if let player = sceneView?.scenePlayer {
             // What the frame showed while an object was dragged is in the scene now.
@@ -429,6 +476,13 @@ final class EngineEditorPreviewController {
     func setPlaying(_ playing: Bool) {
         webView?.setPlaying(playing, rate: 1)
         sceneView?.setPlaying(playing, rate: 1)
+    }
+
+    /// How the player has a picture's bones stand, for tests.
+    func boneMoves(of id: Int, atRest: Bool) -> [CGAffineTransform] {
+        (sceneView?.scenePlayer?.ask("bones", [id, atRest]) as? [[Double]] ?? []).filter { $0.count >= 6 }.map {
+            CGAffineTransform(a: $0[0], b: $0[1], c: $0[2], d: $0[3], tx: $0[4], ty: $0[5])
+        }
     }
 
     /// Where an object's middle is on the page, for tests.

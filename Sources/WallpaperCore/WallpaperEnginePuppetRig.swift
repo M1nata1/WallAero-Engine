@@ -24,6 +24,14 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
         public var joint: Point
         /// How it sways by itself, if it does.
         public var sway: Sway?
+        /// Where the bone ends, at rest; without one it reaches its first child.
+        public var tail: Point?
+        /// How it is turned from its parent at rest, in radians, where it is at all.
+        public var restTurn: Double?
+        /// What Wallpaper Engine wrote of how it sways, kept for all the app does not know of it.
+        public var physics: String?
+
+        public var restAngle: Double { restTurn ?? 0 }
 
         public init(index: Int, name: String, parent: Int?, joint: Point) {
             self.index = index
@@ -84,6 +92,12 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
         }
     }
 
+    /// How much a corner of the mesh is held by the bones that hold it.
+    public struct Hold: Codable, Equatable, Sendable {
+        public var bones: [Int]
+        public var weights: [Double]
+    }
+
     public struct Animation: Codable, Equatable, Sendable, Identifiable {
         public var id: Int
         public var name: String
@@ -107,6 +121,9 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
     public var triangles: [Int] = []
     public var bones: [Bone] = []
     public var animations: [Animation] = []
+    /// How much the bones hold each corner, as painted or as a file has it; nil is worked out
+    /// from how near the bones are.
+    public var holds: [Hold]?
 
     public init(width: Double, height: Double) {
         self.width = width
@@ -143,6 +160,28 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
         }
         self.points = points
         self.triangles = triangles
+        holds = nil
+    }
+
+    /// Takes corners out of the mesh with the triangles they stand in.
+    public mutating func removePoints(_ gone: Set<Int>) {
+        var renumbered: [Int: Int] = [:]
+        var kept: [Point] = []
+        var keptHolds: [Hold] = []
+        for (index, point) in points.enumerated() where !gone.contains(index) {
+            renumbered[index] = kept.count
+            kept.append(point)
+            if let holds, holds.indices.contains(index) { keptHolds.append(holds[index]) }
+        }
+        var left: [Int] = []
+        for index in Swift.stride(from: 0, to: triangles.count - 2, by: 3) {
+            if let a = renumbered[triangles[index]], let b = renumbered[triangles[index + 1]], let c = renumbered[triangles[index + 2]] {
+                left += [a, b, c]
+            }
+        }
+        points = kept
+        triangles = left
+        if holds != nil { holds = keptHolds.count == kept.count ? keptHolds : nil }
     }
 
     /// Which squares of a grid over the picture have something to show in them.
@@ -194,6 +233,21 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
             kept[i].parent = newParent.flatMap { renumbered[$0] }
         }
         bones = kept
+        holds = holds?.map { hold in
+            var bones: [Int] = [], weights: [Double] = []
+            for (bone, weight) in zip(hold.bones, hold.weights) where bone != index && weight > 0 {
+                bones.append(renumbered[bone] ?? 0)
+                weights.append(weight)
+            }
+            let total = weights.reduce(0, +)
+            guard total > 0 else { return Hold(bones: [0, 0, 0, 0], weights: [1, 0, 0, 0]) }
+            weights = weights.map { $0 / total }
+            while bones.count < 4 {
+                bones.append(0)
+                weights.append(0)
+            }
+            return Hold(bones: bones, weights: weights)
+        }
         for a in animations.indices {
             var keys: [Int: [Key]] = [:]
             for (bone, list) in animations[a].keys {
@@ -203,16 +257,106 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
         }
     }
 
-    /// The bone a bone points to: its first child, else nothing.
+    /// How far a bone reaches from its joint: to where it is said to end, else to its first child.
     func tip(of index: Int) -> Point? {
-        bones.first { $0.parent == index }.map { child in
-            Point(x: child.joint.x - bones[index].joint.x, y: child.joint.y - bones[index].joint.y)
+        let bone = bones[index]
+        let end = bone.tail ?? bones.first { $0.parent == index }?.joint
+        return end.map { Point(x: $0.x - bone.joint.x, y: $0.y - bone.joint.y) }
+    }
+
+    /// Where a bone ends at rest, to be drawn: one that says nothing goes on the way its parent does.
+    public func restTail(of index: Int) -> Point {
+        let bone = bones[index]
+        if let tip = tip(of: index), hypot(tip.x, tip.y) > 0.001 {
+            return Point(x: bone.joint.x + tip.x, y: bone.joint.y + tip.y)
         }
+        let reach = max(16, min(width, height) / 12)
+        var way = Point(x: 0, y: 1)
+        if let parent = bone.parent, parent != index {
+            let from = bones[parent].joint
+            let length = hypot(bone.joint.x - from.x, bone.joint.y - from.y)
+            if length > 0.001 { way = Point(x: (bone.joint.x - from.x) / length, y: (bone.joint.y - from.y) / length) }
+        }
+        return Point(x: bone.joint.x + way.x * reach, y: bone.joint.y + way.y * reach)
+    }
+
+    /// How a bone is turned at rest, from the picture.
+    func restWorldAngle(of index: Int) -> Double {
+        var total = 0.0
+        var at: Int? = index
+        var steps = 0
+        while let current = at, bones.indices.contains(current), steps < 64 {
+            total += bones[current].restAngle
+            at = bones[current].parent
+            steps += 1
+        }
+        return total
+    }
+
+    /// Where a bone is from its parent at rest, counted along its parent.
+    func restPlace(of index: Int) -> Point {
+        let bone = bones[index]
+        guard let parent = bone.parent, bones.indices.contains(parent), parent != index else { return bone.joint }
+        let x = bone.joint.x - bones[parent].joint.x, y = bone.joint.y - bones[parent].joint.y
+        let turn = -restWorldAngle(of: parent)
+        return Point(x: x * cos(turn) - y * sin(turn), y: x * sin(turn) + y * cos(turn))
+    }
+
+    /// Where a point of a bone's own is, from its joint, for one seen from the picture.
+    public func alongBone(_ index: Int, _ point: Point) -> Point {
+        let x = point.x - bones[index].joint.x, y = point.y - bones[index].joint.y
+        let turn = -restWorldAngle(of: index)
+        return Point(x: x * cos(turn) - y * sin(turn), y: x * sin(turn) + y * cos(turn))
     }
 
     /// How much each bone holds each corner: the four nearest bones, more the nearer, a bone
     /// counted as the line from its joint to its tip.
     public func weights() -> [(bones: [Int], weights: [Double])] {
+        if let holds, holds.count == points.count, !bones.isEmpty { return holds.map { ($0.bones, $0.weights) } }
+        return nearestWeights()
+    }
+
+    /// Paints how much a bone holds the corners within a radius of a point: towards `target`,
+    /// by `strength` at the middle and less towards the edge. The others share what is left.
+    public mutating func paintWeight(bone: Int, at center: Point, radius: Double, strength: Double, target: Double) {
+        guard bones.indices.contains(bone), radius > 0 else { return }
+        var painted = weights().map { Hold(bones: $0.bones, weights: $0.weights) }
+        for index in points.indices {
+            let distance = hypot(points[index].x - center.x, points[index].y - center.y)
+            guard distance < radius else { continue }
+            let share = 1 - distance / radius
+            var hold = painted[index]
+            var slot = hold.bones.indices.first { hold.bones[$0] == bone && hold.weights[$0] > 0 }
+            if slot == nil {
+                guard target > 0 else { continue }
+                slot = hold.weights.indices.min { hold.weights[$0] < hold.weights[$1] }
+                hold.bones[slot!] = bone
+                hold.weights[slot!] = 0
+            }
+            guard let slot else { continue }
+            let now = hold.weights[slot]
+            let next = now + (target - now) * min(1, strength * share * share * (3 - 2 * share))
+            let others = hold.weights.indices.filter { $0 != slot }.reduce(0) { $0 + hold.weights[$1] }
+            // A corner is always held in whole: one nothing else holds stays with this bone.
+            guard others > 1e-6 || next > 1e-6 else { continue }
+            let room = 1 - next
+            for other in hold.weights.indices where other != slot {
+                hold.weights[other] = others > 1e-6 ? hold.weights[other] / others * room : 0
+            }
+            hold.weights[slot] = others > 1e-6 ? next : 1
+            painted[index] = hold
+        }
+        holds = painted
+    }
+
+    /// How much a bone holds each corner.
+    public func weights(of bone: Int) -> [Double] {
+        weights().map { hold in
+            zip(hold.bones, hold.weights).reduce(0) { $1.0 == bone ? $0 + $1.1 : $0 }
+        }
+    }
+
+    private func nearestWeights() -> [(bones: [Int], weights: [Double])] {
         guard !bones.isEmpty else { return points.map { _ in ([0, 0, 0, 0], [1, 0, 0, 0]) } }
         let segments: [(Point, Point)] = bones.map { bone in
             let tip = tip(of: bone.index) ?? Point(x: 0, y: 0)
@@ -282,7 +426,8 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
                 let bone = weights[index].bones[slot]
                 let move = world[bone]
                 // From where the bone is at rest to where it is now.
-                let rx = point.x - bones[bone].joint.x, ry = point.y - bones[bone].joint.y
+                let along = alongBone(bone, point)
+                let rx = along.x, ry = along.y
                 let px = move.a * rx + move.c * ry + move.tx
                 let py = move.b * rx + move.d * ry + move.ty
                 x += px * weights[index].weights[slot]
@@ -305,15 +450,46 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
         func world(_ index: Int, _ depth: Int) -> CGAffineTransform {
             if let done = result[index] { return done }
             let bone = bones[index]
-            let key = animation.flatMap { animations.indices.contains($0) ? pose(of: index, in: animations[$0], at: frame) : nil } ?? Key(frame: 0)
-            let parentJoint = bone.parent.map { bones[$0].joint } ?? Point(x: 0, y: 0)
-            let local = key.turn
-                .concatenating(CGAffineTransform(translationX: bone.joint.x - parentJoint.x + key.dx, y: bone.joint.y - parentJoint.y + key.dy))
+            var key = animation.flatMap { animations.indices.contains($0) ? pose(of: index, in: animations[$0], at: frame) : nil } ?? Key(frame: 0)
+            key.angle += bone.restAngle
+            let place = restPlace(of: index)
+            let local = key.turn.concatenating(CGAffineTransform(translationX: place.x + key.dx, y: place.y + key.dy))
             let made = bone.parent.flatMap { $0 != index && depth < 64 ? world($0, depth + 1) : nil }.map { local.concatenating($0) } ?? local
             result[index] = made
             return made
         }
         return bones.indices.map { world($0, 0) }
+    }
+
+    /// Each bone from its parent at a frame, for the player: place (2), turn, scale (2), and
+    /// the turns about the picture's x and y axes. `draft` stands in for what the animation says.
+    public func localPoses(animation: Int?, frame: Double, draft: [Int: Key] = [:]) -> [[Double]] {
+        bones.map { bone in
+            let key = draft[bone.index]
+                ?? animation.flatMap { animations.indices.contains($0) ? pose(of: bone.index, in: animations[$0], at: frame) : nil }
+                ?? Key(frame: 0)
+            let place = restPlace(of: bone.index)
+            return [place.x + key.dx, place.y + key.dy, bone.restAngle + key.angle, 1, 1, key.tiltX, key.tiltY]
+        }
+    }
+
+    /// The same as `posedTransforms`, with bones in `draft` where they stand for now.
+    public func posedTransforms(animation: Int?, frame: Double, draft: [Int: Key]) -> [CGAffineTransform] {
+        guard !draft.isEmpty, let animation, animations.indices.contains(animation) else {
+            return worldTransforms(animation: animation, frame: frame)
+        }
+        var copy = self
+        for (bone, key) in draft {
+            var held = key
+            held.frame = Int(frame.rounded())
+            copy.animations[animation].keys[bone] = [held]
+        }
+        return copy.worldTransforms(animation: animation, frame: frame)
+    }
+
+    /// The rig as the player is handed a puppet, drawn with `material`.
+    public func playerTable(material: String) -> [String: Any]? {
+        WallpaperEnginePuppet(data: mdl(material: material))?.table
     }
 
     // MARK: - Writing
@@ -363,8 +539,9 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
             int(1)
             int(Int32(bone.parent ?? -1))
             uint(64)
-            let parentJoint = bone.parent.map { rigBones[$0].joint } ?? Point(x: 0, y: 0)
-            for value in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, bone.joint.x - parentJoint.x, bone.joint.y - parentJoint.y, 0, 1] {
+            let place = bones.isEmpty ? bone.joint : restPlace(of: bone.index)
+            let c = cos(bone.restAngle), s = sin(bone.restAngle)
+            for value in [c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, place.x, place.y, 0, 1] {
                 float(value)
             }
             text(physics(of: bone))
@@ -389,15 +566,15 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
             for bone in rigBones.indices {
                 uint(0)
                 uint(UInt32((max(animation.length, 1) + 1) * 36))
-                let parentJoint = rigBones[bone].parent.map { rigBones[$0].joint } ?? Point(x: 0, y: 0)
+                let place = bones.isEmpty ? rigBones[bone].joint : restPlace(of: bone)
                 for frame in 0...max(animation.length, 1) {
                     let key = bones.isEmpty ? Key(frame: frame) : pose(of: bone, in: animations[index], at: Double(frame))
-                    float(rigBones[bone].joint.x - parentJoint.x + key.dx)
-                    float(rigBones[bone].joint.y - parentJoint.y + key.dy)
+                    float(place.x + key.dx)
+                    float(place.y + key.dy)
                     float(0)
                     float(key.tiltX)
                     float(key.tiltY)
-                    float(key.angle)
+                    float(rigBones[bone].restAngle + key.angle)
                     float(1)
                     float(1)
                     float(1)
@@ -411,11 +588,12 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
 
     /// How a bone sways, in the words Wallpaper Engine's editor writes it.
     func physics(of bone: Bone) -> String {
-        let tip = self.tip(of: bone.index) ?? Point(x: 50, y: 0)
-        var values: [String: JSONValue] = [
-            "tm": .number(100),
-            "tp": .string(String(format: "%.5f %.5f 0.00000", tip.x, tip.y)),
-        ]
+        var tip = Point(x: 50, y: 0)
+        if bones.indices.contains(bone.index), let reach = self.tip(of: bone.index) {
+            tip = alongBone(bone.index, Point(x: bone.joint.x + reach.x, y: bone.joint.y + reach.y))
+        }
+        var values = bone.physics.flatMap { JSONValue(data: Data($0.utf8))?.objectValue } ?? ["tm": .number(100)]
+        values["tp"] = .string(String(format: "%.5f %.5f 0.00000", tip.x, tip.y))
         if let sway = bone.sway {
             values["se"] = .bool(sway.kind == .spring)
             values["re"] = .bool(sway.kind == .hanging)
@@ -438,42 +616,131 @@ extension WallpaperEngineDocument {
         (puppet as NSString).deletingPathExtension + ".wallaero.json"
     }
 
-    /// Makes an image object a puppet bent by `rig`: writes its `.mdl` and the rig into the
-    /// project and plays the rig's animations on the object.
-    public mutating func setPuppet(_ rig: WallpaperEnginePuppetRig, ofObject id: Int, projectFolder: URL) throws {
+    /// The name of the puppet an image object is, or would be.
+    func puppetName(ofObject id: Int) -> String? {
+        guard let model = object(id)?["image"]?.plain.stringValue, let value = file(model) else { return nil }
+        return value["puppet"]?.stringValue ?? (model as NSString).deletingPathExtension + "_puppet.mdl"
+    }
+
+    /// The rig an image object is bent by, if it has one.
+    public func rig(ofObject id: Int) -> WallpaperEnginePuppetRig? {
+        guard let model = object(id)?["image"]?.plain.stringValue, let puppet = file(model)?["puppet"]?.stringValue else { return nil }
+        return rigs[puppet]
+    }
+
+    /// Makes an image object a puppet bent by `rig`, or changes the one it is: the files of the
+    /// puppet follow when the document is written. The animations it played go on being played.
+    public mutating func setRig(_ rig: WallpaperEnginePuppetRig, ofObject id: Int) {
         guard let model = object(id)?["image"]?.plain.stringValue, var modelValue = file(model),
-              let material = modelValue["material"]?.stringValue
-        else {
-            return
+              let puppet = puppetName(ofObject: id) else { return }
+        let old = rigs[puppet]
+        rigs[puppet] = rig
+        if modelValue["puppet"] == nil {
+            modelValue["puppet"] = .string(puppet)
+            setFile(model, modelValue)
+            // Pictures bent by bones are drawn the way Wallpaper Engine's editor draws them.
+            if let material = modelValue["material"]?.stringValue, var materialValue = file(material),
+               var passes = materialValue["passes"]?.arrayValue, !passes.isEmpty {
+                var combos = passes[0]["combos"] ?? .object([:])
+                combos["VERSION"] = .number(2)
+                passes[0]["combos"] = combos
+                materialValue["passes"] = .array(passes)
+                setFile(material, materialValue)
+            }
         }
-        let puppet = modelValue["puppet"]?.stringValue ?? (model as NSString).deletingPathExtension + "_puppet.mdl"
+        guard old?.animations.map(\.id) != rig.animations.map(\.id) || old?.animations.map(\.name) != rig.animations.map(\.name) else { return }
+        let ids = Set(rig.animations.map(\.id))
+        let kept = (object(id)?["animationlayers"]?.arrayValue ?? []).filter { layer in
+            layer["animation"]?.plain.numberValue.map { ids.contains(Int($0)) } ?? false
+        }
+        // One animation plays: the first; the others are there for scripts.
+        let layers = kept.isEmpty ? rig.animations.prefix(1).map { animation -> JSONValue in
+            .object([
+                "additive": .bool(false), "animation": .number(Double(animation.id)), "blend": .number(1),
+                "blendin": .bool(false), "blendout": .bool(false), "blendtime": .number(0.5), "id": .number(Double(newID())),
+                "name": .string(animation.name), "rate": .number(1), "visible": .bool(true),
+            ])
+        } : kept
+        update(id) { $0["animationlayers"] = .array(Array(layers)) }
+    }
+
+    /// Makes an image object a plain picture again.
+    public mutating func removeRig(ofObject id: Int) {
+        guard let model = object(id)?["image"]?.plain.stringValue, var value = file(model), let puppet = value["puppet"]?.stringValue else { return }
+        value["puppet"] = nil
+        setFile(model, value)
+        rigs[puppet] = nil
+        update(id) { $0["animationlayers"] = nil }
+    }
+
+    /// Makes an image object a puppet bent by `rig`, with its files written at once.
+    public mutating func setPuppet(_ rig: WallpaperEnginePuppetRig, ofObject id: Int, projectFolder: URL) throws {
+        setRig(rig, ofObject: id)
+        guard let puppet = puppetName(ofObject: id) else { return }
+        try writeRig(puppet, to: projectFolder)
+    }
+
+    /// Writes a rig as the puppet's `.mdl`, with the app's own file of its keys beside it.
+    func writeRig(_ puppet: String, to projectFolder: URL) throws {
+        guard let rig = rigs[puppet], Archive.staysInside(puppet) else { return }
+        let material = files.values.first { $0["puppet"]?.stringValue == puppet }?["material"]?.stringValue ?? ""
         let url = projectFolder.appendingPathComponent(puppet)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try rig.mdl(material: material).write(to: url, options: .atomic)
-        let rigData = try JSONEncoder().encode(rig)
-        try rigData.write(to: projectFolder.appendingPathComponent(Self.rigFileName(ofPuppet: puppet)), options: .atomic)
-        modelValue["puppet"] = .string(puppet)
-        setFile(model, modelValue)
-        // Pictures bent by bones are drawn the way Wallpaper Engine's editor draws them.
-        if var materialValue = file(material), var passes = materialValue["passes"]?.arrayValue, !passes.isEmpty {
-            var combos = passes[0]["combos"] ?? .object([:])
-            combos["VERSION"] = .number(2)
-            passes[0]["combos"] = combos
-            materialValue["passes"] = .array(passes)
-            setFile(material, materialValue)
+        try JSONEncoder().encode(rig).write(to: projectFolder.appendingPathComponent(Self.rigFileName(ofPuppet: puppet)), options: .atomic)
+    }
+
+    /// Takes the rigs of the scene's puppets in from their files, to be edited. A file is only
+    /// written again when its rig is changed.
+    public mutating func loadRigs(projectFolder: URL) {
+        for id in objectIDs where rig(ofObject: id) == nil {
+            guard let found = object(id), Self.kind(of: found) == .image, let puppet = puppetName(ofObject: id), rigs[puppet] == nil else { continue }
+            let size = object(id)?["size"]?.vector ?? []
+            let picture = size.count < 2 ? self.picture(ofObject: id, projectFolder: projectFolder) : nil
+            let width = size.first ?? Double(picture?.width ?? 100), height = size.count > 1 ? size[1] : Double(picture?.height ?? 100)
+            if let rig = puppetRig(ofObject: id, projectFolder: projectFolder, width: width, height: height) {
+                rigs[puppet] = rig
+            }
         }
-        var next = newID()
-        let layers: [JSONValue] = rig.animations.map { animation in
-            defer { next += 1 }
-            return .object([
-                "additive": .bool(false), "animation": .number(Double(animation.id)), "blend": .number(1),
-                "blendin": .bool(false), "blendout": .bool(false), "blendtime": .number(0.5), "id": .number(Double(next)),
-                "name": .string(animation.name), "rate": .number(1), "visible": .bool(true),
-            ])
+    }
+}
+
+// MARK: - On the timeline
+
+extension WallpaperEnginePuppetRig {
+    /// A key as the numbers the timeline has of a bone: the turns in degrees, then the moves.
+    static func numbers(of key: Key) -> [Double] {
+        [key.angle * 180 / .pi, key.tiltX * 180 / .pi, key.tiltY * 180 / .pi, key.dx, key.dy]
+    }
+
+    /// The keys of a bone as an animation of the timeline's. Between keys a bone eases from
+    /// standing to standing; the handles say so, and the curves come out as it moves.
+    public func timelineAnimation(_ animation: Int, bone: Int) -> WallpaperEngineAnimation? {
+        guard animations.indices.contains(animation) else { return nil }
+        let action = animations[animation]
+        var made = WallpaperEngineAnimation(bone: (action.keys[bone] ?? []).map { (Double($0.frame), Self.numbers(of: $0)) }, channels: 5)
+        made.options = WallpaperEngineAnimation.Options(fps: action.framesPerSecond, length: Double(action.length),
+                                                        mode: WallpaperEngineAnimation.Mode(rawValue: action.mode) ?? .loop, name: action.name)
+        return made
+    }
+
+    /// Takes keys back from the timeline's way of having them, with how the animation plays.
+    public mutating func setTimelineAnimation(_ edited: WallpaperEngineAnimation, animation: Int, bone: Int) {
+        guard animations.indices.contains(animation) else { return }
+        let options = edited.options
+        animations[animation].framesPerSecond = options.fps
+        animations[animation].length = max(1, Int(options.length.rounded()))
+        animations[animation].mode = options.mode.rawValue
+        if !options.name.isEmpty { animations[animation].name = options.name }
+        let frames = edited.keyFrames
+        guard !frames.isEmpty else {
+            animations[animation].keys[bone] = nil
+            return
         }
-        update(id) { object in
-            // One animation plays: the first; the others are there for scripts.
-            object["animationlayers"] = .array(Array(layers.prefix(1)))
+        let zero = [Double](repeating: 0, count: 5)
+        animations[animation].keys[bone] = frames.map { frame in
+            let n = edited.numbers(atFrame: frame, base: zero)
+            return Key(frame: Int(frame.rounded()), angle: n[0] * .pi / 180, dx: n[3], dy: n[4], tiltX: n[1] * .pi / 180, tiltY: n[2] * .pi / 180)
         }
     }
 }
@@ -490,19 +757,45 @@ extension WallpaperEnginePuppetRig {
             Point(x: Double(puppet.corners[index * stride]), y: Double(puppet.corners[index * stride + 1]))
         }
         triangles = puppet.triangles.map(Int.init)
-        // Joints at rest, from each bone's place under its parent.
-        var joints = [Point?](repeating: nil, count: puppet.bones.count)
-        func joint(_ index: Int, _ depth: Int) -> Point {
+        holds = (0..<(puppet.corners.count / stride)).map { index in
+            let at = index * stride
+            return Hold(bones: (4..<8).map { Int(puppet.corners[at + $0]) }, weights: (8..<12).map { Double(puppet.corners[at + $0]) })
+        }
+        // Joints at rest, from each bone's place under its parent, which may be turned.
+        var joints = [(point: Point, angle: Double)?](repeating: nil, count: puppet.bones.count)
+        func joint(_ index: Int, _ depth: Int) -> (point: Point, angle: Double) {
             if let done = joints[index] { return done }
             let bone = puppet.bones[index]
             let own = Point(x: Double(bone.matrix[12]), y: Double(bone.matrix[13]))
-            let base = bone.parent >= 0 && bone.parent != index && depth < 64 ? joint(bone.parent, depth + 1) : Point(x: 0, y: 0)
-            let made = Point(x: base.x + own.x, y: base.y + own.y)
+            let turn = atan2(Double(bone.matrix[1]), Double(bone.matrix[0]))
+            let base = bone.parent >= 0 && bone.parent != index && depth < 64 ? joint(bone.parent, depth + 1) : (point: Point(x: 0, y: 0), angle: 0)
+            let c = cos(base.angle), s = sin(base.angle)
+            let made = (Point(x: base.point.x + own.x * c - own.y * s, y: base.point.y + own.x * s + own.y * c), base.angle + turn)
             joints[index] = made
             return made
         }
         bones = puppet.bones.enumerated().map { index, bone in
-            Bone(index: index, name: bone.name, parent: bone.parent >= 0 ? bone.parent : nil, joint: joint(index, 0))
+            let place = joint(index, 0)
+            var made = Bone(index: index, name: bone.name, parent: bone.parent >= 0 ? bone.parent : nil, joint: place.point)
+            let turn = atan2(Double(bone.matrix[1]), Double(bone.matrix[0]))
+            if abs(turn) > 1e-5 { made.restTurn = turn }
+            made.physics = bone.physics
+            if let said = bone.physics.flatMap({ JSONValue(data: Data($0.utf8)) }) {
+                // The end of the bone is said from its joint, along the bone.
+                let numbers = (said["tp"]?.stringValue ?? "").split(separator: " ").compactMap { Double($0) }
+                if numbers.count >= 2, hypot(numbers[0], numbers[1]) > 0.001 {
+                    let c = cos(place.angle), s = sin(place.angle)
+                    made.tail = Point(x: place.point.x + numbers[0] * c - numbers[1] * s, y: place.point.y + numbers[0] * s + numbers[1] * c)
+                }
+                if said["se"]?.boolValue == true || said["re"]?.boolValue == true {
+                    var sway = Sway(kind: said["se"]?.boolValue == true ? .spring : .hanging)
+                    sway.stiffness = said["rs"]?.numberValue ?? sway.stiffness
+                    sway.friction = said["rf"]?.numberValue ?? sway.friction
+                    sway.weight = said["ri"]?.numberValue ?? sway.weight
+                    made.sway = sway
+                }
+            }
+            return made
         }
         animations = puppet.animations.map { source in
             var animation = Animation(id: source.id, name: source.name)
@@ -515,7 +808,8 @@ extension WallpaperEnginePuppetRig {
                 for frame in Swift.stride(from: 0, to: source.frameCount, by: 5) + [source.frameCount - 1] where keys.last?.frame != frame {
                     let at = (bone * source.frameCount + frame) * 9
                     guard at + 5 < source.frames.count else { continue }
-                    keys.append(Key(frame: frame, angle: Double(source.frames[at + 5]),
+                    let turn = atan2(Double(rest[1]), Double(rest[0]))
+                    keys.append(Key(frame: frame, angle: Double(source.frames[at + 5]) - turn,
                                     dx: Double(source.frames[at] - rest[12]), dy: Double(source.frames[at + 1] - rest[13]),
                                     tiltX: Double(source.frames[at + 3]), tiltY: Double(source.frames[at + 4])))
                 }

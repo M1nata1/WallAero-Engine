@@ -25,7 +25,18 @@ extension EngineEditorModel {
 
     /// What of the selected object has an animation.
     var timelineTargets: [Target] {
-        selection.map(document.animatedTargets(of:)) ?? []
+        let values = selection.map(document.animatedTargets(of:)) ?? []
+        return mode == .pose ? boneTargets + values : values + boneTargets
+    }
+
+    /// The bones on the timeline: with Only Selected on in Pose Mode the one selected, else
+    /// those that have keys in the animation it is on.
+    private var boneTargets: [Target] {
+        guard let rig = selectedRig, rig.animations.indices.contains(rigAnimation) else { return [] }
+        if mode == .pose, timelineOnlySelected, let selectedBone { return [.bone(animation: rigAnimation, bone: selectedBone)] }
+        var bones = rig.animations[rigAnimation].keys.filter { !$0.value.isEmpty }.keys.sorted()
+        if let selectedBone, !bones.contains(selectedBone) { bones.append(selectedBone) }
+        return bones.map { .bone(animation: rigAnimation, bone: $0) }
     }
 
     func animation(_ target: Target) -> WallpaperEngineAnimation? {
@@ -34,7 +45,14 @@ extension EngineEditorModel {
 
     /// The animation the timeline's keys are for.
     var activeAnimation: WallpaperEngineAnimation? {
-        timelineTarget.flatMap(animation)
+        timelineTarget.flatMap(animation) ?? animation(.bone(animation: rigAnimation, bone: 0))
+    }
+
+    /// Goes on to a row of the timeline; a bone's row selects the bone.
+    func pickTrack(_ target: Target) {
+        timelineTarget = target
+        selectedKeys = []
+        if case .bone(_, let bone) = target { selectedBone = bone }
     }
 
     /// The frame the timeline stands at, of the animation it is on.
@@ -58,6 +76,9 @@ extension EngineEditorModel {
             guard let id = selection, let effect = description?.object(id)?.effects.first(where: { $0.id == index }) else { return name }
             let value = effect.values.first { $0.name == name }
             return "\(effect.title): \(value?.title ?? name)"
+        case .bone(_, let bone):
+            guard let rig = selectedRig, rig.bones.indices.contains(bone) else { return "" }
+            return boneTitle(rig.bones[bone])
         }
     }
 
@@ -67,6 +88,7 @@ extension EngineEditorModel {
     }
 
     private func baseNumbers(of id: Int, _ target: Target, fallback: [Double] = []) -> [Double] {
+        if case .bone = target { return Array(repeating: 0, count: 5) }
         var numbers = document.rawValue(of: id, target)?.vector ?? fallback
         let wanted = document.animation(of: id, target)?.channelCount ?? 0
         while numbers.count < wanted { numbers.append(0) }
@@ -183,8 +205,13 @@ extension EngineEditorModel {
             return
         }
         let base = baseNumbers(of: id, target)
-        let shown = animation.numbers(atSeconds: timelineSeconds, base: base)
+        let shown = draftNumbers(of: target) ?? animation.numbers(atSeconds: timelineSeconds, base: base)
+        poseDraft = [:]
         editActive { edited in
+            // A bone's first key also holds it at the start, so it does not jump there.
+            if case .bone = target, edited.keyFrames.isEmpty, frame != 0 {
+                for channel in 0..<edited.channelCount { edited.setKey(frame: 0, channel: channel, value: 0) }
+            }
             for channel in 0..<edited.channelCount where channel < shown.count {
                 edited.setKey(frame: frame, channel: channel, value: shown[channel] - (edited.isRelative ? base[channel] : 0))
             }
@@ -245,7 +272,9 @@ extension EngineEditorModel {
     }
 
     var selectedInterpolation: WallpaperEngineAnimation.Interpolation? {
+        // A bone eases from key to key, as its animation is written to Wallpaper Engine.
         guard let key = selectedKeys.first else { return nil }
+        if case .bone = key.target { return nil }
         return animation(key.target)?.interpolation(frame: key.frame, channel: key.channel)
     }
 
