@@ -16,6 +16,9 @@ public struct WallpaperEngineDocument: Equatable, Sendable {
     public var scene: JSONValue
     /// The other JSON files, by their names in the folder.
     public var files: [String: JSONValue]
+    /// The rigs of the scene's puppets being edited, by the names of their files. They are only
+    /// here once `loadRigs` took them in.
+    public var rigs: [String: WallpaperEnginePuppetRig] = [:]
 
     public static let sceneFileName = "scene.json"
 

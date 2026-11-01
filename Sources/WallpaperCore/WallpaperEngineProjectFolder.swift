@@ -83,6 +83,13 @@ public enum WallpaperEngineProjectFolder {
         for name in (previous?.files.keys).map(Array.init) ?? [] where document.files[name] == nil && Archive.staysInside(name) {
             try? files.removeItem(at: folder.appendingPathComponent(name))
         }
+        for (name, rig) in document.rigs where previous?.rigs[name] != rig {
+            try document.writeRig(name, to: folder)
+        }
+        for name in (previous?.rigs.keys).map(Array.init) ?? [] where document.rigs[name] == nil && Archive.staysInside(name) {
+            try? files.removeItem(at: folder.appendingPathComponent(name))
+            try? files.removeItem(at: folder.appendingPathComponent(WallpaperEngineDocument.rigFileName(ofPuppet: name)))
+        }
     }
 
     /// Lays a Wallpaper Engine project out in `destination` as loose files, the way its own

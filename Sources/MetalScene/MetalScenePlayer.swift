@@ -277,6 +277,15 @@ public final class MetalScenePlayer {
         gl.present()
     }
 
+    /// One of the player's questions, with the scene drawn anew at once, also while it is paused.
+    @discardableResult
+    public func askAndShow(_ name: String, _ arguments: [Any] = []) -> Any? {
+        let answer = ask(name, arguments)
+        call("__frame", [(CACurrentMediaTime() - started) * 1000])
+        gl.present()
+        return answer
+    }
+
     /// Gives a texture of the scene new pixels, four bytes each, and shows them at once, also
     /// while the scene is paused. False while the scene has no such texture yet.
     @discardableResult

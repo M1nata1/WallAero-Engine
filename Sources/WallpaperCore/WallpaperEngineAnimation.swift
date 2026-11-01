@@ -92,6 +92,19 @@ public struct WallpaperEngineAnimation: Equatable, Sendable {
         }
     }
 
+    /// An animation of keys that ease from standing to standing, as a bone's do.
+    public init(bone keys: [(frame: Double, numbers: [Double])], channels: Int) {
+        var made: [String: JSONValue] = [:]
+        for channel in 0..<channels {
+            made["c\(channel)"] = .array(keys.map { key in
+                func handle(_ x: Double) -> JSONValue { .object(["enabled": .bool(true), "x": .number(x), "y": .number(0)]) }
+                return .object(["frame": .number(key.frame), "value": .number(key.numbers[channel]),
+                                "back": handle(-2.0 / 3), "front": handle(2.0 / 3)])
+            })
+        }
+        raw = .object(made)
+    }
+
     public var channelCount: Int {
         let names = raw.objectValue?.keys.compactMap { $0.hasPrefix("c") ? Int($0.dropFirst()) : nil } ?? []
         return (names.max() ?? -1) + 1
@@ -464,10 +477,12 @@ public struct WallpaperEngineAnimation: Equatable, Sendable {
     }
 }
 
-/// What of an object can have an animation: one of its values, or a value of one of its effects.
+/// What of an object can have an animation: one of its values, a value of one of its effects,
+/// or a bone of a picture that bends, in one of the animations of its bones.
 public enum WallpaperEngineAnimationTarget: Hashable, Sendable {
     case value(String)
     case effect(index: Int, pass: Int, name: String)
+    case bone(animation: Int, bone: Int)
 }
 
 extension WallpaperEngineDocument {
@@ -478,6 +493,8 @@ extension WallpaperEngineDocument {
             return object(id)?[key]
         case .effect(let index, let pass, let name):
             return object(id)?["effects"]?[index]?["passes"]?[pass]?["constantshadervalues"]?[name]
+        case .bone:
+            return nil
         }
     }
 
@@ -494,15 +511,26 @@ extension WallpaperEngineDocument {
                 passes[pass]["constantshadervalues"] = constants
                 effects[index]["passes"] = .array(passes)
                 object["effects"] = .array(effects)
+            case .bone:
+                break
             }
         }
     }
 
     public func animation(of id: Int, _ target: WallpaperEngineAnimationTarget) -> WallpaperEngineAnimation? {
-        rawValue(of: id, target)?["animation"].flatMap(WallpaperEngineAnimation.init(raw:))
+        if case .bone(let animation, let bone) = target {
+            return rig(ofObject: id)?.timelineAnimation(animation, bone: bone)
+        }
+        return rawValue(of: id, target)?["animation"].flatMap(WallpaperEngineAnimation.init(raw:))
     }
 
     public mutating func setAnimation(_ animation: WallpaperEngineAnimation, of id: Int, _ target: WallpaperEngineAnimationTarget) {
+        if case .bone(let index, let bone) = target {
+            guard var rig = rig(ofObject: id) else { return }
+            rig.setTimelineAnimation(animation, animation: index, bone: bone)
+            setRig(rig, ofObject: id)
+            return
+        }
         guard var value = rawValue(of: id, target) else { return }
         value["animation"] = animation.raw
         setRawValue(value, of: id, target)
@@ -542,6 +570,12 @@ extension WallpaperEngineDocument {
 
     /// Takes the animation off a value, which stays as the scene says it plainly.
     public mutating func unbindAnimation(of id: Int, _ target: WallpaperEngineAnimationTarget) {
+        if case .bone(let index, let bone) = target {
+            guard var rig = rig(ofObject: id), rig.animations.indices.contains(index) else { return }
+            rig.animations[index].keys[bone] = nil
+            setRig(rig, ofObject: id)
+            return
+        }
         guard var value = rawValue(of: id, target) else { return }
         value["animation"] = nil
         if let rest = value.objectValue, rest.count == 1, let plain = rest["value"] {

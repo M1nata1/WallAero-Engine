@@ -23,8 +23,19 @@ final class EngineEditorModel: ObservableObject {
     @Published var selection: Int? {
         didSet {
             if selection != oldValue {
+                if mode.isRig || mode == .paint {
+                    if mode == .paint { finishPainting(keeping: true) }
+                    mode = .object
+                    tool = .multi
+                }
+                oldValue.flatMap { old in document.rig(ofObject: old) != nil ? old : nil }.map { preview?.holdBones($0, nil) }
                 preview?.select(selection)
+                selectedBone = nil
+                rigAnimation = 0
+                poseDraft = [:]
+                selectedPoints = []
                 timelineDidChangeObject()
+                showRig()
                 scriptsDidChangeObject()
             }
         }
@@ -38,10 +49,31 @@ final class EngineEditorModel: ObservableObject {
     }
     /// A sheet the editor shows: the effects to add.
     @Published var sheet: Sheet?
-    /// The picture whose puppet warp is being edited; the middle of the window is then its.
-    @Published var puppetObject: Int?
+    /// What is being worked on: the objects, or a part of the selected picture.
+    @Published var mode = Mode.object {
+        didSet { preview?.modeChanged() }
+    }
+    /// The mode Tab goes back into.
+    var lastEditMode = Mode.mesh
+    /// The bone selected in the modes of bones, and the animation of bones the timeline is on.
+    @Published var selectedBone: Int? {
+        didSet { preview?.modeChanged() }
+    }
+    @Published var rigAnimation = 0
+    /// Bones turned at a frame that has no key yet, while keys are not made by themselves.
+    @Published var poseDraft: [Int: WallpaperEnginePuppetRig.Key] = [:]
+    /// The corners of the mesh selected, how dense a mesh is made, and the brush of weights.
+    @Published var selectedPoints: Set<Int> = []
+    @Published var meshDensity = 40.0
+    @Published var weightSize = 240.0
+    @Published var weightStrength = 40.0
+    @Published var weightAdds = true
+    /// The pictures whose rigs the scene shows as edited, ahead of its files.
+    var rigsShown: Set<Int> = []
     /// The mask being painted over the scene, if one is.
-    @Published var painting: EngineMaskPaint?
+    @Published var painting: EngineMaskPaint? {
+        didSet { if painting != nil { mode = .paint } else if oldValue != nil, mode == .paint { mode = .object } }
+    }
     /// Masks written since the editor opened, which steps to take back may still need.
     var madeMasks: Set<String> = []
     /// What a drag over the scene does.
@@ -90,7 +122,10 @@ final class EngineEditorModel: ObservableObject {
     /// The moment the timeline stands at, in seconds.
     @Published var timelineSeconds = 0.0 {
         didSet {
-            if timelineSeconds != oldValue { showTimelineMoment() }
+            if timelineSeconds != oldValue {
+                poseDraft = [:]
+                showTimelineMoment()
+            }
         }
     }
     /// What of the selected object the timeline's keys and curves are for.
@@ -111,6 +146,10 @@ final class EngineEditorModel: ObservableObject {
     @Published var autoKey = true
     @Published var timelineCurves = false
     @Published var timelinePlaying = false
+    /// Whether Pose Mode shows the selected bone alone on the timeline.
+    @Published var timelineOnlySelected = true
+    /// How far the rows of the timeline are scrolled.
+    @Published var timelineRowsOffset: CGFloat = 0
     var timelineTimer: Timer?
     /// What the list of layers is narrowed down to.
     @Published var layerFilter = ""
@@ -136,6 +175,7 @@ final class EngineEditorModel: ObservableObject {
         case move
         case rotate
         case scale
+        case addBone
 
         var symbol: String {
             switch self {
@@ -143,6 +183,7 @@ final class EngineEditorModel: ObservableObject {
             case .move: return "arrow.up.and.down.and.arrow.left.and.right"
             case .rotate: return "rotate.right"
             case .scale: return "arrow.up.left.and.arrow.down.right"
+            case .addBone: return "plus.circle"
             }
         }
 
@@ -152,6 +193,7 @@ final class EngineEditorModel: ObservableObject {
             case .move: return "Move (G)"
             case .rotate: return "Rotate (R)"
             case .scale: return "Scale (S)"
+            case .addBone: return "Add Bone (E)"
             }
         }
 
@@ -161,6 +203,7 @@ final class EngineEditorModel: ObservableObject {
             case .move: return "Drag to move. Shift keeps to one axis."
             case .rotate: return "Drag anywhere to turn. Shift turns by 15°."
             case .scale: return "Drag anywhere to resize."
+            case .addBone: return "Press where a bone starts and drag to where it ends."
             }
         }
     }
@@ -201,7 +244,8 @@ final class EngineEditorModel: ObservableObject {
         self.folder = folder
         projectFolder = project
         self.title = title
-        let read = try WallpaperEngineProjectFolder.read(from: project)
+        var read = try WallpaperEngineProjectFolder.read(from: project)
+        read.loadRigs(projectFolder: project)
         document = read
         savedDocument = read
     }
@@ -225,6 +269,7 @@ final class EngineEditorModel: ObservableObject {
             self.selection = nil
         }
         preview?.show(document, after: old)
+        rigsDidChange(from: old)
         scheduleSave()
     }
 
@@ -337,6 +382,7 @@ final class EngineEditorModel: ObservableObject {
     func playerDidStart(_ description: EngineSceneDescription) {
         // A scene played anew has the mask as the project does, not as it is painted.
         painting?.push()
+        rigsAfterRestart()
         if description != self.description {
             self.description = description
         }
@@ -387,6 +433,7 @@ final class EngineEditorModel: ObservableObject {
     /// Has the scene show the moment of the timeline, or go on as it plays.
     func showTimelineMoment() {
         preview?.showAnimations(at: showsTimeline ? timelineSeconds : nil)
+        showRig()
     }
 
     // MARK: - The lock screen
