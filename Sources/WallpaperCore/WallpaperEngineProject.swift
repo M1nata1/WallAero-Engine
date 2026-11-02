@@ -106,7 +106,11 @@ public struct WallpaperEngineProject: Equatable, Sendable {
             switch (file as NSString?)?.pathExtension.lowercased() {
             case "html", "htm": kind = .web
             case "mp4", "mov", "m4v", "webm": kind = .video
-            default: return nil // some other tool's project.json
+            default:
+                // Wallpaper Engine's own preview scenes say only their scene file.
+                let name = ((file ?? "") as NSString).lastPathComponent.lowercased()
+                guard name.hasSuffix("scene.json") || name.hasSuffix("scene.pkg") else { return nil } // some other tool's project.json
+                kind = .scene
             }
         default:
             kind = .other(type)

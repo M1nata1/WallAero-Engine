@@ -8456,14 +8456,70 @@ public enum WallpaperEngineRuntime {
           'uniform sampler2D u_Texture;',
           'uniform int u_Channels;',
           'uniform float u_Bright;',
+          'uniform int u_Refracts;',
+          'uniform sampler2D u_Behind;',
+          'uniform vec2 u_BehindSize;',
+          'uniform sampler2D u_Normal;',
+          'uniform int u_NormalChannels;',
+          'uniform float u_NormalLevel;',
+          'uniform float u_Amount;',
           'out vec4 color;',
           'void main() {',
           '  vec4 c = texture(u_Texture, v_Uv);',
           '  if (u_Channels == 1) c = vec4(1.0, 1.0, 1.0, c.r);',
           '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
           '  color = vec4(c.rgb * v_Color.rgb * u_Bright, c.a * v_Color.a);',
+          // A band of water bends what is behind it, as Wallpaper Engine's rope shader does: its
+          // colour is taken times what lies under it, looked at as far off as its normal map
+          // says — across the band and along it, as the band lies on the screen — times the
+          // material's amount, the map's mask and how much the band shows.
+          '  if (u_Refracts == 1) {',
+          '    vec2 slope = vec2(0.0);',
+          '    if (u_NormalChannels > 0) {',
+          '      vec4 n = texture(u_Normal, v_Uv);',
+          '      vec2 facing = n.xy * 2.0 - 1.0;',
+          '      float mask = n.a;',
+          '      if (u_NormalChannels == 2) { facing = vec2(n.g, 1.0 - n.r) * 2.0 - 1.0; mask = 1.0; }',
+          '      if (u_NormalChannels == 3) { facing = vec2(n.a * 2.0 - u_NormalLevel, 1.0 - n.g * 2.0); mask = n.r; }',
+          '      vec2 across = vec2(dFdx(v_Uv.x), dFdy(v_Uv.x));',
+          '      vec2 along = vec2(dFdx(v_Uv.y), dFdy(v_Uv.y));',
+          '      across = dot(across, across) > 0.0 ? normalize(across) : vec2(0.0);',
+          '      along = dot(along, along) > 0.0 ? normalize(along) : vec2(0.0);',
+          '      slope = (across * facing.x + along * facing.y) * mask;',
+          '    }',
+          '    color.rgb *= texture(u_Behind, gl_FragCoord.xy / u_BehindSize + slope * u_Amount * v_Color.a).rgb;',
+          '  }',
           '}'
         ].join('\n'), 'the player\'s own shader');
+
+        // What a band of particles that bends what is behind it is drawn over: a copy of the scene
+        // under it as it is so far, for the rope shader to take its colour from.
+        function ropeBehind(system, surface) {
+          var uniforms = ropeProgram.uniforms;
+          if (uniforms.u_Refracts) gl.uniform1i(uniforms.u_Refracts.location, system.refracts ? 1 : 0);
+          if (!system.refracts) return;
+          var onto = surface.target;
+          if (!surface.copy) surface.copy = acquire(onto.width, onto.height);
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, onto.framebuffer);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, surface.copy.framebuffer);
+          gl.blitFramebuffer(0, 0, onto.width, onto.height, 0, 0, onto.width, onto.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, onto.framebuffer);
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, surface.copy.texture);
+          if (uniforms.u_Behind) gl.uniform1i(uniforms.u_Behind.location, 1);
+          if (uniforms.u_BehindSize) gl.uniform2f(uniforms.u_BehindSize.location, onto.width, onto.height);
+          if (uniforms.u_Amount) gl.uniform1f(uniforms.u_Amount.location, system.refractAmount);
+          // The map of how the band faces, if the material has one ready.
+          var facing = system.normals && system.normals.ready !== false ? system.normals : null;
+          if (uniforms.u_NormalChannels) gl.uniform1i(uniforms.u_NormalChannels.location, !facing ? 0 : facing.builtin ? 1 : CHANNELS[facing.channels] === 2 ? 2 : 3);
+          if (uniforms.u_NormalLevel) gl.uniform1f(uniforms.u_NormalLevel.location, facing && facing.compressed ? 0.965 : 1);
+          if (facing) {
+            gl.activeTexture(gl.TEXTURE2);
+            gl.bindTexture(gl.TEXTURE_2D, facing.layers[0].texture);
+            if (uniforms.u_Normal) gl.uniform1i(uniforms.u_Normal.location, 2);
+          }
+          gl.activeTexture(gl.TEXTURE0);
+        }
 
         // Particles in a scene in three dimensions: each corner already where Wallpaper Engine's
         // own particle shader puts it in the system's space, then through the model, the view
@@ -8580,7 +8636,10 @@ public enum WallpaperEngineRuntime {
               least = number(said.speedmin, 100);
               most = number(said.speedmax, 250);
               return function (particle) {
-                var wander = (smoothNoise(system.age * number(said.timescale, 1) * 2, particle.seed * 50, 256, 11) - 0.5) * 2 * spread;
+                // In a rope, one particle after another makes one line: each wanders as the one made
+                // just before it did, a little further on, so the line bends rather than frays.
+                var where = system.rope ? 0 : particle.seed * 50;
+                var wander = (smoothNoise(system.age * number(said.timescale, 1) * 2, where, 256, 11) - 0.5) * 2 * spread;
                 var speed = mix(least, most, Math.random());
                 particle.vx += Math.cos(heading + wander) * speed;
                 particle.vy += Math.sin(heading + wander) * speed;
@@ -9422,6 +9481,9 @@ public enum WallpaperEngineRuntime {
               rate: number(emitter.rate, 5), burst: number(emitter.instantaneous, 0),
               speedLeast: number(emitter.speedmin, 0), speedMost: number(emitter.speedmax, 0),
               lasts: number(emitter.duration, 0), waits: number(emitter.delay, 0), owed: 0,
+              // Not more than one particle a frame, however many the rate owes: the second of the
+              // emitter's flags (Wallpaper Engine's editor: "Limit to one per frame").
+              eachFrame: (number(emitter.flags, 0) & 2) !== 0,
               hears: hearing(emitter)
             };
           });
@@ -9588,6 +9650,7 @@ public enum WallpaperEngineRuntime {
                 if (emitter.lasts > 0 && instance.age > emitter.waits + emitter.lasts) return;
                 var loud = emitter.hears ? emitter.hears() : 1;
                 instance.owed[index] = (instance.owed[index] || 0) + emitter.rate * system.countBy * loud * seconds;
+                if (emitter.eachFrame) instance.owed[index] = Math.min(instance.owed[index], 1);
                 while (instance.owed[index] >= 1) {
                   instance.owed[index] -= 1;
                   if (room(instance)) make(emitter, instance);
@@ -9626,17 +9689,35 @@ public enum WallpaperEngineRuntime {
               var share = particle.age / particle.life;
               system.operators.forEach(function (change) { change(particle, seconds, share); });
               if (system.tails) {
-                // Where it has been, a few times a tail's length, the oldest first.
+                // Where it has been, many times a tail's length, the oldest first — with one
+                // place at or before the tail's end kept, for the end to be put between the two.
                 var path = particle.path || (particle.path = []);
-                if (!path.length || system.age - path[path.length - 1][2] >= system.tails / 16) {
+                if (!path.length || system.age - path[path.length - 1][2] >= system.tails / 48) {
                   path.push([particle.x + particle.shiftX, particle.y + particle.shiftY, system.age, particle.z]);
                 }
-                while (path.length && system.age - path[0][2] > system.tails) path.shift();
+                while (path.length > 1 && system.age - path[1][2] >= system.tails) path.shift();
               }
               alive.push(particle);
             });
             system.particles = alive;
           };
+
+          // The places a rope trail runs through, the oldest first, the particle itself last, each
+          // with how far along the tail it is in time (0 at its end, 1 at the particle). The end is
+          // just as long ago as the tail is long, put between the two places it falls between, so
+          // the tail moves on smoothly and does not lose a piece each time a place is let go.
+          function tailOf(particle) {
+            var path = particle.path || [];
+            var spots = path.map(function (spot) { return [spot[0], spot[1], spot[3] || 0, spot[2]]; });
+            spots.push([particle.x + particle.shiftX, particle.y + particle.shiftY, particle.z, system.age]);
+            var cut = system.age - system.tails;
+            if (spots.length > 1 && spots[0][3] < cut) {
+              var a = spots[0], b = spots[1], share = (cut - a[3]) / Math.max(1e-6, b[3] - a[3]);
+              spots[0] = [mix(a[0], b[0], share), mix(a[1], b[1], share), mix(a[2], b[2], share), cut];
+            }
+            var from = spots[0][3], span = Math.max(1e-6, system.age - from);
+            return spots.map(function (spot) { return [spot[0], spot[1], spot[2], (spot[3] - from) / span]; });
+          }
 
           // How far the eye is from the scene, for particles with depth.
           var away = (sceneHeight / 2) / Math.tan(number(general.perspectiveoverridefov, number(general.fov, 50)) * Math.PI / 360);
@@ -9686,19 +9767,18 @@ public enum WallpaperEngineRuntime {
                 // wide as the particle times the system's scale taken whole (not stretched along
                 // any one axis), across the way it goes and the way the eye looks — laid in the
                 // scene's own space, so the band is drawn without the system's matrix.
-                var spots = (particle.path || []).map(function (spot) { return [spot[0], spot[1], spot[3] || 0]; });
-                spots.push(here);
+                var spots = tailOf(particle);
                 if (spots.length < 2) return;
                 spots = spots.map(function (spot) { return [model[0] * spot[0] + model[4] * spot[1] + model[8] * spot[2] + model[12],
                                                              model[1] * spot[0] + model[5] * spot[1] + model[9] * spot[2] + model[13],
-                                                             model[2] * spot[0] + model[6] * spot[1] + model[10] * spot[2] + model[14]]; });
+                                                             model[2] * spot[0] + model[6] * spot[1] + model[10] * spot[2] + model[14], spot[3]]; });
                 var rows = [];
                 var half = particle.size * particle.sizeNow * system.sizeBy * wholeScale / 2;
                 spots.forEach(function (spot, index) {
                   var before = spots[Math.max(0, index - 1)], after = spots[Math.min(spots.length - 1, index + 1)];
                   var along = [after[0] - before[0], after[1] - before[1], after[2] - before[2]];
                   var across = unit(cross([spot[0] - eye[0], spot[1] - eye[1], spot[2] - eye[2]], along));
-                  var v = 1 - index / (spots.length - 1);
+                  var v = 1 - spot[3];
                   rows.push([[spot[0] - across[0] * half, spot[1] - across[1] * half, spot[2] - across[2] * half], 0, v],
                             [[spot[0] + across[0] * half, spot[1] + across[1] * half, spot[2] + across[2] * half], 1, v]);
                 });
@@ -9997,6 +10077,7 @@ public enum WallpaperEngineRuntime {
               gl.uniform1i(ropeProgram.uniforms.u_Channels.location, CHANNELS[system.picture.channels] || 0);
               gl.uniform1f(ropeProgram.uniforms.u_Bright.location, system.bright);
               gl.uniform2f(ropeProgram.uniforms.u_Scene.location, surface.width, surface.height);
+              ropeBehind(system, surface);
               gl.bindVertexArray(bandShape);
               gl.bindBuffer(gl.ARRAY_BUFFER, bandBuffer);
               gl.bufferSubData(gl.ARRAY_BUFFER, 0, band.subarray(0, count * 16));
@@ -10029,12 +10110,11 @@ public enum WallpaperEngineRuntime {
               var see = system.alphaBy * stands.alpha;
               var corners = [];
               system.particles.forEach(function (particle) {
-                var spots = (particle.path || []).map(function (spot) { return [spot[0], spot[1]]; });
-                spots.push([particle.x + particle.shiftX, particle.y + particle.shiftY]);
+                var spots = tailOf(particle);
                 if (spots.length < 2) return;
                 spots = spots.map(function (spot) {
                   return [matrix[12] - surface.left + matrix[0] * spot[0] + matrix[4] * spot[1],
-                          matrix[13] - surface.bottom + matrix[1] * spot[0] + matrix[5] * spot[1]];
+                          matrix[13] - surface.bottom + matrix[1] * spot[0] + matrix[5] * spot[1], spot[3]];
                 });
                 var tint = system.colorOf(particle, state).concat([Math.max(0, Math.min(1, particle.alpha * particle.alphaNow * see))]);
                 var half = particle.size * particle.sizeNow * wide / 2;
@@ -10046,7 +10126,7 @@ public enum WallpaperEngineRuntime {
                   var across = far > 0.0001 ? half / far : 0;
                   for (var side = 0; side < 2; side++) {
                     var turn = side ? 1 : -1;
-                    corners.push([spot[0] - dy * across * turn, spot[1] + dx * across * turn, side, 1 - index / (spots.length - 1)].concat(tint));
+                    corners.push([spot[0] - dy * across * turn, spot[1] + dx * across * turn, side, 1 - spot[2]].concat(tint));
                   }
                 });
                 // Joined to the band before it by its own first corner and that band's last, twice each.
@@ -10065,6 +10145,7 @@ public enum WallpaperEngineRuntime {
               gl.uniform1i(ropeProgram.uniforms.u_Channels.location, CHANNELS[system.picture.channels] || 0);
               gl.uniform1f(ropeProgram.uniforms.u_Bright.location, system.bright);
               gl.uniform2f(ropeProgram.uniforms.u_Scene.location, surface.width, surface.height);
+              ropeBehind(system, surface);
               gl.bindVertexArray(tailShape);
               gl.bindBuffer(gl.ARRAY_BUFFER, tailBuffer);
               gl.bufferData(gl.ARRAY_BUFFER, tailBand.subarray(0, corners.length * 8), gl.DYNAMIC_DRAW);

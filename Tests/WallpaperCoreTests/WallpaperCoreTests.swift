@@ -1200,6 +1200,17 @@ final class WallpaperEngineTests: XCTestCase {
         XCTAssertTrue(library.items.isEmpty)
     }
 
+    func testAProjectThatSaysOnlyItsSceneFileIsAScene() throws {
+        // Wallpaper Engine's own preview scenes give no kind.
+        try write("{}", to: "scene.json")
+        try write(#"{"file": "scene.json", "title": "previewvortex"}"#, to: "project.json")
+        XCTAssertEqual(WallpaperEngineProject(folder: wallpaper)?.kind, .scene)
+        // Some other JSON file is still not a wallpaper.
+        try write("{}", to: "data.json")
+        try write(#"{"file": "data.json"}"#, to: "project.json")
+        XCTAssertNil(WallpaperEngineProject(folder: wallpaper))
+    }
+
     func testNamesThatLeadOutOfTheFolderAreNotFollowed() throws {
         XCTAssertTrue(Archive.staysInside("3808790239/src/app.js"))
         XCTAssertTrue(Archive.staysInside("a..b/file"))
