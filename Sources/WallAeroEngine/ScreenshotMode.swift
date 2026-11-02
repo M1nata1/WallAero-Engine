@@ -1371,8 +1371,9 @@ enum ScreenshotMode {
                                                   "C": 8, "V": 9, "x": 51, "m": 46, "i": 34]
                 for letter in letters {
                     if letter == "," || letter == "." {
-                        func field(in view: NSView) -> NSSearchField? {
-                            (view as? NSSearchField) ?? view.subviews.lazy.compactMap(field(in:)).first
+                        @MainActor func field(in view: NSView) -> NSSearchField? {
+                            if let field = view as? NSSearchField { return field }
+                            return view.subviews.lazy.compactMap(field(in:)).first
                         }
                         window.makeFirstResponder(letter == "," ? window.contentView.flatMap(field(in:)) : nil)
                     } else if letter == "B" {

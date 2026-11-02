@@ -432,7 +432,7 @@ public final class WallpaperLibrary: ObservableObject {
             var document = WallpaperEngineDocument.empty(title: name, width: Int(size.width.rounded()), height: Int(size.height.rounded()))
             try await build(project, &document)
             try WallpaperEngineProjectFolder.write(document, previous: nil, to: project)
-            try await Task.detached(priority: .userInitiated) {
+            _ = try await Task.detached(priority: .userInitiated) {
                 try WallpaperEngineProjectFolder.layOut(scene: folder)
             }.value
         } catch {
