@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import WallpaperCore
 
-/// The settings of one wallpaper: a short line on what it is, its music and tags, then what
+/// The settings of one wallpaper: a short line on what it is, its tags and music, then what
 /// changes how it looks (how it fills the screen, how fast it plays, a scene's variables and pictures). They are for the wallpaper selected in the library, or for the one on the desktop
 /// when none is selected.
 struct WallpaperSettingsView: View {
@@ -31,11 +31,11 @@ struct WallpaperSettingsView: View {
                     Section {
                         summary(of: item)
                     }
-                    Section("Music") {
-                        MusicSettingsRows(item: item)
-                    }
                     Section("Tags") {
                         TagEditor(item: item)
+                    }
+                    Section("Music") {
+                        MusicSettingsRows(item: item)
                     }
                     Section("Properties") {
                         properties(of: item)
