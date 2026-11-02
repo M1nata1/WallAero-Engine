@@ -462,7 +462,9 @@ final class NowPlaying {
         }
         var colors: [String: [Double]] = [:]
         if drawn {
-            let all = stride(from: 0, to: pixels.count, by: 4).map { [Double(pixels[$0]) / 255, Double(pixels[$0 + 1]) / 255, Double(pixels[$0 + 2]) / 255] }
+            let all: [[Double]] = stride(from: 0, to: pixels.count, by: 4).map { (i: Int) -> [Double] in
+                [Double(pixels[i]) / 255.0, Double(pixels[i + 1]) / 255.0, Double(pixels[i + 2]) / 255.0]
+            }
             func light(_ color: [Double]) -> Double { 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2] }
             func average(_ list: [[Double]]) -> [Double] {
                 guard !list.isEmpty else { return [0, 0, 0] }
