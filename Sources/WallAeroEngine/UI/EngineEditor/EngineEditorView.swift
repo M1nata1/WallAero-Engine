@@ -24,20 +24,21 @@ struct EngineEditorView: View {
             }
     }
 
+    /// Laid out as Blender is: the scene in the middle with its header, tools and view controls
+    /// on it and the timeline under it; on the right the outliner over the properties.
     @ViewBuilder
     private var layout: some View {
         if #available(macOS 14.0, *) {
-            NavigationSplitView(columnVisibility: .constant(.all)) {
-                hierarchy
+            NavigationSplitView(columnVisibility: .constant(.detailOnly)) {
+                Color.clear
                     .toolbar(removing: .sidebarToggle)
-                    .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 340)
             } detail: {
                 middle
                     .toolbar { toolbarContent }
             }
             .inspector(isPresented: .constant(true)) {
-                inspector
-                    .inspectorColumnWidth(min: 320, ideal: 360, max: 440)
+                side
+                    .inspectorColumnWidth(min: 320, ideal: 380, max: 480)
                     .toolbar {
                         Spacer()
                         exportButton
@@ -46,8 +47,6 @@ struct EngineEditorView: View {
         } else {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
-                    if preview.drawsNatively { EngineModeMenu(model: model) }
-                    addMenu.fixedSize()
                     undoButton
                     redoButton
                     if !preview.drawsNatively { playButton }
@@ -58,13 +57,21 @@ struct EngineEditorView: View {
                 .padding(.vertical, 8)
                 Divider()
                 HStack(spacing: 0) {
-                    hierarchy.frame(width: 240)
-                    Divider()
                     middle
                     Divider()
-                    inspector.frame(width: 360)
+                    side.frame(width: 380)
                 }
             }
+        }
+    }
+
+    /// The outliner over the properties, as Blender has them; the line between can be dragged.
+    private var side: some View {
+        VSplitView {
+            hierarchy
+                .frame(minHeight: 140, idealHeight: 320)
+            properties
+                .frame(minHeight: 240, idealHeight: 520)
         }
     }
 
@@ -82,42 +89,60 @@ struct EngineEditorView: View {
 
     /// The properties, or what the mode has at the side.
     @ViewBuilder
-    private var inspector: some View {
+    private var properties: some View {
         if let painting = model.painting {
             EngineBrushPanel(model: model, paint: painting)
         } else if model.mode.isRig {
             EngineRigPanel(model: model)
         } else {
-            EngineInspector(model: model)
+            HStack(spacing: 0) {
+                EnginePropertyTabs(model: model)
+                Divider()
+                EngineInspector(model: model)
+            }
         }
     }
 
     private var middle: some View {
         let size = model.document.size
-        return EngineEditorPreview(model: model, controller: preview, aspectRatio: size.height > 0 ? size.width / size.height : 16 / 9)
-            .overlay(alignment: .topLeading) {
-                if preview.drawsNatively, !model.mode.tools.isEmpty {
-                    EngineToolStrip(model: model)
-                }
+        return VStack(spacing: 0) {
+            if preview.drawsNatively {
+                EngineViewportHeader(model: model, addMenu: addMenu)
+                Divider()
             }
-            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-            .bottomBar {
-                VStack(spacing: 0) {
-                    if model.showsTimeline {
-                        EngineTimelineView(model: model)
-                        Divider()
-                    }
-                    if model.showsScripts {
-                        EngineScriptPanel(model: model)
-                        Divider()
-                    }
+            EngineEditorPreview(model: model, controller: preview, aspectRatio: size.height > 0 ? size.width / size.height : 16 / 9)
+                .overlay(alignment: .topLeading) {
                     if preview.drawsNatively {
-                        EngineTransportBar(model: model)
-                        Divider()
+                        HStack(alignment: .top, spacing: 0) {
+                            if !model.mode.tools.isEmpty { EngineToolStrip(model: model) }
+                            EngineViewportCaption(model: model)
+                                .padding(.top, 12)
+                                .padding(.leading, model.mode.tools.isEmpty ? 12 : 2)
+                        }
                     }
-                    statusLine
                 }
+                .overlay(alignment: .topTrailing) {
+                    if preview.drawsNatively { EngineNavigationGizmo(model: model) }
+                }
+        }
+        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+        .bottomBar {
+            VStack(spacing: 0) {
+                if model.showsTimeline {
+                    EngineTimelineView(model: model)
+                    Divider()
+                }
+                if model.showsScripts {
+                    EngineScriptPanel(model: model)
+                    Divider()
+                }
+                if preview.drawsNatively {
+                    EngineTransportBar(model: model)
+                    Divider()
+                }
+                statusLine
             }
+        }
     }
 
     /// The panels under the scene, and how the scene is shown. What a tool does is said when the
@@ -138,23 +163,6 @@ struct EngineEditorView: View {
                 .toggleStyle(.button)
                 .barButtonStyle()
                 .help("Scripts of the selection")
-            }
-            if preview.drawsNatively {
-                if model.viewsFreely, model.isInDepth {
-                    Button { model.alignCameraToView() } label: {
-                        Label("Camera to View", systemImage: "camera.viewfinder")
-                    }
-                    .barButtonStyle()
-                    .disabled(!model.canAlignCamera)
-                    .help(model.canAlignCamera ? "Put the camera where the view is (Control-Option-0)"
-                                               : "The camera hangs on another object or is moved by a script")
-                }
-                Toggle(isOn: Binding(get: { !model.viewsFreely }, set: { model.setViewsFreely(!$0) })) {
-                    Label("Camera View", systemImage: "video")
-                }
-                .toggleStyle(.button)
-                .barButtonStyle()
-                .help("Look through the scene's camera, as the wallpaper shows it, or freely (0)")
             }
             Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
                 .foregroundStyle(.secondary)
@@ -177,13 +185,11 @@ struct EngineEditorView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        if preview.drawsNatively {
-            ToolbarItem {
-                EngineModeMenu(model: model)
+        // The mode and what is added are in the scene's own header, as in Blender.
+        if !preview.drawsNatively {
+            ToolbarItemGroup {
+                addMenu
             }
-        }
-        ToolbarItemGroup {
-            addMenu
         }
         ToolbarItemGroup {
             undoButton

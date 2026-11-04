@@ -10,15 +10,9 @@ struct EngineInspector: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let id = model.selection, model.document.object(id) != nil {
+            if let id = model.selection, model.document.object(id) != nil, !model.showsSceneProperties {
                 EngineObjectTabs(model: model, id: id)
             } else {
-                tabs(selection: $model.sceneTab) {
-                    Text("Scene").tag(EngineEditorModel.SceneTab.scene)
-                    Text("View").tag(EngineEditorModel.SceneTab.view)
-                    Text("Environment").tag(EngineEditorModel.SceneTab.environment)
-                    Text("Settings").tag(EngineEditorModel.SceneTab.settings)
-                }
                 Form {
                     EngineSceneProperties(model: model)
                 }
@@ -28,11 +22,64 @@ struct EngineInspector: View {
     }
 }
 
-/// The row of topics at the top of the properties.
-@ViewBuilder
-private func tabs<Tab: Hashable, Content: View>(selection: Binding<Tab>, @ViewBuilder content: () -> Content) -> some View {
-    Picker("", selection: selection, content: content)
-        .panelTabs()
+/// The topics of the properties, standing down their left side as Blender's do: the scene's
+/// first, then, with an object selected, the object's.
+struct EnginePropertyTabs: View {
+    @ObservedObject var model: EngineEditorModel
+
+    private var object: Int? { model.selection.flatMap { model.document.object($0) != nil ? $0 : nil } }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            scene(.scene, "Scene", "photo.on.rectangle")
+            scene(.view, "View", "camera")
+            scene(.environment, "Environment", "globe.europe.africa")
+            scene(.settings, "Settings", "slider.horizontal.3")
+            if let object {
+                Divider().padding(.vertical, 4)
+                let kind = model.kind(of: object)
+                tab(.object, title: Text("Object"), symbol: "square.on.square", id: object)
+                if ![.model, .group, .fullscreen].contains(kind) {
+                    tab(.kind, title: Text(verbatim: EngineEditorModel.kindTitle(kind)), symbol: EngineEditorModel.symbol(kind), id: object)
+                }
+                if [.image, .text, .solid, .composition, .fullscreen].contains(kind) {
+                    tab(.effects, title: Text("Effects"), symbol: "wand.and.stars", id: object)
+                }
+            }
+            Spacer()
+        }
+        .padding(.vertical, 8)
+        .frame(width: 40)
+    }
+
+    private var showsScene: Bool { object == nil || model.showsSceneProperties }
+
+    private func scene(_ tab: EngineEditorModel.SceneTab, _ title: LocalizedStringKey, _ symbol: String) -> some View {
+        button(title: Text(title), symbol: symbol, chosen: showsScene && model.sceneTab == tab) {
+            model.sceneTab = tab
+            model.showsSceneProperties = true
+        }
+    }
+
+    private func tab(_ tab: EngineEditorModel.ObjectTab, title: Text, symbol: String, id: Int) -> some View {
+        button(title: title, symbol: symbol, chosen: !showsScene && model.objectTab == tab) {
+            model.objectTab = tab
+            model.showsSceneProperties = false
+        }
+    }
+
+    private func button(title: Text, symbol: String, chosen: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .frame(width: 28, height: 28)
+                .foregroundStyle(chosen ? Color.white : Color.secondary)
+                .background(chosen ? Color.accentColor : Color.clear,
+                            in: RoundedRectangle(cornerRadius: SystemLook.innerCornerRadius, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+    }
 }
 
 /// The topics an object has. One takes the name of the object's kind, as what it holds does.
@@ -58,15 +105,6 @@ private struct EngineObjectTabs: View {
     }
 
     var body: some View {
-        tabs(selection: tab) {
-            Text("Object").tag(EngineEditorModel.ObjectTab.object)
-            if hasKindTab {
-                Text(verbatim: EngineEditorModel.kindTitle(kind)).tag(EngineEditorModel.ObjectTab.kind)
-            }
-            if hasEffects {
-                Text("Effects").tag(EngineEditorModel.ObjectTab.effects)
-            }
-        }
         Form {
             EngineObjectProperties(model: model, id: id, tab: tab.wrappedValue)
         }
