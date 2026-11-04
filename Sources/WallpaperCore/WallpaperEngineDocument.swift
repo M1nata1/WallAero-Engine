@@ -13,12 +13,18 @@ public struct WallpaperEngineDocument: Equatable, Sendable {
     /// `project.json`: the title, the preview, the settings of the wallpaper.
     public var project: JSONValue
     /// `scene.json`: the camera, the scene's general values and its objects.
-    public var scene: JSONValue
+    public var scene: JSONValue {
+        didSet { places = ObjectPlaces() }
+    }
     /// The other JSON files, by their names in the folder.
     public var files: [String: JSONValue]
     /// The rigs of the scene's puppets being edited, by the names of their files. They are only
     /// here once `loadRigs` took them in.
     public var rigs: [String: WallpaperEnginePuppetRig] = [:]
+
+    /// Where each object stands among the objects, by its number. A scene of Wallpaper Engine's
+    /// may hold hundreds of objects, and the list of layers asks after each of them many times.
+    private var places = ObjectPlaces()
 
     public static let sceneFileName = "scene.json"
 
@@ -116,7 +122,9 @@ public struct WallpaperEngineDocument: Equatable, Sendable {
     }
 
     public func object(_ id: Int) -> JSONValue? {
-        objects.first { $0["id"]?.numberValue == Double(id) }
+        let objects = objects
+        guard let index = places.index(of: id, in: objects), objects.indices.contains(index) else { return nil }
+        return objects[index]
     }
 
     /// Changes one object; nothing happens if the scene has none by that number.
@@ -249,4 +257,29 @@ extension WallpaperEngineDocument {
         if let camera = object["camera"], !camera.isNull { return .camera }
         return .group
     }
+}
+
+/// The places of a scene's objects by their numbers, worked out the first time they are asked
+/// for. Copies of a document share it until their scene changes, which gives each a new one.
+private final class ObjectPlaces: Equatable, @unchecked Sendable {
+    private let lock = NSLock()
+    private var places: [Int: Int]?
+
+    func index(of id: Int, in objects: [JSONValue]) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        if places == nil {
+            var found: [Int: Int] = [:]
+            for (index, object) in objects.enumerated() {
+                guard let number = object["id"]?.numberValue, number == number.rounded() else { continue }
+                // The first of two objects with one number is the one found, as before.
+                if found[Int(number)] == nil { found[Int(number)] = index }
+            }
+            places = found
+        }
+        return places?[id]
+    }
+
+    /// Only a shortcut: it never makes two documents differ.
+    static func == (lhs: ObjectPlaces, rhs: ObjectPlaces) -> Bool { true }
 }

@@ -17,6 +17,8 @@ final class NativeSceneView: NSView {
     var onRestart: (() -> Void)?
     /// Set before `show` when the scene is drawn for the lock screen.
     var rendersStill = false
+    /// Set before `show` in the editor, whose timeline the scene's time then is.
+    var followsEditorClock = false
     /// Set before `show` to let the scene have the spectrum of the sound the Mac is playing.
     var hearsSound = true
 
@@ -111,6 +113,7 @@ final class NativeSceneView: NSView {
         }
         player.frameRate = frameRate
         player.rendersStill = rendersStill
+        player.followsEditorClock = followsEditorClock
         player.videoFiles = WallpaperEngineProjectFolder.nativeVideos(scene: folder)
         player.setPlaying(isPlaying, rate: Double(rate))
         player.setAudio(muted: isMuted, volume: volume)

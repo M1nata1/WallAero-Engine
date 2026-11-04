@@ -25,6 +25,9 @@ public final class MetalScenePlayer {
     /// Set before `start` when the scene is drawn for the lock screen: what is not to be
     /// seen there is left out.
     public var rendersStill = false
+    /// Whether the scene's time is the editor's: it stands until the editor plays it, and goes
+    /// to the moments the editor names. Set before the scene starts.
+    public var followsEditorClock = false
     /// Called when the scene's first frame is on the screen.
     public var onFirstFrame: (() -> Void)?
     private var toldFirstFrame = false
@@ -115,6 +118,7 @@ public final class MetalScenePlayer {
         context.evaluateScript(MetalSceneScripts.metalGL, withSourceURL: URL(string: "wallaero://metalgl.js"))
         call("__wallaeroHost.apply", [hostSettings])
         if rendersStill { context.evaluateScript("window.wallaeroStill = true;") }
+        if followsEditorClock { context.evaluateScript("window.__wallaeroEditorClock = true;") }
         applySize()
         let table = folder.appendingPathComponent("engine/files.js")
         guard let files = try? String(contentsOf: table, encoding: .utf8) else {
@@ -275,6 +279,25 @@ public final class MetalScenePlayer {
         _ = ask("seek", [seconds ?? NSNull()])
         call("__frame", [(CACurrentMediaTime() - started) * 1000])
         gl.present()
+    }
+
+    /// The scene's moment, in seconds.
+    public var sceneTime: Double {
+        (call("__editor.call", ["time"])?.toString()).flatMap(Double.init) ?? 0
+    }
+
+    /// Holds the scene's time where it is, or lets it play on.
+    public func holdClock(_ held: Bool) {
+        _ = ask("holdClock", [held])
+    }
+
+    /// Takes the scene on to a moment and shows it; false for one gone by, which only playing
+    /// the scene anew from its start comes back to.
+    public func goTo(seconds: Double) -> Bool {
+        let went = ask("goTo", [seconds]) as? Bool == true
+        call("__frame", [(CACurrentMediaTime() - started) * 1000])
+        gl.present()
+        return went
     }
 
     /// One of the player's questions, with the scene drawn anew at once, also while it is paused.

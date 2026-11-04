@@ -39,6 +39,26 @@ public enum WallpaperEngineRuntime {
         if (notes.length < 100 && notes.indexOf(text) < 0) notes.push(text);
       }
 
+      // The editor's clock: in the editor the scene's time is the timeline's. The scene then
+      // stands still unless the editor plays it (`held`), and goes to the moment the editor
+      // names; what comes by chance comes the same each time it plays from the start, so that
+      // a moment looks the same however it was come to.
+      var editorClock = { on: window.__wallaeroEditorClock === true, held: window.__wallaeroEditorClock === true };
+      var unseeded = Math.random;
+      // How the editor looks at the scene: through its camera, as the wallpaper shows it, or
+      // freely — a flat scene whole, without the camera's moves, zoom, shake or parallax; one in
+      // three dimensions from where the editor has its own eye (`look`: eye, center, up).
+      var editorView = { free: false, look: null };
+      function seedChance() {
+        var state = 0x2545F491;
+        Math.random = function () {
+          state = (state + 0x6D2B79F5) | 0;
+          var t = Math.imul(state ^ (state >>> 15), 1 | state);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
       // ------------------------------------------------------------------ values
 
       // The wallpaper's settings as they are set now, by the names the scene knows them under.
@@ -3240,6 +3260,7 @@ public enum WallpaperEngineRuntime {
       // ------------------------------------------------------------------ the player
 
       function play(canvas, scene, settings, startingChanges) {
+        if (editorClock.on) seedChance(); else Math.random = unseeded;
         properties = {};
         Object.keys(settings || {}).forEach(function (name) { properties[name] = settings[name]; });
         // The tables of a scene laid out before names were kept with their marks written as one
@@ -6471,7 +6492,10 @@ public enum WallpaperEngineRuntime {
           var near = Math.max(0.0001, number(general.nearz, 0.01)), f = 1 / Math.tan(fov / 2), aspect = w / h;
           var lens = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
           var look;
-          if (scriptedLook) {
+          if (freeLook()) {
+            var own = freeLook();
+            look = Mat4.lookAt(new Vec3(own.eye[0], own.eye[1], own.eye[2]), new Vec3(own.center[0], own.center[1], own.center[2]), new Vec3(own.up[0], own.up[1], own.up[2])).m;
+          } else if (scriptedLook) {
             var put = scriptedLook;
             look = Mat4.lookAt(new Vec3(put.eye[0], put.eye[1], put.eye[2]), new Vec3(put.center[0], put.center[1], put.center[2]), new Vec3(put.up[0], put.up[1], put.up[2])).m;
           } else if (shot) {
@@ -7065,6 +7089,10 @@ public enum WallpaperEngineRuntime {
         // as a script has put it (`setCameraTransforms`), else its camera object's, else the
         // scene's own.
         var scriptedLook = null;
+        // The editor's own eye on a scene in three dimensions, while it looks freely.
+        function freeLook() {
+          return inDepth && editorView.free && editorView.look ? editorView.look : null;
+        }
         function cameraLook() {
           if (scriptedLook) return scriptedLook;
           var shot = activeCamera();
@@ -7079,6 +7107,7 @@ public enum WallpaperEngineRuntime {
           return { eye: eye, center: center, up: up };
         }
         function eyePlace() {
+          if (freeLook()) return freeLook().eye;
           if (inDepth && scriptedLook) return scriptedLook.eye;
           if (inDepth) {
             var shot = activeCamera();
@@ -7174,13 +7203,13 @@ public enum WallpaperEngineRuntime {
               matrix[12] += /left/.test(anchor) ? seen.left : (/right/.test(anchor) ? seen.right - sceneWidth : (seen.left + seen.right - sceneWidth) / 2);
               matrix[13] += /bottom/.test(anchor) ? seen.bottom : (/top/.test(anchor) ? seen.top - sceneHeight : (seen.bottom + seen.top - sceneHeight) / 2);
             }
-            if ((eye && eye.on) || (shake && shake.on)) {
+            if (!editorView.free && ((eye && eye.on) || (shake && shake.on))) {
               // What hangs together moves with the pointer together, and shakes with the camera.
               var moved = shifted(thing);
               matrix[12] += moved[0] + (shake ? shake.x : 0);
               matrix[13] += moved[1] + (shake ? shake.y : 0);
             }
-            var seen = inDepth ? { x: 0, y: 0, zoom: 1 } : view();
+            var seen = inDepth || editorView.free ? { x: 0, y: 0, zoom: 1 } : view();
             if (seen.x || seen.y || seen.zoom !== 1) {
               // Where the camera is: the scene seen from there, nearer or further.
               var cx = sceneWidth / 2, cy = sceneHeight / 2;
@@ -8558,11 +8587,11 @@ public enum WallpaperEngineRuntime {
         // Which way the eye's right and up are, and where it is, in the scene.
         function eyeBasis() {
           var eye = eyePlace(), shot = activeCamera();
-          if (shot && !scriptedLook) {
+          if (shot && !scriptedLook && !freeLook()) {
             var m = standing(shot, true).matrix;
             return { right: [m[0], m[1], m[2]], up: [m[4], m[5], m[6]], eye: eye };
           }
-          var said = cameraLook();
+          var said = freeLook() || cameraLook();
           var centre = said.center, up = said.up;
           var view = Mat4.lookAt(new Vec3(eye[0], eye[1], eye[2]), new Vec3(centre[0], centre[1], centre[2]), new Vec3(up[0], up[1], up[2])).m;
           return { right: [view[0], view[4], view[8]], up: [view[1], view[5], view[9]], eye: eye };
@@ -10953,13 +10982,39 @@ public enum WallpaperEngineRuntime {
           asked = 0;
           if (stopped) return;
           // The speed the app plays the wallpaper at; a long gap, as after a pause, counts as none.
+          // Held by the editor, the scene's time stands.
           var host = window.__wallaeroHost;
-          var passed = before ? Math.min(0.1, Math.max(0, (now - before) / 1000)) * ((host && host.rate) || 1) : 0;
+          var passed = before && !editorClock.held ? Math.min(0.1, Math.max(0, (now - before) / 1000)) * ((host && host.rate) || 1) : 0;
           before = now;
+          goOn(passed);
+          // Drawn anew only when it would come out another picture: a scene whose scripts only
+          // wait, or whose clock still shows the same minute, is left as it is. One the editor
+          // holds changes only as it is changed.
+          var moving = !editorClock.held && isMoving();
+          var must = moving || redraw || dirty || loading > 0;
+          redraw = false;
+          dirty = false;
+          if (must) draw();
+          pointerBefore = pointer.slice();
+          // A scene in which nothing moves is drawn once it is all there, and then left alone.
+          if (moving || loading > 0 || redraw || dirty || (!editorClock.held && isLively())) {
+            wake();
+          } else {
+            before = 0;
+          }
+        }
+
+        // The scene goes on by a while, in seconds: its clock, its scripts, its animations, its
+        // particles; what that makes of it is drawn after.
+        function goOn(passed) {
           // Never nought for scripts, as in Wallpaper Engine: the first frame takes the one before
           // as long as a sixtieth (3737268876's camera works out `frametime * (1 / frametime)`).
           if (passed > 0) frameTime = passed;
           time += passed;
+          // The editor's timeline shows every animation at the scene's moment; standing, at
+          // the moment the editor shows it at.
+          if (editorClock.on && passed > 0) timelineAt = time;
+          holdFilms();
           resize();
           serveScripts();
           look(passed);
@@ -10990,20 +11045,27 @@ public enum WallpaperEngineRuntime {
           objects.slice().forEach(function (object) {
             if (object.step && passed > 0 && standing(object).visible) object.step(passed);
           });
-          // Drawn anew only when it would come out another picture: a scene whose scripts only
-          // wait, or whose clock still shows the same minute, is left as it is.
-          var moving = isMoving();
-          var must = moving || redraw || dirty || loading > 0;
-          redraw = false;
-          dirty = false;
-          if (must) draw();
-          pointerBefore = pointer.slice();
-          // A scene in which nothing moves is drawn once it is all there, and then left alone.
-          if (moving || loading > 0 || redraw || dirty || isLively()) {
-            wake();
-          } else {
-            before = 0;
-          }
+        }
+
+        // Videos stand while the editor holds the scene, at the scene's moment, and play on with it.
+        function holdFilms() {
+          if (!editorClock.on) return;
+          films.forEach(function (each) {
+            var video = each.video;
+            if (editorClock.held) {
+              if (!video.paused) video.pause();
+              var length = video.duration;
+              var at = length > 0 && isFinite(length) ? time % length : 0;
+              if (each.heldAt !== at) {
+                each.heldAt = at;
+                video.currentTime = at;
+              }
+            } else if (each.heldAt !== undefined) {
+              each.heldAt = undefined;
+              var started = video.play();
+              if (started && started['catch']) started['catch'](function () {});
+            }
+          });
         }
 
         // --- The mouse --------------------------------------------------------------
@@ -11193,6 +11255,62 @@ public enum WallpaperEngineRuntime {
             things.slice().forEach(function (thing) { refresh(thing, true); });
             dirty = true;
             changed();
+          },
+          // The scene's moment, in seconds.
+          time: function () { return time; },
+          // What the scene's camera shows: of a flat scene the middle of what it shows, from
+          // the scene's middle, and how near; of one in three dimensions where its eye is, what
+          // it looks at, which way is up, and how wide it sees, up and down, in degrees; with
+          // the camera object it is, if one, and whether that hangs on another.
+          cameraView: function () {
+            if (!inDepth) {
+              var seen = view();
+              return { depth: false, x: seen.x, y: seen.y, zoom: seen.zoom, width: sceneWidth, height: sceneHeight };
+            }
+            var look = cameraLook(), shot = activeCamera();
+            var fov = (shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) || number(general.perspectiveoverridefov, number(general.fov, 50));
+            return { depth: true, eye: look.eye, center: look.center, up: look.up, fov: fov, scripted: !!scriptedLook,
+                     camera: shot ? Number(shot.id) : null, hangs: !!(shot && shot.parent !== undefined) };
+          },
+          // Where a camera object without one to hang on stands, and how it is turned, to look
+          // from an eye at a point, that way up: Wallpaper Engine's turns, x, then y, then z.
+          cameraPlacing: function (eyeAt, center, up) {
+            var forward = [center[0] - eyeAt[0], center[1] - eyeAt[1], center[2] - eyeAt[2]];
+            function unit(v) { var l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
+            function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+            var back = unit([-forward[0], -forward[1], -forward[2]]);
+            var right = unit(cross(up, back));
+            var top = cross(back, right);
+            // Columns right, top, back: m[2] = −sin y, m[6] = cos y sin x, m[10] = cos y cos x.
+            var y = Math.asin(Math.max(-1, Math.min(1, -right[2])));
+            var x = Math.atan2(top[2], back[2]);
+            var z = Math.atan2(right[1], right[0]);
+            return { origin: eyeAt.slice(), angles: [x, y, z] };
+          },
+          // Looked at again: a frame drawn soon, the time between counted as none.
+          wake: function () {
+            before = 0;
+            dirty = true;
+            wake();
+          },
+          // Goes on to a moment of the scene, a thirtieth at a time, as it would have played up
+          // to it, and shows it. A moment gone by cannot be come back to: false then, and the
+          // scene has to be played anew from its start.
+          goTo: function (seconds) {
+            if (!(typeof seconds === 'number' && isFinite(seconds)) || stopped) return false;
+            if (seconds < time - 1e-6) return false;
+            var since = Date.now();
+            while (time < seconds - 1e-6) {
+              goOn(Math.min(1 / 30, seconds - time));
+              // A scene too heavy to go on so quickly gets there in bigger steps.
+              if (Date.now() - since > 2000) goOn(Math.max(0, seconds - time));
+            }
+            timelineAt = time;
+            holdFilms();
+            things.slice().forEach(function (thing) { refresh(thing, true); });
+            dirty = true;
+            changed();
+            return true;
           },
           // The scene for the editor: its objects as the scene has them, without the editor's
           // changes, which the editor knows, and what of them can be changed.
@@ -11519,6 +11637,22 @@ public enum WallpaperEngineRuntime {
         scriptDeclares: scriptDeclares,
         placeAt: ofCurrent('placeAt'),
         seek: ofCurrent('seek'),
+        time: ofCurrent('time'),
+        goTo: ofCurrent('goTo'),
+        cameraView: ofCurrent('cameraView'),
+        cameraPlacing: ofCurrent('cameraPlacing'),
+        // How the editor looks at the scene: `free`, and its own eye for one in three dimensions.
+        setView: function (said) {
+          editorView = { free: !!(said && said.free), look: said && said.look ? said.look : null };
+          if (current && current.wake) current.wake();
+          return true;
+        },
+        // Whether the editor holds the scene's time or lets it play on.
+        holdClock: function (held) {
+          editorClock.held = !!held;
+          if (current && current.wake) current.wake();
+          return editorClock.held;
+        },
         // The translation of a shader alone, for whoever wants to see or check it.
         translate: translate,
         annotations: annotations,

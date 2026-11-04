@@ -50,7 +50,7 @@ struct EngineEditorView: View {
                     addMenu.fixedSize()
                     undoButton
                     redoButton
-                    playButton
+                    if !preview.drawsNatively { playButton }
                     Spacer()
                     exportButton.labelStyle(.titleAndIcon)
                 }
@@ -111,6 +111,10 @@ struct EngineEditorView: View {
                         EngineScriptPanel(model: model)
                         Divider()
                     }
+                    if preview.drawsNatively {
+                        EngineTransportBar(model: model)
+                        Divider()
+                    }
                     statusLine
                 }
             }
@@ -134,6 +138,23 @@ struct EngineEditorView: View {
                 .toggleStyle(.button)
                 .barButtonStyle()
                 .help("Scripts of the selection")
+            }
+            if preview.drawsNatively {
+                if model.viewsFreely, model.isInDepth {
+                    Button { model.alignCameraToView() } label: {
+                        Label("Camera to View", systemImage: "camera.viewfinder")
+                    }
+                    .barButtonStyle()
+                    .disabled(!model.canAlignCamera)
+                    .help(model.canAlignCamera ? "Put the camera where the view is (Control-Option-0)"
+                                               : "The camera hangs on another object or is moved by a script")
+                }
+                Toggle(isOn: Binding(get: { !model.viewsFreely }, set: { model.setViewsFreely(!$0) })) {
+                    Label("Camera View", systemImage: "video")
+                }
+                .toggleStyle(.button)
+                .barButtonStyle()
+                .help("Look through the scene's camera, as the wallpaper shows it, or freely (0)")
             }
             Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
                 .foregroundStyle(.secondary)
@@ -168,8 +189,11 @@ struct EngineEditorView: View {
             undoButton
             redoButton
         }
-        ToolbarItemGroup {
-            playButton
+        // The scene's time is played from the bar under it, where the scene is drawn by the app.
+        if !preview.drawsNatively {
+            ToolbarItemGroup {
+                playButton
+            }
         }
     }
 
@@ -308,7 +332,6 @@ struct EngineHierarchy: View {
                     ForEach(model.shownRows, id: \.id) { row in
                         self.row(row.id, depth: row.depth)
                             .tag(Optional(row.id))
-                            .contextMenu { menu(for: row.id) }
                     }
                     .onMove(perform: model.layerFilter.isEmpty ? { source, destination in
                         model.moveRows(fromOffsets: source, toOffset: destination)
@@ -321,6 +344,11 @@ struct EngineHierarchy: View {
                 }
             }
             .listStyle(.sidebar)
+            // Made when it is opened: one menu per row, each naming every layer to move into,
+            // kept a scene of hundreds of objects from ever being shown.
+            .contextMenu(forSelectionType: Int?.self) { ids in
+                if ids.count == 1, let id = ids.first ?? nil { menu(for: id) }
+            }
             .onDeleteCommand {
                 if let selection = model.selection { model.delete(selection) }
             }
