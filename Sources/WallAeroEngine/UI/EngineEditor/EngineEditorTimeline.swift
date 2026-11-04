@@ -402,11 +402,11 @@ extension EngineEditorModel {
 
     // MARK: - Going through time
 
-    /// How long the timeline is: the end set, or the longest animation of the scene, and ten
-    /// seconds at least: particles and scripts take a while to show what they do.
+    /// How much of the time the timeline shows: a wallpaper plays without end, so there is no
+    /// end to it; the ruler shows the longest animation of the scene, ten seconds at least, and
+    /// grows as the scene plays on past that.
     var playLength: Double {
-        if let playEnd { return max(playEnd, playStart + 1 / 30) }
-        return max(longestAnimation, 10, playStart + 1 / 30)
+        max(longestAnimation, 10, timelineSeconds * 1.15)
     }
 
     /// The longest of the scene's animations, in seconds.
@@ -443,8 +443,9 @@ extension EngineEditorModel {
         if let next { timelineSeconds = max(0, timelineSeconds + (next - frame) / animation.rate) }
     }
 
-    func jump(toEnd: Bool) {
-        timelineSeconds = toEnd ? playLength : playStart
+    /// Goes to the start of the scene.
+    func jumpToStart() {
+        timelineSeconds = 0
     }
 
     /// Plays the scene from where the timeline stands, or holds it there.
@@ -460,15 +461,11 @@ extension EngineEditorModel {
         timelineSeconds = playedFrom
     }
 
-    /// The scene plays on by itself; the timeline follows it, and from its end goes back to the
-    /// start, or stops there.
+    /// The scene plays on by itself, without end, as a wallpaper does; the timeline follows it.
     func playingDidChange() {
         playTimer?.invalidate()
         playTimer = nil
-        if isPlaying {
-            if timelineSeconds >= playLength - 1e-6 || timelineSeconds < playStart { timelineSeconds = playStart }
-            playedFrom = timelineSeconds
-        }
+        if isPlaying { playedFrom = timelineSeconds }
         preview?.setPlaying(isPlaying)
         guard isPlaying else {
             // Where it stopped is where it stands, on to the next whole frame: a moment gone
@@ -489,22 +486,10 @@ extension EngineEditorModel {
 
     private func followPlaying() {
         guard isPlaying, let preview, let now = preview.sceneTime else { return }
-        guard now >= playLength else {
-            followsPlayback = true
-            timelineSeconds = now
-            followsPlayback = false
-            showRig()
-            if viewsFreely { refreshCameraView() }
-            return
-        }
-        if playsRound {
-            timelineSeconds = playStart
-            preview.setPlaying(true)
-        } else {
-            followsPlayback = true
-            isPlaying = false
-            followsPlayback = false
-            timelineSeconds = playLength
-        }
+        followsPlayback = true
+        timelineSeconds = now
+        followsPlayback = false
+        showRig()
+        if viewsFreely { refreshCameraView() }
     }
 }

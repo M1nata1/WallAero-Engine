@@ -19,16 +19,13 @@ struct EngineTransportBar: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Menu("Playback") {
-                Toggle("Play Round and Round", isOn: $model.playsRound)
-                Button("Set End to the Longest Animation") { model.playEnd = nil }
-                    .disabled(model.playEnd == nil)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
+            Text(verbatim: Self.clock(model.timelineSeconds))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .help("The moment of the scene")
             Spacer(minLength: 8)
             HStack(spacing: 2) {
-                Button { model.jump(toEnd: false) } label: { Image(systemName: "backward.end.fill") }
+                Button { model.jumpToStart() } label: { Image(systemName: "backward.end.fill") }
                     .help("Jump to Start (Shift ←)")
                 Button { model.jumpToKey(forward: false) } label: { Image(systemName: "backward.frame.fill") }
                     .help("Previous Keyframe (↓)")
@@ -41,30 +38,21 @@ struct EngineTransportBar: View {
                 Button { model.jumpToKey(forward: true) } label: { Image(systemName: "forward.frame.fill") }
                     .help("Next Keyframe (↑)")
                     .disabled(model.activeAnimation == nil)
-                Button { model.jump(toEnd: true) } label: { Image(systemName: "forward.end.fill") }
-                    .help("Jump to End (Shift →)")
             }
             .buttonStyle(.borderless)
             Spacer(minLength: 8)
             frameField(Binding(get: { model.timelineSeconds * rate }, set: { model.timelineSeconds = max(0, $0) / rate }))
                 .help("Frame")
-            Toggle(isOn: $model.playsRound) { Image(systemName: "repeat") }
-                .toggleStyle(.button)
-                .buttonStyle(.borderless)
-                .help("Play Round and Round")
-            HStack(spacing: 4) {
-                Text("Start").foregroundStyle(.secondary)
-                frameField(Binding(get: { model.playStart * rate },
-                                   set: { model.playStart = max(0, min($0 / rate, model.playLength - 1 / rate)) }))
-                Text("End").foregroundStyle(.secondary)
-                frameField(Binding(get: { model.playLength * rate },
-                                   set: { model.playEnd = max($0 / rate, model.playStart + 1 / rate) }))
-            }
-            .help("The part of the time played. With no end set, the longest animation of the scene ends it.")
         }
         .font(.callout)
         .padding(.horizontal, 12)
         .frame(height: 30)
+    }
+
+    /// A moment as minutes, seconds and hundredths.
+    static func clock(_ seconds: Double) -> String {
+        let whole = max(0, seconds)
+        return String(format: "%d:%05.2f", Int(whole) / 60, whole.truncatingRemainder(dividingBy: 60))
     }
 
     private func frameField(_ value: Binding<Double>) -> some View {
@@ -84,20 +72,19 @@ struct EngineTransportBar: View {
 private struct EngineFrameRuler: View {
     @ObservedObject var model: EngineEditorModel
     static let height: CGFloat = 40
+    @State private var dragFrames: Double?
 
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let rate = model.timelineRate
             let margin: CGFloat = 16
-            // A little past the end, so that the end shows as a line and not as the edge.
-            let frames = max(model.playLength * rate * 1.04, 2)
+            // While dragged, the ruler keeps the length it had: it would grow under the pointer.
+            let frames = dragFrames ?? max(model.playLength * rate, 2)
             Canvas { context, size in
                 func x(_ frame: Double) -> CGFloat { margin + CGFloat(frame / frames) * (size.width - margin * 2) }
-                let start = x(model.playStart * rate), end = x(model.playLength * rate)
-                context.fill(Path(CGRect(x: start, y: 0, width: max(0, end - start), height: size.height)), with: .color(.accentColor.opacity(0.07)))
                 // A number every so many frames, as many as have room.
-                let step = [1.0, 2, 5, 10, 12, 24, 30, 50, 60, 100, 120, 250, 500].first { x($0) - x(0) >= 42 } ?? 1000
+                let step = [1.0, 2, 5, 10, 12, 24, 30, 50, 60, 100, 120, 250, 500, 1000, 2500, 5000].first { x($0) - x(0) >= 42 } ?? 1000
                 var frame = 0.0
                 while frame <= frames {
                     let at = x(frame)
@@ -108,12 +95,6 @@ private struct EngineFrameRuler: View {
                     context.draw(Text(verbatim: "\(Int(frame))").font(.caption).foregroundColor(.secondary),
                                  at: CGPoint(x: at, y: 3), anchor: .top)
                     frame += step
-                }
-                for edge in [start, end] {
-                    var line = Path()
-                    line.move(to: CGPoint(x: edge, y: 18))
-                    line.addLine(to: CGPoint(x: edge, y: size.height))
-                    context.stroke(line, with: .color(.primary.opacity(0.35)), lineWidth: 1)
                 }
                 // The selected object's keys, each round of its animations as the scene plays them.
                 for seconds in model.keyMoments(upTo: frames / rate) {
@@ -138,10 +119,13 @@ private struct EngineFrameRuler: View {
                 context.draw(label, at: CGPoint(x: head, y: 8.5), anchor: .center)
             }
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
-                let share = Double((drag.location.x - margin) / max(width - margin * 2, 1))
-                model.timelineSeconds = (max(0, min(1, share)) * frames).rounded() / rate
-            })
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { drag in
+                    if dragFrames == nil { dragFrames = frames }
+                    let share = Double((drag.location.x - margin) / max(width - margin * 2, 1))
+                    model.timelineSeconds = (max(0, min(1, share)) * frames).rounded() / rate
+                }
+                .onEnded { _ in dragFrames = nil })
         }
         .frame(height: Self.height)
         .help("Drag to go along the scene's time")

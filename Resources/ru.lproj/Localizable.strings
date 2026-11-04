@@ -1136,3 +1136,9 @@
 "Drag to turn the view about" = "Потяните, чтобы повернуть вид";
 "Drag to zoom the view" = "Потяните, чтобы приблизить или отдалить";
 "Drag to move the view" = "Потяните, чтобы сдвинуть вид";
+
+/* Unity's 2D button in the editor */
+"2D View" = "2D-вид";
+"User Orthographic" = "Свободная ортография";
+"2D: the free view moves and zooms, flat. Off: it turns about in depth." = "2D: свободный вид только сдвигается и приближается, без перспективы. Выключено: вид можно вращать в объёме.";
+"The moment of the scene" = "Момент сцены";

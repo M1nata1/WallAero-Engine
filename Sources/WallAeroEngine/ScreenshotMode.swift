@@ -1580,8 +1580,12 @@ enum ScreenshotMode {
         await shoot("at1")
         print("to 2 s: \(go(2)) ms; to 3 s: \(go(3)) ms, scene at \(preview.sceneTime ?? -1)")
         await shoot("at3-stepped")
+        let framesBefore = preview.framesDrawn
+        let clockBefore = CFAbsoluteTimeGetCurrent()
         model.isPlaying = true
-        await pause(1.5)
+        await pause(3)
+        print("playing 3 s: \(preview.framesDrawn - framesBefore) frames in \(((CFAbsoluteTimeGetCurrent() - clockBefore) * 10).rounded() / 10) s, scene at \(preview.sceneTime ?? -1)")
+        await pause(0.1)
         model.isPlaying = false
         print("played 1.5 s: timeline \(model.timelineSeconds), scene at \(preview.sceneTime ?? -1)")
         model.isPlaying = true
@@ -1616,6 +1620,13 @@ enum ScreenshotMode {
         await shoot("further")
         model.zoomView(by: 0.5, around: .zero)
         await shoot("smaller")
+        // Unity's 2D button: a scene in depth seen flat, moved and enlarged; a flat one turned.
+        model.setViewIn3D(!model.isInDepth)
+        model.navigate(by: CGSize(width: 80, height: -30), moving: false, within: CGSize(width: 1000, height: 560))
+        model.navigateZoom(by: 1.3, around: .zero)
+        print("2D/3D: in 3D \(model.movesIn3D), card \(model.showsCard), flat height \(model.flatHeight), card turn \(model.cardTurn)")
+        await shoot("other-dimension")
+        if !model.isInDepth { return }
         if model.canAlignCamera {
             model.alignCameraToView()
             await pause(0.8)

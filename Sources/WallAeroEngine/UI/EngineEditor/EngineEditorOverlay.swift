@@ -174,6 +174,7 @@ final class EngineEditorOverlay: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        if model?.showsCard == true { return }
         drawCameraFrame()
         if let painting {
             drawPainting(painting)
@@ -242,6 +243,8 @@ final class EngineEditorOverlay: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        // A flat scene turned in depth is only looked at: a drag turns it about.
+        if model?.showsCard == true { return }
         let at = point(event)
         if let painting {
             pressBrush(painting, at, event)
@@ -281,6 +284,10 @@ final class EngineEditorOverlay: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if model?.showsCard == true {
+            onPan?(CGSize(width: event.deltaX, height: event.deltaY))
+            return
+        }
         let at = point(event)
         if let painting {
             if paintPans {
@@ -328,6 +335,7 @@ final class EngineEditorOverlay: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if model?.showsCard == true { return }
         let at = point(event)
         if let painting {
             paintGesture = nil

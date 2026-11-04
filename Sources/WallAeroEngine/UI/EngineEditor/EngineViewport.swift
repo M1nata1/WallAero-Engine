@@ -19,7 +19,7 @@ struct EngineViewportHeader<Add: View>: View {
                 .fixedSize()
             objectMenu
             Spacer(minLength: 8)
-            if model.viewsFreely, model.isInDepth {
+            if model.viewsFreely, model.isInDepth, model.movesIn3D {
                 Button { model.alignCameraToView() } label: {
                     Label("Camera to View", systemImage: "camera.viewfinder")
                 }
@@ -28,6 +28,12 @@ struct EngineViewportHeader<Add: View>: View {
                 .help(model.canAlignCamera ? "Put the camera where the view is (Control-Option-0)"
                                            : "The camera hangs on another object or is moved by a script")
             }
+            // Unity's 2D button: how the free view moves.
+            Toggle(isOn: Binding(get: { !model.movesIn3D }, set: { model.setViewIn3D(!$0) })) {
+                Text(verbatim: "2D").fontWeight(.semibold)
+            }
+            .toggleStyle(.button)
+            .help("2D: the free view moves and zooms, flat. Off: it turns about in depth.")
             Picker("", selection: Binding(get: { model.viewsFreely }, set: { model.setViewsFreely($0) })) {
                 Label("Camera View", systemImage: "video").tag(false)
                 Label("Free View", systemImage: "move.3d").tag(true)
@@ -48,7 +54,8 @@ struct EngineViewportHeader<Add: View>: View {
             Button("Frame All") { model.fitView() }
             Button("Zoom In") { zoom(1.25) }
             Button("Zoom Out") { zoom(0.8) }
-            if model.viewsFreely, model.isInDepth {
+            Toggle("2D View", isOn: Binding(get: { !model.movesIn3D }, set: { model.setViewIn3D(!$0) }))
+            if model.viewsFreely, model.isInDepth, model.movesIn3D {
                 Divider()
                 Button("Align Camera to View") { model.alignCameraToView() }
                     .disabled(!model.canAlignCamera)
@@ -58,15 +65,14 @@ struct EngineViewportHeader<Add: View>: View {
             Toggle("Scripts", isOn: $model.showsScripts)
             Divider()
             Button(model.isPlaying ? "Pause" : "Play") { model.isPlaying.toggle() }
-            Button("Jump to Start") { model.jump(toEnd: false) }
-            Button("Jump to End") { model.jump(toEnd: true) }
+            Button("Jump to Start") { model.jumpToStart() }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
     }
 
     private func zoom(_ factor: CGFloat) {
-        if model.viewsFreely, model.isInDepth { model.dollyLook(by: factor) } else { model.zoomView(by: factor, around: .zero) }
+        model.navigateZoom(by: factor, around: .zero)
     }
 
     private var selectMenu: some View {
@@ -111,7 +117,7 @@ struct EngineViewportCaption: View {
 
     private var viewTitle: LocalizedStringKey {
         if !model.viewsFreely { return "Camera View" }
-        return model.isInDepth ? "User Perspective" : "Free View"
+        return model.movesIn3D ? "User Perspective" : "User Orthographic"
     }
 
     var body: some View {
@@ -139,21 +145,20 @@ struct EngineNavigationGizmo: View {
     @ObservedObject var model: EngineEditorModel
     @State private var last: CGSize = .zero
 
+    private var size: CGSize { model.preview?.view.bounds.size ?? CGSize(width: 800, height: 500) }
+
     var body: some View {
         VStack(spacing: 6) {
-            if model.viewsFreely, model.isInDepth {
-                dragged("rotate.3d", help: "Drag to turn the view about") { model.orbit(by: $0) }
+            if model.viewsFreely, model.movesIn3D {
+                dragged("rotate.3d", help: "Drag to turn the view about") {
+                    model.navigate(by: $0, moving: false, within: size)
+                }
             }
             dragged("plus.magnifyingglass", help: "Drag to zoom the view") { distance in
-                let factor = pow(1.01, -distance.height)
-                if model.viewsFreely, model.isInDepth { model.dollyLook(by: factor) } else { model.zoomView(by: factor, around: .zero) }
+                model.navigateZoom(by: pow(1.01, -distance.height), around: .zero)
             }
             dragged("hand.raised", help: "Drag to move the view") { distance in
-                if model.viewsFreely, model.isInDepth {
-                    model.panLook(by: distance)
-                } else {
-                    model.panView(by: distance, within: CGSize(width: 4000, height: 4000))
-                }
+                model.navigate(by: distance, moving: true, within: size)
             }
             Button { model.toggleCameraView() } label: {
                 circle(model.viewsFreely ? "video" : "video.fill", lit: !model.viewsFreely)

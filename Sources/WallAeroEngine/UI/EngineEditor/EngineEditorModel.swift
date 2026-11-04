@@ -87,6 +87,14 @@ final class EngineEditorModel: ObservableObject {
     /// shows it, and the editor's own eye on a scene in three dimensions.
     @Published var viewsFreely = false
     @Published var freeLook: EngineLook?
+    /// How the free view moves, as Unity's 2D button sets it: flat — moved and enlarged only —
+    /// or in depth, turned about. Unset, it follows the scene: flat for a flat one.
+    @Published var viewIn3D: Bool?
+    /// The flat free eye on a scene in three dimensions, and half the height it sees.
+    var flatLook: EngineLook?
+    var flatHeight = 1.0
+    /// How a flat scene seen in depth is turned: across and up, in degrees.
+    @Published var cardTurn = CGSize(width: -25, height: 15)
     /// What the scene's camera shows, as the player says, for its frame drawn over a free view.
     @Published var cameraView: EngineCameraView?
     /// How much the scene is enlarged in the preview, and how far it is moved from the middle.
@@ -141,11 +149,6 @@ final class EngineEditorModel: ObservableObject {
             }
         }
     }
-    /// The part of the time played, and played round and round: from the start to the end, in
-    /// seconds. With no end set, the longest animation of the scene ends it.
-    @Published var playStart = 0.0
-    @Published var playEnd: Double?
-    @Published var playsRound = true
     /// Whether the moment comes from the scene playing, rather than being chosen.
     var followsPlayback = false
     /// Where the timeline stood when it began to play, which Escape goes back to.
@@ -504,8 +507,17 @@ final class EngineEditorModel: ObservableObject {
         viewPan = .zero
         // A free eye goes back to where the camera is.
         if viewsFreely, isInDepth, let look = cameraView?.look {
-            freeLook = look
-            preview?.setView(free: true, look: look)
+            if movesIn3D {
+                freeLook = look
+                preview?.setView(free: true, look: look, flat: nil)
+            } else {
+                flatLook = nil
+                setViewIn3D(false)
+            }
+        }
+        if showsCard {
+            cardTurn = CGSize(width: -25, height: 15)
+            preview?.setCard(cardTurn)
         }
     }
 
