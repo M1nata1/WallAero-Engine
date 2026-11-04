@@ -127,7 +127,7 @@ struct SceneEditorPreview: View {
             let width = min(available.width, available.height * aspectRatio)
             WebPreviewHost(view: controller.view)
                 .frame(width: width, height: width / aspectRatio)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous))
                 .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

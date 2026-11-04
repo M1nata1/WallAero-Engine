@@ -1100,7 +1100,6 @@
 "Remove Keys of the Bone" = "Удалить ключи кости";
 "Press where a bone starts and drag to where it ends." = "Нажмите в начале кости и протяните до её конца.";
 "Drag corners of the mesh, or a box round several. X deletes those selected." = "Тяните вершины сетки или обведите несколько рамкой. X удаляет выбранные.";
-"Paint how much the selected bone holds the picture." = "Закрасьте, насколько выбранная кость держит картинку.";
 "Drag a bone to move it. Moving bends a picture more than turning." = "Потяните кость, чтобы сдвинуть. Сдвиг искажает картинку сильнее поворота.";
 "Drag a bone to turn it about its joint. Shift turns by 15°." = "Потяните кость, чтобы повернуть вокруг сустава. С Shift — шагами по 15°.";
 "Drag a joint, an end or a whole bone. X deletes the selected one." = "Тяните сустав, конец или всю кость. X удаляет выбранную.";

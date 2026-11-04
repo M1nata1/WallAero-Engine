@@ -295,14 +295,13 @@ struct LibraryView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SystemLook.barSpacing) {
             Spacer()
             newSceneButton
             addButton
             SettingsToggle(isOn: $state.showsSettings)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .barPadding()
     }
 
     private var targetTitle: Text {
@@ -485,7 +484,7 @@ struct LibraryView: View {
     /// What is on the desktop: of which display, how to stop it, and what stands for putting
     /// the selected wallpaper there. The buttons keep their places whatever is selected.
     private var footer: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: SystemLook.barSpacing) {
             if manager.displays.count > 1 {
                 displayMenu
             }
@@ -508,7 +507,7 @@ struct LibraryView: View {
                 Text(manager.statusText)
                     .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 12)
+            Spacer(minLength: SystemLook.barSpacing)
             if selectedShown.count > 1 {
                 // Several cannot be put on the desktop, so the place is for what they can do.
                 Button(deleteSelectedTitle) { deletingIDs = selectedShown.map(\.id) }
@@ -524,8 +523,7 @@ struct LibraryView: View {
                 .disabled(selectedItem == nil || selectedItem?.id == currentID)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .barPadding()
     }
 
     private func importStatus(for job: ImportCoordinator.Job) -> String {
@@ -659,25 +657,17 @@ struct WallpaperTile: View {
                         .resizable()
                         .scaledToFill()
                 } else {
-                    Image(systemName: item.kind == .video ? "film" : item.kind == .web ? "square.3.layers.3d" : "photo")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
+                    WallpaperPlaceholderSymbol(kind: item.kind)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous))
             .overlay(alignment: .topLeading) {
-                HStack(spacing: 4) {
+                TileBadge {
                     Text(item.sourceFormat)
                     if item.hasAudio {
                         Image(systemName: "speaker.wave.2.fill")
                     }
                 }
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.black.opacity(0.55), in: Capsule())
-                .padding(6)
             }
             .overlay(alignment: .topTrailing) {
                 if isCurrent {
@@ -697,6 +687,35 @@ struct WallpaperTile: View {
                         lineWidth: isSelected ? 3 : 1
                     )
             }
+    }
+}
+
+/// What a wallpaper is, on the corner of its picture: the same on the library's tiles and the Workshop's.
+struct TileBadge<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 4) {
+            content
+        }
+        .font(.caption2.weight(.bold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.black.opacity(0.55), in: Capsule())
+        .padding(6)
+    }
+}
+
+/// Stands in for a wallpaper's picture until there is one. It is on black in the light theme too.
+struct WallpaperPlaceholderSymbol: View {
+    let kind: Wallpaper.Kind
+
+    var body: some View {
+        Image(systemName: kind == .video ? "film" : kind == .web ? "square.3.layers.3d" : "photo")
+            .font(.largeTitle)
+            .foregroundStyle(.secondary)
+            .environment(\.colorScheme, .dark)
     }
 }
 

@@ -13,9 +13,10 @@ struct LibraryFilterBar: View {
     @Binding var order: WallpaperOrder
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: SystemLook.barSpacing) {
             SearchField(text: $searchText)
                 .frame(minWidth: 130, maxWidth: 200)
+                .barSearchField()
             TagFilterButton(groups: groups, selection: $selection, isOpen: $showsTags)
             Spacer(minLength: 0)
             Picker("Type:", selection: $kind) {
@@ -35,8 +36,7 @@ struct LibraryFilterBar: View {
             .labelsHidden()
             .fixedSize()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 7)
+        .barPadding()
     }
 }
 
@@ -218,8 +218,12 @@ struct SearchField: NSViewRepresentable {
 /// The tags of one wallpaper, in its settings. A tag opens a menu that puts it into a category
 /// or takes it off; a new one is typed, and one other wallpapers have is picked from a menu.
 struct TagEditor: View {
+    /// The tags themselves, or the field a new one is typed into: the settings lay them out themselves.
+    enum Part { case chips, field }
+
     @EnvironmentObject private var library: WallpaperLibrary
     let item: Wallpaper
+    let part: Part
 
     @State private var draft = ""
     /// The tag a new category is being named for.
@@ -237,6 +241,14 @@ struct TagEditor: View {
     }
 
     var body: some View {
+        switch part {
+        case .chips: chips
+        case .field: field
+        }
+    }
+
+    @ViewBuilder
+    private var chips: some View {
         if !tags.isEmpty {
             FlowLayout(spacing: 6) {
                 ForEach(tags, id: \.self) { tag in
@@ -244,7 +256,19 @@ struct TagEditor: View {
                 }
             }
             .padding(.vertical, 2)
+            .alert("New Category", isPresented: isNamingCategory) {
+                TextField("Category", text: $newCategory)
+                Button("Add") {
+                    if let tag = categorizedTag {
+                        library.setCategory(newCategory, ofTag: tag)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            }
         }
+    }
+
+    private var field: some View {
         HStack(spacing: 8) {
             TextField("New Tag", text: $draft, prompt: Text("New Tag"))
                 .labelsHidden()
@@ -273,18 +297,16 @@ struct TagEditor: View {
                 .help("Tags")
             }
         }
-        .alert("New Category", isPresented: isNamingCategory) {
-            TextField("Category", text: $newCategory)
-            Button("Add") {
-                if let tag = categorizedTag {
-                    library.setCategory(newCategory, ofTag: tag)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
     }
 
     private func chip(for tag: String) -> some View {
+        TagCapsule(leading: 8, trailing: 6) {
+            chipContent(for: tag)
+                .controlSize(.small)
+        }
+    }
+
+    private func chipContent(for tag: String) -> some View {
         HStack(spacing: 2) {
             Menu {
                 Picker("Category", selection: category(of: tag)) {
@@ -318,10 +340,6 @@ struct TagEditor: View {
             .buttonStyle(.plain)
             .help("Remove Tag")
         }
-        .padding(.leading, 9)
-        .padding(.trailing, 7)
-        .padding(.vertical, 3)
-        .background(.quaternary, in: Capsule())
     }
 
     private func category(of tag: String) -> Binding<String?> {

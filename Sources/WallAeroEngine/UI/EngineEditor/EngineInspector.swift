@@ -32,11 +32,7 @@ struct EngineInspector: View {
 @ViewBuilder
 private func tabs<Tab: Hashable, Content: View>(selection: Binding<Tab>, @ViewBuilder content: () -> Content) -> some View {
     Picker("", selection: selection, content: content)
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 2)
+        .panelTabs()
 }
 
 /// The topics an object has. One takes the name of the object's kind, as what it holds does.

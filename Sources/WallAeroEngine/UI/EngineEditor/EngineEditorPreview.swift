@@ -545,7 +545,7 @@ struct EngineEditorPreview: View {
             let width = min(available.width, available.height * aspectRatio)
             EnginePreviewHost(view: controller.view)
                 .frame(width: width * model.viewZoom, height: width / aspectRatio * model.viewZoom)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous))
                 .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
                 .offset(model.viewPan)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
