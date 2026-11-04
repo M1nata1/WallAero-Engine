@@ -38,11 +38,12 @@ struct WorkshopView: View {
     // MARK: - Bars
 
     private var filters: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SystemLook.barSpacing) {
             SearchField(text: $store.query.search, prompt: NSLocalizedString("Search the Workshop", comment: "Placeholder")) {
                 store.reload()
             }
             .frame(minWidth: 130, maxWidth: 200)
+            .barSearchField()
             TagFilterButton(groups: tagGroups, selection: tags, isOpen: $store.showsTagFilter, name: SteamWorkshop.name(ofTag:),
                             top: AnyView(shown), filtersOnTop: (store.query.includesAnime ? 0 : 1) + (store.query.includesMature ? 1 : 0),
                             reset: { store.query.resetTags() })
@@ -63,8 +64,7 @@ struct WorkshopView: View {
             .labelsHidden()
             .fixedSize()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 7)
+        .barPadding()
     }
 
     /// What is in the list at all, above the tags: the first thing people look for there.
@@ -93,8 +93,8 @@ struct WorkshopView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 12) {
-            Spacer(minLength: 12)
+        HStack(spacing: SystemLook.barSpacing) {
+            Spacer(minLength: SystemLook.barSpacing)
             if let account = store.account {
                 Text(verbatim: account)
                     .foregroundStyle(.secondary)
@@ -106,8 +106,7 @@ struct WorkshopView: View {
                     .barButtonStyle()
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .barPadding()
     }
 
     // MARK: - The list
@@ -201,6 +200,7 @@ private struct WorkshopTile: View {
         }
         .help(item.title)
         .contentShape(Rectangle())
+        .onHover { if $0 { store.readPage(of: item) } }
         .onTapGesture {
             store.selected = item
             state.settingsTab = .wallpaper
@@ -245,13 +245,7 @@ private struct WorkshopTile: View {
             .clipShape(RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous))
             .overlay(alignment: .topLeading) {
                 if let kind = item.kindTag {
-                    Text(verbatim: kind.uppercased())
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.55), in: Capsule())
-                        .padding(6)
+                    TileBadge { Text(verbatim: kind.uppercased()) }
                 }
             }
             .overlay {
@@ -364,49 +358,48 @@ struct WorkshopDetailsPanel: View {
 private struct WorkshopDetails: View {
     @EnvironmentObject private var store: WorkshopStore
     let item: SteamWorkshop.Item
-    @State private var page: SteamWorkshop.Page?
 
+    private var page: SteamWorkshop.Page? { store.pages[item.id] }
+
+    /// Laid out as a wallpaper's settings in the library: what it is in a group of its own, its
+    /// description under it, and getting it in the bar at the bottom.
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+        Form {
+            Section {
+                VStack(alignment: .leading, spacing: SystemLook.summarySpacing) {
                     WorkshopMovingPreview(item: item)
                         .frame(maxWidth: .infinity)
                     Text(verbatim: item.title)
                         .font(.title3.weight(.semibold))
                         .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
                     properties
                     if !shownTags.isEmpty {
                         FlowLayout {
                             ForEach(shownTags, id: \.self) { tag in
-                                Text(verbatim: SteamWorkshop.name(ofTag: tag))
-                                    .font(.caption)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(.quaternary, in: Capsule())
+                                TagCapsule { Text(verbatim: SteamWorkshop.name(ofTag: tag)) }
                             }
                         }
                     }
-                    if !item.description.isEmpty {
-                        Text(verbatim: item.description)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                     Button("Open in Steam") { NSWorkspace.shared.open(item.pageURL) }
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Divider()
+            if !item.description.isEmpty {
+                Section {
+                    Text(verbatim: item.description)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .bottomBar {
             action
-                .frame(minHeight: 28)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .barPadding()
         }
-        .task {
-            page = try? await SteamWorkshop.page(of: item)
-        }
+        .onAppear { store.readPage(of: item) }
     }
 
     /// What the tags say beyond the type, and beyond what all of them have.
@@ -415,34 +408,37 @@ private struct WorkshopDetails: View {
     }
 
     private var properties: some View {
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+        PropertyGrid {
+            // Until the page is read, its rows hold their place, so that nothing below moves.
+            if page == nil {
+                PropertyRow("Author") { placeholder(width: 110) }
+                PropertyRow("Rating") { placeholder(width: 80) }
+            }
             if let author = page?.author {
-                row("Author") { Text(verbatim: author).textSelection(.enabled) }
+                PropertyRow("Author") { Text(verbatim: author).textSelection(.enabled) }
             }
             if let stars = page?.stars {
-                row("Rating") {
+                PropertyRow("Rating") {
                     Text(verbatim: String(repeating: "★", count: stars) + String(repeating: "☆", count: 5 - min(stars, 5)))
                         .accessibilityLabel(Text(verbatim: "\(stars)/5"))
                 }
             }
             if let kind = kind {
-                row("Type") { Text(kind) }
+                PropertyRow("Type") { Text(kind) }
             }
-            row("Size") { Text(verbatim: ByteCountFormatter.string(fromByteCount: item.fileSize, countStyle: .file)) }
-            row("Subscribers") { Text(verbatim: item.subscriptions.formatted()) }
-            row("In Favorites") { Text(verbatim: item.favorites.formatted()) }
+            PropertyRow("Size", verbatim: ByteCountFormatter.string(fromByteCount: item.fileSize, countStyle: .file))
+            PropertyRow("Subscribers", verbatim: item.subscriptions.formatted())
+            PropertyRow("In Favorites", verbatim: item.favorites.formatted())
             if let updated = item.updated {
-                row("Updated") { Text(verbatim: updated.formatted(date: .long, time: .omitted)) }
+                PropertyRow("Updated", verbatim: updated.formatted(date: .long, time: .omitted))
             }
         }
     }
 
-    private func row<Value: View>(_ title: LocalizedStringKey, @ViewBuilder value: () -> Value) -> some View {
-        GridRow {
-            Text(title)
-                .foregroundStyle(.secondary)
-            value()
-        }
+    private func placeholder(width: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: SystemLook.innerCornerRadius, style: .continuous)
+            .fill(.quaternary)
+            .frame(width: width, height: 12)
     }
 
     private var kind: LocalizedStringKey? {
@@ -463,8 +459,9 @@ private struct WorkshopDetails: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else if let download = store.download(for: item) {
-            HStack(spacing: 10) {
+            HStack(spacing: SystemLook.barSpacing) {
                 Button("Cancel") { store.cancel(item) }
+                    .barButtonStyle()
                     .disabled(download.phase == .stopping)
                 Text(download.status)
                     .foregroundStyle(.secondary)
@@ -472,7 +469,7 @@ private struct WorkshopDetails: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Button("Download") { store.get(item) }
-                .buttonStyle(.borderedProminent)
+                .mainActionButtonStyle()
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
@@ -499,9 +496,9 @@ private struct WorkshopMovingPreview: View {
                 }
             }
             .allowsHitTesting(false)
-            .clipShape(RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
             }
             .task {

@@ -385,6 +385,10 @@ struct EngineBrushPanel: View {
                     NumberRow("Hardness", value: $paint.hardness, in: 0...100, suffix: "%")
                 } header: {
                     Text(verbatim: paint.target.mask.title)
+                } footer: {
+                    Text("Paint over the object. Control and drag changes the size, Shift and drag the opacity.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
                 if paint.target.mask.isFlow {
                     Section {

@@ -17,12 +17,105 @@ enum SystemLook {
         return false
     }()
 
-    /// The corners of a wallpaper's picture in the library.
-    static let tileCornerRadius: CGFloat = isGlass ? 14 : 10
-    /// The corners of a picture inside a group of settings.
-    static let insetCornerRadius: CGFloat = isGlass ? 12 : 8
+    // The corners, from the largest to the smallest. Everything round in the app takes one of
+    // these, so that what is alike is rounded alike.
+
     /// The corners of the frames around the whole library: the empty one, and where files drop.
     static let frameCornerRadius: CGFloat = isGlass ? 24 : 18
+    /// The corners of a wallpaper's picture standing on its own: in the library, the Workshop
+    /// and the editor.
+    static let tileCornerRadius: CGFloat = isGlass ? 14 : 10
+    /// The corners of a picture inside a group of settings, and of a card or a panel of tools.
+    static let insetCornerRadius: CGFloat = isGlass ? 12 : 8
+    /// The corners of what stands inside such a card: a tool, a placeholder, a label.
+    static let innerCornerRadius: CGFloat = insetCornerRadius - 4
+
+    /// The height of what is in a bar: bars side by side keep their lines level.
+    static let barContentHeight: CGFloat = 28
+    /// The room at the sides of a bar, and above and below what is in it.
+    static let barHorizontalPadding: CGFloat = 16
+    static let barVerticalPadding: CGFloat = 8
+    /// The room between the things in a bar.
+    static let barSpacing: CGFloat = 12
+    /// The room between the parts of a wallpaper's summary at the side of the window.
+    static let summarySpacing: CGFloat = 12
+}
+
+extension View {
+    /// The room around what is in a bar, above or below the content, the same in every window.
+    func barPadding() -> some View {
+        frame(minHeight: SystemLook.barContentHeight)
+            .padding(.horizontal, SystemLook.barHorizontalPadding)
+            .padding(.vertical, SystemLook.barVerticalPadding)
+    }
+
+    /// The row of topics at the top of a side panel, lined up with the groups of the form under it.
+    func panelTabs() -> some View {
+        pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+    }
+}
+
+/// What a wallpaper is, in rows of a name and a value: in its settings, and in the Workshop's panel.
+struct PropertyGrid<Rows: View>: View {
+    @ViewBuilder let rows: Rows
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+            rows
+        }
+    }
+}
+
+/// A row of a `PropertyGrid`.
+struct PropertyRow<Value: View>: View {
+    let title: LocalizedStringKey
+    @ViewBuilder let value: Value
+
+    init(_ title: LocalizedStringKey, @ViewBuilder value: () -> Value) {
+        self.title = title
+        self.value = value()
+    }
+
+    var body: some View {
+        GridRow {
+            Text(title)
+                .foregroundStyle(.secondary)
+            value
+        }
+    }
+}
+
+extension PropertyRow where Value == Text {
+    init(_ title: LocalizedStringKey, verbatim value: String) {
+        self.init(title) { Text(verbatim: value) }
+    }
+}
+
+/// A tag shown as a capsule: the Workshop's, and the library's own.
+struct TagCapsule<Content: View>: View {
+    let content: Content
+    let leading: CGFloat
+    let trailing: CGFloat
+
+    /// A button at the end of the tag stands closer to the edge than the text at its start.
+    init(leading: CGFloat = 8, trailing: CGFloat = 8, @ViewBuilder content: () -> Content) {
+        self.leading = leading
+        self.trailing = trailing
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .font(.caption)
+            .padding(.leading, leading)
+            .padding(.trailing, trailing)
+            .padding(.vertical, 3)
+            .background(.quaternary, in: Capsule())
+    }
 }
 
 extension View {
@@ -89,6 +182,28 @@ extension View {
         #else
         self
         #endif
+    }
+
+    /// The style of the main button of a bar that has no default button to take Return: tinted
+    /// as the window's main action is.
+    @ViewBuilder
+    func mainActionButtonStyle() -> some View {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            barButtonStyle(isMainAction: true)
+        } else {
+            buttonStyle(.borderedProminent)
+        }
+        #else
+        buttonStyle(.borderedProminent)
+        #endif
+    }
+
+    /// The system's search field draws its frame a point inside the room it is given, so that
+    /// in a bar it stood a point further from the edge and from what is next to it than the
+    /// buttons and menus do. This takes the point back.
+    func barSearchField() -> some View {
+        padding(.horizontal, -1)
     }
 }
 

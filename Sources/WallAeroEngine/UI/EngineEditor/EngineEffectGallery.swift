@@ -86,11 +86,11 @@ private struct EffectTile: View {
         .padding(10)
         .frame(maxWidth: .infinity, minHeight: 64, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous)
                 .fill(hovering ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous)
                 .strokeBorder(Color(nsColor: .separatorColor))
         )
         .contentShape(Rectangle())

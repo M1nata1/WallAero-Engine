@@ -116,25 +116,23 @@ struct EngineEditorView: View {
             }
     }
 
-    /// What the tool in hand does, and how the scene is shown.
+    /// The panels under the scene, and how the scene is shown. What a tool does is said when the
+    /// pointer rests on it.
     private var statusLine: some View {
-        HStack(spacing: 12) {
-            if preview.drawsNatively {
-                Text(statusHint)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 12)
+        HStack(spacing: SystemLook.barSpacing) {
+            Spacer(minLength: SystemLook.barSpacing)
             if preview.drawsNatively {
                 Toggle(isOn: $model.showsTimeline) {
                     Label("Timeline", systemImage: "timeline.selection")
                 }
                 .toggleStyle(.button)
+                .barButtonStyle()
                 .help("Timeline (T)")
                 Toggle(isOn: $model.showsScripts) {
                     Label("Scripts", systemImage: "curlybraces")
                 }
                 .toggleStyle(.button)
+                .barButtonStyle()
                 .help("Scripts of the selection")
             }
             Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
@@ -153,20 +151,7 @@ struct EngineEditorView: View {
             }
         }
         .font(.callout)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-
-    /// What a drag over the scene does in the mode the editor is in.
-    private var statusHint: LocalizedStringKey {
-        switch model.mode {
-        case .paint: return "Paint over the object. Control and drag changes the size, Shift and drag the opacity."
-        case .mesh: return "Drag corners of the mesh, or a box round several. X deletes those selected."
-        case .weights: return "Paint how much the selected bone holds the picture."
-        case .pose: return model.tool == .move ? "Drag a bone to move it. Moving bends a picture more than turning." : "Drag a bone to turn it about its joint. Shift turns by 15°."
-        case .rig where model.tool == .multi: return "Drag a joint, an end or a whole bone. X deletes the selected one."
-        default: return model.tool.hint
-        }
+        .barPadding()
     }
 
     @ToolbarContentBuilder
@@ -279,16 +264,26 @@ private struct EngineToolStrip: View {
                         .frame(width: 30, height: 30)
                         .foregroundStyle(tool == model.tool ? Color.white : Color.primary)
                         .background(tool == model.tool ? Color.accentColor : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                    in: RoundedRectangle(cornerRadius: SystemLook.innerCornerRadius, style: .continuous))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(tool.title)
+                .help(Text(tool.title) + Text(verbatim: "\n") + Text(hint(for: tool)))
             }
         }
         .padding(4)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous))
         .padding(10)
+    }
+
+    /// What a drag over the scene does with the tool, in the mode the editor is in.
+    private func hint(for tool: EngineEditorModel.Tool) -> LocalizedStringKey {
+        switch model.mode {
+        case .mesh: return "Drag corners of the mesh, or a box round several. X deletes those selected."
+        case .pose: return tool == .move ? "Drag a bone to move it. Moving bends a picture more than turning." : "Drag a bone to turn it about its joint. Shift turns by 15°."
+        case .rig where tool == .multi: return "Drag a joint, an end or a whole bone. X deletes the selected one."
+        default: return tool.hint
+        }
     }
 }
 

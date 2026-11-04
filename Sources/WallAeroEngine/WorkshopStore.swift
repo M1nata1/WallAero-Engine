@@ -223,6 +223,24 @@ final class WorkshopStore: ObservableObject {
 
     // MARK: - Downloads
 
+    // MARK: - Pages
+
+    /// What the items' pages on Steam say, kept for as long as the app runs.
+    @Published private(set) var pages: [String: SteamWorkshop.Page] = [:]
+    private var readingPages: Set<String> = []
+
+    /// Reads the item's page, once. A tile asks when the pointer comes onto it, so that the
+    /// author and rating are there by the time it is clicked.
+    func readPage(of item: SteamWorkshop.Item) {
+        guard pages[item.id] == nil, readingPages.insert(item.id).inserted else { return }
+        Task {
+            if let page = try? await SteamWorkshop.page(of: item) {
+                pages[item.id] = page
+            }
+            readingPages.remove(item.id)
+        }
+    }
+
     func isInLibrary(_ item: SteamWorkshop.Item) -> Bool {
         library.items.contains { $0.workshopID == item.id }
     }

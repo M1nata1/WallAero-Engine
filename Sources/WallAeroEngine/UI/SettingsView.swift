@@ -14,11 +14,7 @@ struct SettingsPanel: View {
                 Text("settings.tab.wallpaper").tag(MainWindowState.SettingsTab.wallpaper)
                 Text("settings.tab.general").tag(MainWindowState.SettingsTab.general)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
+            .panelTabs()
             switch state.settingsTab {
             case .wallpaper:
                 if state.section == .library {

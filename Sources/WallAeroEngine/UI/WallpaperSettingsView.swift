@@ -31,9 +31,6 @@ struct WallpaperSettingsView: View {
                     Section {
                         summary(of: item)
                     }
-                    Section("Tags") {
-                        TagEditor(item: item)
-                    }
                     Section("Music") {
                         MusicSettingsRows(item: item)
                     }
@@ -107,26 +104,35 @@ struct WallpaperSettingsView: View {
 
     // MARK: - What the wallpaper is
 
-    /// Laid out as the Workshop's panel: the picture across the panel, what the wallpaper is under
-    /// it, and the button that opens it in the editor on its own line in the middle.
+    /// Laid out as the Workshop's panel: the picture across the panel, the name, what the
+    /// wallpaper is in rows, its tags, and what can be done with it.
     @ViewBuilder
     private func summary(of item: Wallpaper) -> some View {
-        VStack(spacing: 14) {
+        VStack(alignment: .leading, spacing: SystemLook.summarySpacing) {
             picture(of: item)
             // The name wraps onto as many lines as it needs.
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: item.name.split(whereSeparator: \.isWhitespace).joined(separator: " "))
-                    .font(.title3.weight(.semibold))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(kindTitle(of: item))
-                    .foregroundStyle(.secondary)
-                if !item.detailsText.isEmpty {
-                    Text(verbatim: item.detailsText)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: item.name.split(whereSeparator: \.isWhitespace).joined(separator: " "))
+                .font(.title3.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            PropertyGrid {
+                PropertyRow("Type") { Text(kindTitle(of: item)) }
+                // A web wallpaper fits any screen, so it has no resolution to show.
+                if item.pixelWidth > 0 {
+                    PropertyRow("Resolution", verbatim: item.resolutionText)
                 }
+                if let duration = item.durationText {
+                    PropertyRow("Duration", verbatim: duration)
+                }
+                PropertyRow("Size", verbatim: item.fileSizeText)
             }
+            VStack(alignment: .leading, spacing: 8) {
+                TagEditor(item: item, part: .chips)
+                TagEditor(item: item, part: .field)
+                    // Without a frame, as the form draws a field in a row of its own.
+                    .textFieldStyle(.plain)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             if library.canEdit(item) {
                 Button(library.editTitle(for: item)) { edit(item) }
             }
@@ -137,7 +143,7 @@ struct WallpaperSettingsView: View {
     /// square picture, so that the settings stay within reach.
     @ViewBuilder
     private func picture(of item: Wallpaper) -> some View {
-        let shape = RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: SystemLook.insetCornerRadius, style: .continuous)
         Group {
             if let url = library.thumbnailURL(for: item), let image = ThumbnailCache.image(at: url) {
                 Image(nsImage: image)
@@ -146,6 +152,7 @@ struct WallpaperSettingsView: View {
             } else {
                 Color.black
                     .aspectRatio(16 / 10, contentMode: .fit)
+                    .overlay { WallpaperPlaceholderSymbol(kind: item.kind) }
             }
         }
         .clipShape(shape)
