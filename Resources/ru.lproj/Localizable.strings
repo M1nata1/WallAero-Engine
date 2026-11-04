@@ -1121,3 +1121,18 @@
 "The camera hangs on another object or is moved by a script" = "Камера привязана к другому объекту или управляется скриптом";
 "Camera View" = "Вид из камеры";
 "Look through the scene's camera, as the wallpaper shows it, or freely (0)" = "Смотреть через камеру сцены, как покажут обои, или свободно (0)";
+
+/* The editor laid out as Blender is */
+"Select" = "Выделение";
+"Free View" = "Свободный вид";
+"User Perspective" = "Свободная перспектива";
+"Frame All" = "Показать всё";
+"Zoom In" = "Приблизить";
+"Zoom Out" = "Отдалить";
+"Align Camera to View" = "Поставить камеру по виду";
+"Parent" = "Родитель";
+"Child" = "Потомок";
+"Set End to the Longest Animation" = "Конец — по самой длинной анимации";
+"Drag to turn the view about" = "Потяните, чтобы повернуть вид";
+"Drag to zoom the view" = "Потяните, чтобы приблизить или отдалить";
+"Drag to move the view" = "Потяните, чтобы сдвинуть вид";

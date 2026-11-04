@@ -37,6 +37,7 @@ final class EngineEditorModel: ObservableObject {
                 timelineDidChangeObject()
                 showRig()
                 scriptsDidChangeObject()
+                if selection != nil { showsSceneProperties = false }
             }
         }
     }
@@ -95,6 +96,9 @@ final class EngineEditorModel: ObservableObject {
     /// one selection to the next, so that the same thing can be looked at on object after object.
     @Published var objectTab = ObjectTab.object
     @Published var sceneTab = SceneTab.scene
+    /// Whether the properties are the scene's while an object is selected, as a scene's tab of
+    /// Blender's properties shows it whatever is selected.
+    @Published var showsSceneProperties = false
     /// Whether the timeline is open under the scene; the scene then stands at its moment.
     /// The panel of scripts under the scene; it and the timeline take turns there.
     @Published var showsScripts = false {
