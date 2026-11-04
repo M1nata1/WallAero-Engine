@@ -55,10 +55,48 @@ extension EngineEditorModel {
         if case .bone(_, let bone) = target { selectedBone = bone }
     }
 
-    /// The frame the timeline stands at, of the animation it is on.
+    /// The frame the timeline stands at, of the animation it is on: round its loop, as it plays.
     var timelineFrame: Double {
         guard let activeAnimation else { return 0 }
-        return (timelineSeconds * activeAnimation.rate).rounded()
+        return frame(of: activeAnimation)
+    }
+
+    /// The frame of an animation at the scene's moment.
+    func frame(of animation: WallpaperEngineAnimation) -> Double {
+        (Self.ownSeconds(timelineSeconds, length: animation.duration, mode: animation.options.mode) * animation.rate).rounded()
+    }
+
+    /// The moment the keys of the animation the timeline is on stand at.
+    var keySeconds: Double {
+        guard let activeAnimation else { return timelineSeconds }
+        return Self.ownSeconds(timelineSeconds, length: activeAnimation.duration, mode: activeAnimation.options.mode)
+    }
+
+    /// Has the keys stand at a moment of their animation: in the round of a loop the scene is
+    /// in, else from the start.
+    func setKeySeconds(_ seconds: Double) {
+        guard let animation = activeAnimation, animation.options.mode == .loop else {
+            timelineSeconds = max(0, seconds)
+            return
+        }
+        timelineSeconds = max(0, timelineSeconds - keySeconds + seconds)
+    }
+
+    /// A moment of the scene as a moment of an animation that lasts so long and plays so: it
+    /// starts over, comes back, or stays at its end.
+    static func ownSeconds(_ seconds: Double, length: Double, mode: WallpaperEngineAnimation.Mode) -> Double {
+        guard length > 0, seconds > 0 else { return max(0, seconds) }
+        switch mode {
+        case .loop:
+            // Its last moment is its first again: at the end of a round it stands at the end.
+            let into = seconds.truncatingRemainder(dividingBy: length)
+            return into < 1e-9 ? length : into
+        case .mirror:
+            let into = seconds.truncatingRemainder(dividingBy: length * 2)
+            return into > length ? length * 2 - into : into
+        case .single:
+            return min(seconds, length)
+        }
     }
 
     /// The target to show when another object is selected.
@@ -101,7 +139,7 @@ extension EngineEditorModel {
         guard var animation = document.animation(of: id, target) else { return false }
         let base = baseNumbers(of: id, target, fallback: new)
         let shown = animation.numbers(atSeconds: timelineSeconds, base: base)
-        let frame = (timelineSeconds * animation.rate).rounded()
+        let frame = self.frame(of: animation)
         for channel in 0..<min(new.count, animation.channelCount) where abs(new[channel] - shown[channel]) > 1e-6 {
             guard autoKey || animation.keys(channel).contains(where: { $0.frame == frame }) else { continue }
             animation.setKey(frame: frame, channel: channel, value: new[channel] - (animation.isRelative ? base[channel] : 0))
@@ -307,7 +345,7 @@ extension EngineEditorModel {
             for copied in timelineClipboard {
                 let target = targets.count == 1 ? timelineTarget ?? copied.target : copied.target
                 guard var animation = document.animation(of: id, target), copied.channel < animation.channelCount else { continue }
-                let frame = (timelineSeconds * animation.rate).rounded() + copied.offset
+                let frame = self.frame(of: animation) + copied.offset
                 animation.setKey(frame: frame, channel: copied.channel, value: copied.value)
                 document.setAnimation(animation, of: id, target)
                 selected.insert(EngineTimelineKey(target: target, frame: frame, channel: nil))
@@ -364,55 +402,109 @@ extension EngineEditorModel {
 
     // MARK: - Going through time
 
-    func stepFrame(_ by: Double) {
-        guard let animation = activeAnimation else { return }
-        timelineSeconds = max(0, min(animation.length, timelineFrame + by)) / animation.rate
+    /// How long the timeline is: the end set, or the longest animation of the scene, and ten
+    /// seconds at least: particles and scripts take a while to show what they do.
+    var playLength: Double {
+        if let playEnd { return max(playEnd, playStart + 1 / 30) }
+        return max(longestAnimation, 10, playStart + 1 / 30)
     }
 
+    /// The longest of the scene's animations, in seconds.
+    var longestAnimation: Double {
+        var longest = 0.0
+        for object in document.objects {
+            guard let number = object["id"]?.numberValue else { continue }
+            let id = Int(number)
+            for target in document.animatedTargets(of: id) {
+                longest = max(longest, document.animation(of: id, target)?.duration ?? 0)
+            }
+        }
+        if let rig = selectedRig {
+            longest = max(longest, rig.animations.map { Double($0.length) / max($0.framesPerSecond, 1) }.max() ?? 0)
+        }
+        return longest
+    }
+
+    /// Frames a second of the timeline: the animation's it is on, else thirty.
+    var timelineRate: Double { activeAnimation?.rate ?? 30 }
+
+    /// Moves the scene's moment by frames.
+    func stepFrame(_ by: Double) {
+        let rate = timelineRate
+        timelineSeconds = max(0, ((timelineSeconds * rate).rounded() + by) / rate)
+    }
+
+    /// Goes to the next key of the animation the timeline is on, or the one before, in the
+    /// round of it the scene is in.
     func jumpToKey(forward: Bool) {
         guard let animation = activeAnimation else { return }
         let frame = timelineFrame
         let next = forward ? animation.keyFrames.first { $0 > frame } : animation.keyFrames.last { $0 < frame }
-        if let next { timelineSeconds = next / animation.rate }
+        if let next { timelineSeconds = max(0, timelineSeconds + (next - frame) / animation.rate) }
     }
 
     func jump(toEnd: Bool) {
-        timelineSeconds = toEnd ? activeAnimation?.duration ?? 0 : 0
+        timelineSeconds = toEnd ? playLength : playStart
     }
 
-    /// Plays the animations by the timeline, each by its mode, whether it waits for a script
-    /// or not, from where the timeline stands.
+    /// Plays the scene from where the timeline stands, or holds it there.
     func setTimelinePlaying(_ playing: Bool) {
-        timelineTimer?.invalidate()
-        timelineTimer = nil
-        timelinePlaying = playing
-        guard playing, let animation = activeAnimation, animation.duration > 0 else {
-            timelinePlaying = false
+        isPlaying = playing
+    }
+
+    /// Stops playing and goes back to where the timeline stood before it played, as Escape does
+    /// in Blender.
+    func cancelPlaying() {
+        guard isPlaying else { return }
+        isPlaying = false
+        timelineSeconds = playedFrom
+    }
+
+    /// The scene plays on by itself; the timeline follows it, and from its end goes back to the
+    /// start, or stops there.
+    func playingDidChange() {
+        playTimer?.invalidate()
+        playTimer = nil
+        if isPlaying {
+            if timelineSeconds >= playLength - 1e-6 || timelineSeconds < playStart { timelineSeconds = playStart }
+            playedFrom = timelineSeconds
+        }
+        preview?.setPlaying(isPlaying)
+        guard isPlaying else {
+            // Where it stopped is where it stands, on to the next whole frame: a moment gone
+            // by would have the scene played anew to come back to it.
+            let rate = timelineRate
+            followsPlayback = true
+            timelineSeconds = ((preview?.sceneTime ?? timelineSeconds) * rate - 1e-6).rounded(.up) / rate
+            followsPlayback = false
+            showTimelineMoment()
             return
         }
-        var clock = timelineSeconds >= animation.duration ? 0 : timelineSeconds
-        var before = ProcessInfo.processInfo.systemUptime
         let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let animation = self.activeAnimation else { return }
-                let now = ProcessInfo.processInfo.systemUptime
-                clock += now - before
-                before = now
-                let duration = animation.duration
-                switch animation.options.mode {
-                case .loop:
-                    clock = clock.truncatingRemainder(dividingBy: duration)
-                    self.timelineSeconds = clock
-                case .mirror:
-                    clock = clock.truncatingRemainder(dividingBy: duration * 2)
-                    self.timelineSeconds = clock > duration ? duration * 2 - clock : clock
-                case .single:
-                    self.timelineSeconds = min(clock, duration)
-                    if clock >= duration { self.setTimelinePlaying(false) }
-                }
-            }
+            MainActor.assumeIsolated { self?.followPlaying() }
         }
         RunLoop.main.add(timer, forMode: .common)
-        timelineTimer = timer
+        playTimer = timer
+    }
+
+    private func followPlaying() {
+        guard isPlaying, let preview, let now = preview.sceneTime else { return }
+        guard now >= playLength else {
+            followsPlayback = true
+            timelineSeconds = now
+            followsPlayback = false
+            showRig()
+            if viewsFreely { refreshCameraView() }
+            return
+        }
+        if playsRound {
+            timelineSeconds = playStart
+            preview.setPlaying(true)
+        } else {
+            followsPlayback = true
+            isPlaying = false
+            followsPlayback = false
+            timelineSeconds = playLength
+        }
     }
 }

@@ -202,10 +202,13 @@ extension EngineEditorModel {
         return rig.localPoses(animation: shows ? rigAnimation : nil, frame: rigFrame, draft: mode == .pose ? poseDraft : [:])
     }
 
-    /// The frame the timeline stands at, in the animation of the bones.
+    /// The frame the timeline stands at, in the animation of the bones, round its loop.
     var rigFrame: Double {
         guard let rig = selectedRig, rig.animations.indices.contains(rigAnimation) else { return 0 }
-        return timelineSeconds * rig.animations[rigAnimation].framesPerSecond
+        let animation = rig.animations[rigAnimation]
+        let rate = max(animation.framesPerSecond, 1)
+        let mode = WallpaperEngineAnimation.Mode(rawValue: animation.mode) ?? .loop
+        return Self.ownSeconds(timelineSeconds, length: Double(animation.length) / rate, mode: mode) * rate
     }
 
     /// How each bone stands now, from the picture, where the player does not say otherwise.

@@ -1103,3 +1103,21 @@
 "Drag a bone to move it. Moving bends a picture more than turning." = "Потяните кость, чтобы сдвинуть. Сдвиг искажает картинку сильнее поворота.";
 "Drag a bone to turn it about its joint. Shift turns by 15°." = "Потяните кость, чтобы повернуть вокруг сустава. С Shift — шагами по 15°.";
 "Drag a joint, an end or a whole bone. X deletes the selected one." = "Тяните сустав, конец или всю кость. X удаляет выбранную.";
+
+/* The scene's time under the scene in the editor */
+"Jump to Start (Shift ←)" = "В начало (Shift ←)";
+"Jump to End (Shift →)" = "В конец (Shift →)";
+"Previous Keyframe (↓)" = "Предыдущий ключ (↓)";
+"Next Keyframe (↑)" = "Следующий ключ (↑)";
+"Play (Space)" = "Воспроизвести (пробел)";
+"Pause (Space)" = "Пауза (пробел)";
+"The moment of the scene, in seconds" = "Момент сцены, в секундах";
+"Frame" = "Кадр";
+"The part of the time played. With no end set, the longest animation of the scene ends it." = "Какой отрезок воспроизводить. Если конец не задан, им служит самая длинная анимация сцены.";
+"Play Round and Round" = "Повторять по кругу";
+"Drag to go along the scene's time" = "Потяните, чтобы перейти к другому моменту сцены";
+"Camera to View" = "Камеру к виду";
+"Put the camera where the view is (Control-Option-0)" = "Поставить камеру туда, откуда сейчас смотрит вид (Control-Option-0)";
+"The camera hangs on another object or is moved by a script" = "Камера привязана к другому объекту или управляется скриптом";
+"Camera View" = "Вид из камеры";
+"Look through the scene's camera, as the wallpaper shows it, or freely (0)" = "Смотреть через камеру сцены, как покажут обои, или свободно (0)";

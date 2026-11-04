@@ -44,8 +44,10 @@ final class EngineEditorModel: ObservableObject {
     @Published private(set) var description: EngineSceneDescription?
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
-    @Published var isPlaying = true {
-        didSet { preview?.setPlaying(isPlaying) }
+    /// Whether the scene plays. The editor opens with it standing at the start of the timeline,
+    /// as Blender does: what it shows moves only as the timeline is played or gone along.
+    @Published var isPlaying = false {
+        didSet { if isPlaying != oldValue { playingDidChange() } }
     }
     /// A sheet the editor shows: the effects to add.
     @Published var sheet: Sheet?
@@ -80,6 +82,12 @@ final class EngineEditorModel: ObservableObject {
     @Published var tool = Tool.multi {
         didSet { preview?.setTool(tool) }
     }
+    /// Whether the scene is looked at freely, rather than through its camera as the wallpaper
+    /// shows it, and the editor's own eye on a scene in three dimensions.
+    @Published var viewsFreely = false
+    @Published var freeLook: EngineLook?
+    /// What the scene's camera shows, as the player says, for its frame drawn over a free view.
+    @Published var cameraView: EngineCameraView?
     /// How much the scene is enlarged in the preview, and how far it is moved from the middle.
     @Published private(set) var viewZoom: CGFloat = 1
     @Published private(set) var viewPan = CGSize.zero
@@ -111,23 +119,34 @@ final class EngineEditorModel: ObservableObject {
     var scriptDrafts: [WallpaperEngineScriptTarget: String] = [:]
     var scriptValueTask: Task<Void, Never>?
     weak var scriptView: EngineScriptTextView?
+    /// Whether the keys and curves of the timeline are open under the scene.
     @Published var showsTimeline = false {
         didSet {
             guard showsTimeline != oldValue else { return }
-            if !showsTimeline { setTimelinePlaying(false) }
             if showsTimeline { showsScripts = false }
-            showTimelineMoment()
+            showRig()
         }
     }
-    /// The moment the timeline stands at, in seconds.
+    /// The moment of the scene, in seconds: the timeline's. Every animation is shown at it, each
+    /// round its own loop, and everything else as the scene would be then, had it played so far.
     @Published var timelineSeconds = 0.0 {
         didSet {
             if timelineSeconds != oldValue {
                 poseDraft = [:]
-                showTimelineMoment()
+                if !followsPlayback { showTimelineMoment() }
             }
         }
     }
+    /// The part of the time played, and played round and round: from the start to the end, in
+    /// seconds. With no end set, the longest animation of the scene ends it.
+    @Published var playStart = 0.0
+    @Published var playEnd: Double?
+    @Published var playsRound = true
+    /// Whether the moment comes from the scene playing, rather than being chosen.
+    var followsPlayback = false
+    /// Where the timeline stood when it began to play, which Escape goes back to.
+    var playedFrom = 0.0
+    var playTimer: Timer?
     /// What of the selected object the timeline's keys and curves are for.
     @Published var timelineTarget: WallpaperEngineAnimationTarget?
     /// The moments selected, on one value or on several.
@@ -145,12 +164,10 @@ final class EngineEditorModel: ObservableObject {
     /// Whether a change of an animated value makes a moment where there is none.
     @Published var autoKey = true
     @Published var timelineCurves = false
-    @Published var timelinePlaying = false
     /// Whether Pose Mode shows the selected bone alone on the timeline.
     @Published var timelineOnlySelected = true
     /// How far the rows of the timeline are scrolled.
     @Published var timelineRowsOffset: CGFloat = 0
-    var timelineTimer: Timer?
     /// What the list of layers is narrowed down to.
     @Published var layerFilter = ""
 
@@ -430,10 +447,11 @@ final class EngineEditorModel: ObservableObject {
         }
     }
 
-    /// Has the scene show the moment of the timeline, or go on as it plays.
+    /// Has the scene show the moment of the timeline.
     func showTimelineMoment() {
-        preview?.showAnimations(at: showsTimeline ? timelineSeconds : nil)
+        preview?.show(moment: timelineSeconds)
         showRig()
+        if viewsFreely { refreshCameraView() }
     }
 
     // MARK: - The lock screen
@@ -462,16 +480,17 @@ final class EngineEditorModel: ObservableObject {
     /// Enlarges the scene around a point, given from the middle of the preview, which stays
     /// under the pointer. It does not get smaller than the space it is shown in.
     func zoomView(by factor: CGFloat, around point: CGSize) {
-        let zoom = min(max(viewZoom * factor, 1), 4)
+        // Looked at freely, a flat scene can be made smaller too, to see round its edges.
+        let zoom = min(max(viewZoom * factor, viewsFreely ? 0.25 : 1), 4)
         let share = zoom / viewZoom
-        viewPan = zoom == 1 ? .zero : CGSize(width: viewPan.width + point.width * (1 - share),
+        viewPan = zoom == 1 && !viewsFreely ? .zero : CGSize(width: viewPan.width + point.width * (1 - share),
                                              height: viewPan.height + point.height * (1 - share))
         viewZoom = zoom
     }
 
     /// Moves the scene, not further than its middle reaching the edge of what is shown of it.
     func panView(by distance: CGSize, within size: CGSize) {
-        guard viewZoom > 1 else { return }
+        guard viewZoom > 1 || viewsFreely else { return }
         viewPan = CGSize(width: min(max(viewPan.width + distance.width, -size.width / 2), size.width / 2),
                          height: min(max(viewPan.height + distance.height, -size.height / 2), size.height / 2))
     }
@@ -479,6 +498,11 @@ final class EngineEditorModel: ObservableObject {
     func fitView() {
         viewZoom = 1
         viewPan = .zero
+        // A free eye goes back to where the camera is.
+        if viewsFreely, isInDepth, let look = cameraView?.look {
+            freeLook = look
+            preview?.setView(free: true, look: look)
+        }
     }
 
     // MARK: - Objects

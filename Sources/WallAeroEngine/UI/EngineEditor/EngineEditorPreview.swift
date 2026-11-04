@@ -25,6 +25,8 @@ final class EngineEditorPreviewController {
             let container = NSView(frame: frame)
             let scene = NativeSceneView(frame: frame)
             scene.hearsSound = true
+            // The scene's time is the timeline's: it stands until the timeline plays it.
+            scene.followsEditorClock = true
             scene.setAudio(muted: true, volume: 0)
             scene.setPlaying(true, rate: 1)
             let overlay = EngineEditorOverlay(frame: frame)
@@ -39,9 +41,19 @@ final class EngineEditorPreviewController {
             overlay.onCommit = { [weak model] in model?.endGesture() }
             overlay.onMenu = { [weak self] point in self?.sceneMenu(at: point) }
             overlay.animatedPlace = { [weak model] id, name in model?.animatedPlace(of: id, name) }
-            overlay.onZoom = { [weak model] factor, point in model?.zoomView(by: factor, around: point) }
+            // Looking freely at a scene in three dimensions, the eye goes round, aside and nearer;
+            // else the picture of the scene is enlarged and moved.
+            overlay.onZoom = { [weak model] factor, point in
+                guard let model else { return }
+                if model.viewsFreely, model.isInDepth { model.dollyLook(by: factor) } else { model.zoomView(by: factor, around: point) }
+            }
             overlay.onPan = { [weak model, weak overlay] distance in
-                model?.panView(by: distance, within: overlay?.bounds.size ?? .zero)
+                guard let model else { return }
+                if model.viewsFreely, model.isInDepth {
+                    if NSEvent.modifierFlags.contains(.shift) { model.panLook(by: distance) } else { model.orbit(by: distance) }
+                } else {
+                    model.panView(by: distance, within: overlay?.bounds.size ?? .zero)
+                }
             }
             scene.onRestart = { [weak self] in self?.sceneRestarted() }
             if scene.show(folder: model.folder, watchingForChanges: false) {
@@ -68,7 +80,7 @@ final class EngineEditorPreviewController {
                 self?.handle(message)
             }
             webView.setAudio(muted: true, volume: 0)
-            webView.setPlaying(true, rate: 1)
+            webView.setPlaying(model.isPlaying, rate: 1)
             if let project = WebProject(folder: model.folder) {
                 webView.show(project)
             }
@@ -278,6 +290,8 @@ final class EngineEditorPreviewController {
             }
             return true
         }
+        if handleTimeKey(event) { return true }
+        if handleViewKey(event) { return true }
         if keys == .command, event.keyCode == 2, let selection = model.selection {
             model.duplicate(selection)
             return true
@@ -311,7 +325,6 @@ final class EngineEditorPreviewController {
         case 4:
             guard let selection = model.selection else { return false }
             model.toggleVisibility(of: selection)
-        case 49: model.isPlaying.toggle()
         case 115: model.fitView()
         default: return false
         }
@@ -331,6 +344,7 @@ final class EngineEditorPreviewController {
         model.playerDidStart(description)
         overlay.selectObject(model.selection)
         model.showTimelineMoment()
+        model.refreshCameraView()
     }
 
     /// Has the scene show a moment of its animations; with nil they go on as they were.
@@ -450,17 +464,68 @@ final class EngineEditorPreviewController {
         webView?.evaluate("window.wallaeroEditor && window.wallaeroEditor.selectObject(\(id.map(String.init) ?? "null"))")
     }
 
+    /// How the scene is looked at, as in Blender: 0 (on the keypad too) through its camera or
+    /// freely, Control-Option-0 puts the camera where the free eye is.
+    private func handleViewKey(_ event: NSEvent) -> Bool {
+        guard let model, overlay != nil, event.keyCode == 29 || event.keyCode == 82 else { return false }
+        let keys = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        switch keys {
+        case []: model.toggleCameraView()
+        case [.control, .option]: model.alignCameraToView()
+        default: return false
+        }
+        return true
+    }
+
+    /// What the scene's camera shows now.
+    func cameraView() -> EngineCameraView? {
+        (sceneView?.scenePlayer?.ask("cameraView") as? [String: Any]).flatMap(EngineCameraView.init)
+    }
+
+    /// Has the scene looked at through its camera, or freely: from the editor's own eye for one
+    /// in three dimensions.
+    func setView(free: Bool, look: EngineLook?) {
+        var said: [String: Any] = ["free": free]
+        if let look { said["look"] = look.forPlayer }
+        sceneView?.scenePlayer?.askAndShow("setView", [said])
+        overlay?.needsDisplay = true
+    }
+
+    /// Where a camera object stands and how it is turned to look as an eye does.
+    func cameraPlacing(_ look: EngineLook) -> (origin: [Double], angles: [Double])? {
+        guard let said = sceneView?.scenePlayer?.ask("cameraPlacing", [[look.eye.x, look.eye.y, look.eye.z],
+                                                                       [look.center.x, look.center.y, look.center.z],
+                                                                       [look.up.x, look.up.y, look.up.z]]) as? [String: Any],
+              let origin = said["origin"] as? [Double], let angles = said["angles"] as? [Double] else { return nil }
+        return (origin, angles)
+    }
+
+    /// Going through the scene's time, as in Blender, whether the timeline's keys are open or
+    /// not: Space plays and holds, Escape stops where it began, Shift and an arrow go to the
+    /// start or the end.
+    private func handleTimeKey(_ event: NSEvent) -> Bool {
+        guard let model else { return false }
+        let keys = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        switch (event.keyCode, keys) {
+        case (49, []): model.isPlaying.toggle()
+        case (53, []) where model.isPlaying: model.cancelPlaying()
+        case (123, [.shift]): model.jump(toEnd: false)
+        case (124, [.shift]): model.jump(toEnd: true)
+        default: return false
+        }
+        return true
+    }
+
     /// The timeline's keys, as Wallpaper Engine has them, while it is open.
     private func handleTimelineKey(_ event: NSEvent, _ keys: NSEvent.ModifierFlags) -> Bool {
         guard let model else { return false }
         switch (event.keyCode, keys) {
         case (40, []): model.toggleKey()                       // K
         case (0, []): model.autoKey.toggle()                   // A
-        case (49, []): model.setTimelinePlaying(!model.timelinePlaying)
-        case (123, []) where model.activeAnimation != nil: model.stepFrame(-1)
-        case (124, []) where model.activeAnimation != nil: model.stepFrame(1)
-        case (123, [.control]): model.jumpToKey(forward: false)
-        case (124, [.control]): model.jumpToKey(forward: true)
+        case (123, []) where !event.modifierFlags.contains(.shift): model.stepFrame(-1)
+        case (124, []) where !event.modifierFlags.contains(.shift): model.stepFrame(1)
+        case (123, [.control]), (125, []): model.jumpToKey(forward: false)
+        case (124, [.control]), (126, []): model.jumpToKey(forward: true)
         case (51, []) where !model.selectedKeys.isEmpty, (117, []) where !model.selectedKeys.isEmpty: model.deleteSelectedKeys()
         case (8, [.command]) where !model.selectedKeys.isEmpty: model.copySelectedKeys()
         case (9, [.command]) where !model.timelineClipboard.isEmpty: model.pasteKeys()
@@ -473,10 +538,42 @@ final class EngineEditorPreviewController {
         overlay?.tool = tool
     }
 
+    /// The scene plays on from its moment, or stands there.
     func setPlaying(_ playing: Bool) {
         webView?.setPlaying(playing, rate: 1)
-        sceneView?.setPlaying(playing, rate: 1)
+        sceneView?.scenePlayer?.holdClock(!playing)
     }
+
+    /// The scene's moment, as it plays.
+    var sceneTime: Double? { sceneView?.scenePlayer?.sceneTime }
+
+    /// Has the scene stand at a moment, as it would have played up to it: on from where it is,
+    /// or from its start, played anew, for a moment gone by.
+    func show(moment seconds: Double) {
+        guard let player = sceneView?.scenePlayer else {
+            showAnimations(at: seconds)
+            return
+        }
+        rewind?.cancel()
+        rewind = nil
+        if !player.goTo(seconds: seconds) {
+            // Going back is playing anew from the start, which takes a while: while the
+            // timeline is dragged back, the animations alone follow it at once, and the rest
+            // comes once it rests.
+            player.showAnimations(at: seconds)
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, let player = self.sceneView?.scenePlayer else { return }
+                self.rewind = nil
+                player.reloadFiles()
+                _ = player.goTo(seconds: seconds)
+                self.overlay?.needsDisplay = true
+            }
+            rewind = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + (NSEvent.pressedMouseButtons != 0 ? 0.25 : 0), execute: work)
+        }
+        overlay?.needsDisplay = true
+    }
+    private var rewind: DispatchWorkItem?
 
     /// How the player has a picture's bones stand, for tests.
     func boneMoves(of id: Int, atRest: Bool) -> [CGAffineTransform] {

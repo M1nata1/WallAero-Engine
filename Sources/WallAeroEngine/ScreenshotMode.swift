@@ -1360,6 +1360,16 @@ enum ScreenshotMode {
             if CommandLine.arguments.contains("--timeline-test"), let id = model.selection {
                 await timelineTest(model, preview, object: id)
             }
+            // `--clock-test <dir>`: the scene stands at its start, goes to moments forward and back,
+            // plays; pictures of the same moment come to the same however it was come to.
+            if let folder = values(of: "--clock-test").last {
+                await clockTest(model, preview, into: URL(fileURLWithPath: folder, isDirectory: true))
+            }
+            // `--view-test <dir>`: the scene through its camera, freely, turned, nearer, and
+            // through the camera put where the free eye was.
+            if let folder = values(of: "--view-test").last {
+                await viewTest(model, preview, into: URL(fileURLWithPath: folder, isDirectory: true))
+            }
             // `--curve-check`: every animation of the scene, worked out here and by the player.
             if CommandLine.arguments.contains("--curve-check") {
                 curveCheck(model, preview)
@@ -1541,6 +1551,78 @@ enum ScreenshotMode {
         await pause()
         print("frame 30, scene paused: on the page \(middle())")
         model.isPlaying = true
+    }
+
+    private static func clockTest(_ model: EngineEditorModel, _ preview: EngineEditorPreviewController, into folder: URL) async {
+        func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        @MainActor func shoot(_ name: String) async {
+            await pause(0.4)
+            guard let image = await preview.snapshot() else { return print("\(name): no picture") }
+            let url = folder.appendingPathComponent(name + ".png")
+            if let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) {
+                CGImageDestinationAddImage(destination, image, nil)
+                CGImageDestinationFinalize(destination)
+            }
+        }
+        @MainActor func go(_ seconds: Double) -> Double {
+            let start = CFAbsoluteTimeGetCurrent()
+            model.timelineSeconds = seconds
+            return ((CFAbsoluteTimeGetCurrent() - start) * 1000).rounded()
+        }
+        print("opened: playing \(model.isPlaying), scene at \(preview.sceneTime ?? -1), timeline \(model.timelineSeconds), length \(model.playLength)")
+        await pause(1)
+        print("a second later: scene at \(preview.sceneTime ?? -1)")
+        await shoot("start")
+        print("to 3 s: \(go(3)) ms, scene at \(preview.sceneTime ?? -1)")
+        await shoot("at3-direct")
+        print("back to 1 s: \(go(1)) ms, scene at \(preview.sceneTime ?? -1)")
+        await shoot("at1")
+        print("to 2 s: \(go(2)) ms; to 3 s: \(go(3)) ms, scene at \(preview.sceneTime ?? -1)")
+        await shoot("at3-stepped")
+        model.isPlaying = true
+        await pause(1.5)
+        model.isPlaying = false
+        print("played 1.5 s: timeline \(model.timelineSeconds), scene at \(preview.sceneTime ?? -1)")
+        model.isPlaying = true
+        await pause(0.5)
+        model.cancelPlaying()
+        print("Escape: timeline \(model.timelineSeconds), scene at \(preview.sceneTime ?? -1), playing \(model.isPlaying)")
+    }
+
+    private static func viewTest(_ model: EngineEditorModel, _ preview: EngineEditorPreviewController, into folder: URL) async {
+        func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        @MainActor func shoot(_ name: String) async {
+            await pause(0.5)
+            guard let image = await preview.snapshot() else { return print("\(name): no picture") }
+            let url = folder.appendingPathComponent(name + ".png")
+            if let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) {
+                CGImageDestinationAddImage(destination, image, nil)
+                CGImageDestinationFinalize(destination)
+            }
+        }
+        model.timelineSeconds = 2
+        model.refreshCameraView()
+        print("camera: depth \(model.isInDepth), \(String(describing: model.cameraView))")
+        await shoot("camera")
+        model.setViewsFreely(true)
+        await shoot("free")
+        model.orbit(by: CGSize(width: 120, height: 40))
+        await shoot("orbited")
+        model.dollyLook(by: 0.6)
+        model.panLook(by: CGSize(width: 60, height: 0))
+        print("free look: \(String(describing: model.freeLook)), can align \(model.canAlignCamera)")
+        await shoot("further")
+        model.zoomView(by: 0.5, around: .zero)
+        await shoot("smaller")
+        if model.canAlignCamera {
+            model.alignCameraToView()
+            await pause(0.8)
+            model.refreshCameraView()
+            print("aligned: \(String(describing: model.cameraView?.look)), free \(model.viewsFreely)")
+            await shoot("aligned")
+        }
     }
 
     private static func curveCheck(_ model: EngineEditorModel, _ preview: EngineEditorPreviewController) {

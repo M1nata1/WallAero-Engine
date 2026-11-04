@@ -52,14 +52,6 @@ struct EngineTimelineView: View {
                 EngineBoneAnimationMenu(model: model, rig: rig)
             }
             Divider().frame(height: 16)
-            Button { model.jump(toEnd: false) } label: { Image(systemName: "backward.end.fill") }
-                .help("Jump to Start")
-            Button { model.setTimelinePlaying(!model.timelinePlaying) } label: {
-                Image(systemName: model.timelinePlaying ? "pause.fill" : "play.fill")
-            }
-            .help(model.timelinePlaying ? "Pause" : "Play")
-            Button { model.jump(toEnd: true) } label: { Image(systemName: "forward.end.fill") }
-                .help("Jump to End")
             if let animation = model.activeAnimation {
                 Text(verbatim: "\(Int(model.timelineFrame)) / \(Int(animation.length))")
                     .monospacedDigit()
@@ -403,7 +395,7 @@ struct EngineTimelineKeys: View {
                     }
                 }
                 drawBox(context, box)
-                drawPlayhead(context, x: scale.x(model.timelineSeconds), height: size.height)
+                drawPlayhead(context, x: scale.x(model.keySeconds), height: size.height)
             }
             .contentShape(Rectangle())
             .background(TimelineAreaReporter(model: model))
@@ -444,7 +436,7 @@ struct EngineTimelineKeys: View {
                          width: abs(drag.translation.width), height: abs(drag.translation.height))
         default:
             if let animation = model.activeAnimation {
-                model.timelineSeconds = (scale.time(drag.location.x) * animation.rate).rounded() / animation.rate
+                model.setKeySeconds((scale.time(drag.location.x) * animation.rate).rounded() / animation.rate)
             }
         }
     }
@@ -515,7 +507,7 @@ struct EngineTimelineCurves: View {
                     draw(animation, context, scale, size)
                 }
                 drawBox(context, box)
-                drawPlayhead(context, x: scale.x(model.timelineSeconds), height: size.height)
+                drawPlayhead(context, x: scale.x(model.keySeconds), height: size.height)
             }
             .contentShape(Rectangle())
             .background(TimelineAreaReporter(model: model))
@@ -619,7 +611,7 @@ struct EngineTimelineCurves: View {
             box = CGRect(x: min(drag.startLocation.x, drag.location.x), y: min(drag.startLocation.y, drag.location.y),
                          width: abs(drag.translation.width), height: abs(drag.translation.height))
         default:
-            model.timelineSeconds = (scale.time(drag.location.x) * animation.rate).rounded() / animation.rate
+            model.setKeySeconds((scale.time(drag.location.x) * animation.rate).rounded() / animation.rate)
         }
     }
 

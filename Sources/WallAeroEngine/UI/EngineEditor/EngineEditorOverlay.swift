@@ -174,6 +174,7 @@ final class EngineEditorOverlay: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        drawCameraFrame()
         if let painting {
             drawPainting(painting)
             return
@@ -523,6 +524,29 @@ final class EngineEditorOverlay: NSView {
 
     override func magnify(with event: NSEvent) {
         onZoom?(1 + event.magnification, fromMiddle(event))
+    }
+
+    /// Over a flat scene looked at freely, what its camera shows: framed, the rest dimmed, as
+    /// Blender has the camera's frame and passepartout.
+    private func drawCameraFrame() {
+        guard let model, model.viewsFreely, let camera = model.cameraView, !camera.inDepth else { return }
+        let size = model.document.size
+        guard size.width > 0, size.height > 0 else { return }
+        let width = size.width / camera.zoom, height = size.height / camera.zoom
+        let middleX = size.width / 2 + camera.x, middleY = size.height / 2 + camera.y
+        let frame = NSRect(x: (middleX - width / 2) / size.width * bounds.width,
+                           y: (1 - (middleY + height / 2) / size.height) * bounds.height,
+                           width: width / size.width * bounds.width, height: height / size.height * bounds.height)
+        let outside = NSBezierPath(rect: bounds)
+        outside.append(NSBezierPath(rect: frame))
+        outside.windingRule = .evenOdd
+        NSColor.black.withAlphaComponent(0.35).setFill()
+        outside.fill()
+        let line = NSBezierPath(rect: frame.insetBy(dx: 0.5, dy: 0.5))
+        line.lineWidth = 1
+        line.setLineDash([6, 4], count: 2, phase: 0)
+        NSColor.white.withAlphaComponent(0.85).setStroke()
+        line.stroke()
     }
 
     /// With a mouse, the scene is moved by its middle button.
