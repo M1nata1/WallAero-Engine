@@ -48,7 +48,9 @@ public enum WallpaperEngineRuntime {
       // How the editor looks at the scene: through its camera, as the wallpaper shows it, or
       // freely — a flat scene whole, without the camera's moves, zoom, shake or parallax; one in
       // three dimensions from where the editor has its own eye (`look`: eye, center, up).
-      var editorView = { free: false, look: null };
+      // `flat`: half the height seen, for one in three dimensions looked at flat, without
+      // perspective, as Unity's 2D view does.
+      var editorView = { free: false, look: null, flat: 0 };
       function seedChance() {
         var state = 0x2545F491;
         Math.random = function () {
@@ -6491,6 +6493,11 @@ public enum WallpaperEngineRuntime {
           var fov = ((shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) || number(general.perspectiveoverridefov, number(general.fov, 50))) * Math.PI / 180;
           var near = Math.max(0.0001, number(general.nearz, 0.01)), f = 1 / Math.tan(fov / 2), aspect = w / h;
           var lens = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
+          if (freeLook() && editorView.flat > 0) {
+            // Flat: as far as the eye is, in front and behind, all seen at one size.
+            var half = editorView.flat, deep = far;
+            lens = [1 / (half * aspect), 0, 0, 0, 0, 1 / half, 0, 0, 0, 0, -1 / deep, 0, 0, 0, 0, 1];
+          }
           var look;
           if (freeLook()) {
             var own = freeLook();
@@ -11643,7 +11650,8 @@ public enum WallpaperEngineRuntime {
         cameraPlacing: ofCurrent('cameraPlacing'),
         // How the editor looks at the scene: `free`, and its own eye for one in three dimensions.
         setView: function (said) {
-          editorView = { free: !!(said && said.free), look: said && said.look ? said.look : null };
+          editorView = { free: !!(said && said.free), look: said && said.look ? said.look : null,
+                         flat: said && Number(said.flat) > 0 ? Number(said.flat) : 0 };
           if (current && current.wake) current.wake();
           return true;
         },

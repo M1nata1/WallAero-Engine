@@ -43,17 +43,9 @@ final class EngineEditorPreviewController {
             overlay.animatedPlace = { [weak model] id, name in model?.animatedPlace(of: id, name) }
             // Looking freely at a scene in three dimensions, the eye goes round, aside and nearer;
             // else the picture of the scene is enlarged and moved.
-            overlay.onZoom = { [weak model] factor, point in
-                guard let model else { return }
-                if model.viewsFreely, model.isInDepth { model.dollyLook(by: factor) } else { model.zoomView(by: factor, around: point) }
-            }
+            overlay.onZoom = { [weak model] factor, point in model?.navigateZoom(by: factor, around: point) }
             overlay.onPan = { [weak model, weak overlay] distance in
-                guard let model else { return }
-                if model.viewsFreely, model.isInDepth {
-                    if NSEvent.modifierFlags.contains(.shift) { model.panLook(by: distance) } else { model.orbit(by: distance) }
-                } else {
-                    model.panView(by: distance, within: overlay?.bounds.size ?? .zero)
-                }
+                model?.navigate(by: distance, moving: NSEvent.modifierFlags.contains(.shift), within: overlay?.bounds.size ?? .zero)
             }
             scene.onRestart = { [weak self] in self?.sceneRestarted() }
             if scene.show(folder: model.folder, watchingForChanges: false) {
@@ -484,12 +476,44 @@ final class EngineEditorPreviewController {
 
     /// Has the scene looked at through its camera, or freely: from the editor's own eye for one
     /// in three dimensions.
-    func setView(free: Bool, look: EngineLook?) {
+    func setView(free: Bool, look: EngineLook?, flat: Double?) {
         var said: [String: Any] = ["free": free]
         if let look { said["look"] = look.forPlayer }
+        if let flat { said["flat"] = flat }
         sceneView?.scenePlayer?.askAndShow("setView", [said])
         overlay?.needsDisplay = true
     }
+
+    /// Shows a flat scene as a card turned in depth, across and up by degrees, or flat again.
+    func setCard(_ turn: CGSize?) {
+        guard let player = sceneView?.scenePlayer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let turn {
+            // Turned about its middle, seen from in front of it.
+            let middle = CGPoint(x: player.layer.bounds.midX, y: player.layer.bounds.midY)
+            var turned = CATransform3DMakeScale(0.72, 0.72, 1)
+            turned = CATransform3DConcat(turned, CATransform3DMakeRotation(turn.width * .pi / 180, 0, 1, 0))
+            turned = CATransform3DConcat(turned, CATransform3DMakeRotation(turn.height * .pi / 180, 1, 0, 0))
+            var lens = CATransform3DIdentity
+            lens.m34 = -1 / max(player.layer.bounds.width * 1.6, 1)
+            turned = CATransform3DConcat(turned, lens)
+            let transform = CATransform3DConcat(CATransform3DConcat(CATransform3DMakeTranslation(-middle.x, -middle.y, 0), turned),
+                                                CATransform3DMakeTranslation(middle.x, middle.y, 0))
+            if cardBackdrop == nil { cardBackdrop = player.layer.backgroundColor }
+            player.layer.sublayerTransform = transform
+            player.layer.backgroundColor = NSColor.underPageBackgroundColor.cgColor
+        } else if let backdrop = cardBackdrop {
+            player.layer.sublayerTransform = CATransform3DIdentity
+            player.layer.backgroundColor = backdrop
+            cardBackdrop = nil
+        }
+        CATransaction.commit()
+        overlay?.needsDisplay = true
+    }
+
+    /// The scene's own color behind it, while it is shown as a card.
+    private var cardBackdrop: CGColor?
 
     /// Where a camera object stands and how it is turned to look as an eye does.
     func cameraPlacing(_ look: EngineLook) -> (origin: [Double], angles: [Double])? {
@@ -509,8 +533,7 @@ final class EngineEditorPreviewController {
         switch (event.keyCode, keys) {
         case (49, []): model.isPlaying.toggle()
         case (53, []) where model.isPlaying: model.cancelPlaying()
-        case (123, [.shift]): model.jump(toEnd: false)
-        case (124, [.shift]): model.jump(toEnd: true)
+        case (123, [.shift]): model.jumpToStart()
         default: return false
         }
         return true
@@ -542,6 +565,13 @@ final class EngineEditorPreviewController {
     func setPlaying(_ playing: Bool) {
         webView?.setPlaying(playing, rate: 1)
         sceneView?.scenePlayer?.holdClock(!playing)
+    }
+
+    /// Frames the player has drawn so far, for tests.
+    var framesDrawn: Int {
+        guard let report = sceneView?.scenePlayer?.report, let data = report.data(using: .utf8),
+              let said = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return -1 }
+        return (said["frames"] as? NSNumber)?.intValue ?? -1
     }
 
     /// The scene's moment, as it plays.
