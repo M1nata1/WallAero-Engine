@@ -75,6 +75,39 @@ struct WallpaperEnginePuppet {
         var frameCount: Int
         /// For every bone, for every frame: place (3), turn (3), scale (3).
         var frames: [Float]
+        /// For every controller of a limb (see `Controller`), for every frame, the same nine
+        /// numbers: where the controller is in this animation. Empty when there are none.
+        var controls: [Float] = []
+        /// How strongly each blend shape bends the picture, frame by frame.
+        var shapes: [ShapeTrack] = []
+    }
+
+    struct ShapeTrack {
+        /// Which of `blendShapes`.
+        var shape: Int
+        /// One a frame: nought leaves the picture as it is, one bends it the whole way.
+        var weights: [Float]
+    }
+
+    /// A point that bends a limb towards it (inverse kinematics): Wallpaper Engine's square
+    /// "target controller", where the last bone of the limb reaches, or its "orientation
+    /// controller", the point the limb's joint bends towards. Placed in the puppet's own space,
+    /// not on a bone, so a limb stays where its controller is while the body moves.
+    struct Controller: Equatable {
+        /// The last bone of the limb, the one whose settings say `ik`.
+        var bone: Int
+        /// True for the point the joint bends towards; false for where the limb reaches.
+        var orients: Bool
+        var x: Float
+        var y: Float
+    }
+
+    /// The picture as it may be bent by hand (a closing eye, a smile), the way the author moved
+    /// some of its corners: every corner that takes part says which entry of `offsets` is its.
+    struct BlendShape: Equatable {
+        var name: String
+        /// For every corner that takes part: how far it moves, x and y, at full weight.
+        var offsets: [Float]
     }
 
     /// For every corner: x, y, its place in the picture (2), four bones, their four weights.
@@ -118,6 +151,11 @@ struct WallpaperEnginePuppet {
     var clips: [Clip]
     var attachments: [Attachment]
     var animations: [Animation]
+    var controllers: [Controller] = []
+    var blendShapes: [BlendShape] = []
+    /// For every corner, which entry of a blend shape's `offsets` moves it; −1 for a corner no
+    /// blend shape moves. Empty without blend shapes.
+    var shapeSlots: [Float] = []
 
     static let floatsPerCorner = 12
     /// How long a corner may be: with its place alone, or also with the way it faces, the way
@@ -202,9 +240,99 @@ struct WallpaperEnginePuppet {
         triangles = mesh.triangles.map { UInt16($0) }
         self.bones = bones
         (parts, clips) = Self.layout(in: data, from: mesh.end, before: bonesAt, indexCount: mesh.triangles.count)
+        controllers = Self.controllers(in: data, at: reader.offset, bones: bones)
         attachments = Self.attachments(in: data, from: reader.offset, boneCount: Int(boneCount))
-        animations = Self.animations(in: data, from: reader.offset, boneCount: Int(boneCount))
+        animations = Self.animations(in: data, from: reader.offset, boneCount: Int(boneCount), controllerCount: controllers.count)
         skinned = Self.skinnedPieces(in: data, before: bonesAt, boneCount: Int(boneCount))
+        if let shapes = Self.blendShapes(in: data, from: reader.offset), mesh.size == 84 {
+            let slots = Self.shapeSlots(in: data, from: mesh.start, count: cornerCount, each: mesh.size, entries: shapes.entries)
+            if !slots.isEmpty {
+                blendShapes = shapes.shapes
+                shapeSlots = slots
+            }
+        }
+        if blendShapes.isEmpty {
+            for index in animations.indices { animations[index].shapes = [] }
+        } else {
+            for index in animations.indices {
+                animations[index].shapes.removeAll { $0.shape >= blendShapes.count }
+            }
+        }
+    }
+
+    /// The controllers of the limbs, right after the bones: how many (two bytes), then for each
+    /// a byte, the last bone of its limb, its kind (0: where the limb reaches, 1: where its joint
+    /// bends towards) and where it is, as a matrix. A file without them says nought.
+    private static func controllers(in data: Data, at start: Int, bones: [Bone]) -> [Controller] {
+        var reader = BinaryReader(data)
+        guard reader.seek(to: start), let count = reader.uint16(), count > 0, count <= 256 else { return [] }
+        var controllers: [Controller] = []
+        for _ in 0..<count {
+            guard reader.bytes(1) != nil, let bone = reader.uint32(), Int(bone) < bones.count,
+                  let kind = reader.uint32(), kind <= 1 else { return [] }
+            var matrix: [Float] = []
+            for _ in 0..<16 {
+                guard let value = reader.float32(), value.isFinite else { return [] }
+                matrix.append(value)
+            }
+            controllers.append(Controller(bone: Int(bone), orients: kind == 1, x: matrix[12], y: matrix[13]))
+        }
+        return controllers
+    }
+
+    /// The blend shapes, in a part of their own after the animations: where the part ends, how
+    /// many shapes, by how much their offsets are scaled, how many corners take part; then for
+    /// each shape a number, nought, its name, and the offsets of those corners as three whole
+    /// numbers of two bytes (x, y, z; the largest stands for the scale), and a block of as many
+    /// two-byte numbers that this does not use.
+    private static func blendShapes(in data: Data, from start: Int) -> (shapes: [BlendShape], entries: Int)? {
+        guard let mark = place(of: "MDMP", in: data, from: start) else { return nil }
+        var reader = BinaryReader(data)
+        guard reader.seek(to: mark), reader.textToZero()?.hasPrefix("MDMP") == true, reader.uint32() != nil,
+              let count = reader.uint16(), count > 0, count <= 1024,
+              let scale = reader.float32(), scale.isFinite, scale > 0,
+              let entries = reader.uint32(), entries > 0, entries <= 1_000_000
+        else {
+            return nil
+        }
+        var shapes: [BlendShape] = []
+        for _ in 0..<count {
+            guard reader.uint32() != nil, reader.uint32() != nil, let name = reader.textToZero(atMost: 1024),
+                  let size = reader.uint32(), size == entries * 6, let packed = reader.bytes(Int(size)),
+                  let more = reader.uint32(), more <= 64 * 1024 * 1024, reader.skip(Int(more))
+            else {
+                return nil
+            }
+            var offsets: [Float] = []
+            offsets.reserveCapacity(Int(entries) * 2)
+            packed.withUnsafeBytes { raw in
+                for entry in 0..<Int(entries) {
+                    for axis in 0..<2 {
+                        let value = Int16(littleEndian: raw.loadUnaligned(fromByteOffset: entry * 6 + axis * 2, as: Int16.self))
+                        offsets.append(Float(value) / 32767 * scale)
+                    }
+                }
+            }
+            shapes.append(BlendShape(name: name, offsets: offsets))
+        }
+        return (shapes, Int(entries))
+    }
+
+    /// Which offset of the blend shapes moves each corner: in corners of eighty-four bytes the
+    /// fourth number, right after the place, counts from one; nought for a corner no shape moves.
+    /// Empty when a corner names an offset there is not.
+    private static func shapeSlots(in data: Data, from start: Int, count: Int, each size: Int, entries: Int) -> [Float] {
+        guard start >= 0, start + count * size <= data.count else { return [] }
+        var slots: [Float] = []
+        slots.reserveCapacity(count)
+        for corner in 0..<count {
+            let at = data.startIndex + start + corner * size + 12
+            let bits = (0..<4).reduce(UInt32(0)) { $0 | UInt32(data[at + $1]) << (8 * UInt32($1)) }
+            let value = Float(bitPattern: bits)
+            guard value.isFinite, value >= 0, value <= Float(entries), value == value.rounded() else { return [] }
+            slots.append(value - 1)
+        }
+        return slots
     }
 
     /// The parts of a model whose corners hang on bones, read whole, one after another from
@@ -374,7 +502,7 @@ struct WallpaperEnginePuppet {
     /// may have, the one by which the triangles use every corner is tried first.
     /// `wide`: the file counts the corners of the triangles in four bytes, not two.
     private static func mesh(in data: Data, from start: Int, before end: Int, onBones: Bool, wide: Bool)
-        -> (corners: [Float], triangles: [UInt32], end: Int, solid: [Float]?)? {
+        -> (corners: [Float], triangles: [UInt32], end: Int, solid: [Float]?, start: Int, size: Int)? {
         guard start >= 0, end <= data.count, start < end else { return nil }
         for place in start..<min(start + 512, end - 8) {
             guard let cornerBytes = number(in: data, at: place), cornerBytes > 0, cornerBytes <= 256 * 1024 * 1024,
@@ -397,7 +525,7 @@ struct WallpaperEnginePuppet {
                 // Without bones, a corner of 32 or 48 bytes says which way it faces right after
                 // its place: then it is a model in three dimensions.
                 let solid = !onBones && (size == 32 || size == 48) ? Self.solid(in: packed, each: size) : nil
-                return (corners, triangles, place + 4 + cornerBytes + 4 + triangleBytes, solid)
+                return (corners, triangles, place + 4 + cornerBytes + 4 + triangleBytes, solid, place + 4, size)
             }
         }
         return nil
@@ -485,7 +613,7 @@ struct WallpaperEnginePuppet {
     /// bones and the animations, and after each animation, lies what differs from version to
     /// version; an animation is known by how it begins, and looked for from where the one
     /// before it ended.
-    private static func animations(in data: Data, from start: Int, boneCount: Int) -> [Animation] {
+    private static func animations(in data: Data, from start: Int, boneCount: Int, controllerCount: Int) -> [Animation] {
         guard let mark = place(of: "MDLA", in: data, from: start) else { return [] }
         var reader = BinaryReader(data)
         guard reader.seek(to: mark), reader.textToZero()?.hasPrefix("MDLA") == true, reader.uint32() != nil,
@@ -498,7 +626,7 @@ struct WallpaperEnginePuppet {
         for _ in 0..<Int(count) {
             var found: (animation: Animation, end: Int)?
             for skipped in 0...512 {
-                found = animation(in: data, at: place + skipped, boneCount: boneCount)
+                found = animation(in: data, at: place + skipped, boneCount: boneCount, controllerCount: controllerCount)
                 if found != nil { break }
             }
             guard let found else { break }
@@ -509,8 +637,11 @@ struct WallpaperEnginePuppet {
     }
 
     /// The animation that begins at a place of the file, and where it ends; nil if what is
-    /// there is no animation.
-    private static func animation(in data: Data, at place: Int, boneCount: Int) -> (animation: Animation, end: Int)? {
+    /// there is no animation. After the frames of the bones come, in later versions, those of
+    /// the controllers of the limbs, one track each in the order the bones' part lists them,
+    /// and then a few bytes, one of which says whether tracks of blend shapes follow: how
+    /// many, and for each the shape and its weight in every frame.
+    private static func animation(in data: Data, at place: Int, boneCount: Int, controllerCount: Int) -> (animation: Animation, end: Int)? {
         var reader = BinaryReader(data)
         guard reader.seek(to: place),
               let id = reader.int32(), id >= 0, id < 100_000_000, reader.int32() != nil,
@@ -538,8 +669,44 @@ struct WallpaperEnginePuppet {
             }
         }
         guard frames.allSatisfy(\.isFinite) else { return nil }
-        return (Animation(id: id, name: name, mode: mode.lowercased(), framesPerSecond: Double(framesPerSecond),
-                          length: length, frameCount: frameCount, frames: frames), reader.offset)
+        var animation = Animation(id: id, name: name, mode: mode.lowercased(), framesPerSecond: Double(framesPerSecond),
+                                  length: length, frameCount: frameCount, frames: frames)
+        func floats(_ packed: Data) -> [Float] {
+            packed.withUnsafeBytes { raw in
+                (0..<(packed.count / 4)).map { Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self))) }
+            }
+        }
+        var end = reader.offset
+        if controllerCount > 0 {
+            var controls: [Float] = []
+            for _ in 0..<controllerCount {
+                guard reader.int32() != nil, let size = reader.uint32().map(Int.init), size == frameCount * frameSize,
+                      let packed = reader.bytes(size) else { controls = []; break }
+                controls += floats(packed)
+            }
+            if !controls.isEmpty, controls.allSatisfy(\.isFinite) {
+                animation.controls = controls
+                end = reader.offset
+            }
+        }
+        // The tracks of blend shapes, if they read whole; else what follows is looked past.
+        var tail = BinaryReader(data)
+        if tail.seek(to: end), tail.skip(5), let flag = tail.bytes(1)?.first, flag == 1,
+           tail.uint32() != nil, tail.float32() != nil, let count = tail.uint16(), count > 0, count <= 1024 {
+            var shapes: [ShapeTrack] = []
+            for _ in 0..<count {
+                guard let shape = tail.uint16(), let size = tail.uint32().map(Int.init), size == frameCount * 4,
+                      let packed = tail.bytes(size) else { shapes = []; break }
+                let weights = floats(packed)
+                guard weights.allSatisfy(\.isFinite) else { shapes = []; break }
+                shapes.append(ShapeTrack(shape: Int(shape), weights: weights))
+            }
+            if !shapes.isEmpty {
+                animation.shapes = shapes
+                end = tail.offset
+            }
+        }
+        return (animation, end)
     }
 
     /// The puppet as the page takes it: the long lists of numbers as text (base64 of the
@@ -570,10 +737,20 @@ struct WallpaperEnginePuppet {
             "parts": parts.map { [$0.start, $0.count] },
             "clips": clips.map { ["part": $0.part, "masks": $0.masks, "texture": $0.texture] as [String: Any] },
             "animations": animations.map {
-                ["id": $0.id, "name": $0.name, "mode": $0.mode, "fps": $0.framesPerSecond, "length": $0.length,
-                 "frameCount": $0.frameCount, "frames": packed($0.frames)] as [String: Any]
+                var entry: [String: Any] = ["id": $0.id, "name": $0.name, "mode": $0.mode, "fps": $0.framesPerSecond, "length": $0.length,
+                                            "frameCount": $0.frameCount, "frames": packed($0.frames)]
+                if !$0.controls.isEmpty { entry["controls"] = packed($0.controls) }
+                if !$0.shapes.isEmpty { entry["shapes"] = $0.shapes.map { ["shape": $0.shape, "weights": packed($0.weights)] as [String: Any] } }
+                return entry
             },
         ]
+        if !controllers.isEmpty {
+            table["controllers"] = controllers.map { ["bone": $0.bone, "orients": $0.orients, "x": Double($0.x), "y": Double($0.y)] as [String: Any] }
+        }
+        if !blendShapes.isEmpty {
+            table["blendShapes"] = blendShapes.map { ["name": $0.name, "offsets": packed($0.offsets)] as [String: Any] }
+            table["shapeSlots"] = packed(shapeSlots)
+        }
         // Corners counted in four bytes, for a part too large for two.
         func wide(_ triangles: [UInt32]) -> String {
             var data = Data(capacity: triangles.count * 4)

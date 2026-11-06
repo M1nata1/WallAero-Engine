@@ -5591,6 +5591,10 @@ public enum WallpaperEngineRuntime {
             config = config || {};
             return { name: typeof config.name === 'string' ? config.name : (animation.name || ''), animation: animation,
                      frames: numbersOf(animation.frames, Float32Array), frameCount: animation.frameCount, length: animation.length,
+                     controls: animation.controls ? numbersOf(animation.controls, Float32Array) : null,
+                     shapes: (animation.shapes || []).map(function (track) {
+                       return { shape: number(track.shape, -1), weights: numbersOf(track.weights, Float32Array) };
+                     }),
                      fps: animation.fps || 30, speed: number(plain(config.rate), 1), mode: animation.mode,
                      adds: flag(config.additive, false), blend: Math.max(0, Math.min(1, number(plain(config.blend), 1))),
                      visible: true, frame: 0, playing: true, done: false, ended: [], once: false };
@@ -5645,7 +5649,7 @@ public enum WallpaperEngineRuntime {
           });
           // Where an animation has a bone on the frame its layer is on: place, turn in the
           // picture's plane, scale, and turn about the picture's x and y axes.
-          function sample(layer, index) {
+          function momentOf(layer) {
             var at = layer.frame;
             if (layer.mode === 'mirror') {
               at = at % (layer.length * 2);
@@ -5656,11 +5660,169 @@ public enum WallpaperEngineRuntime {
               at = at % layer.length;
             }
             var before = Math.min(Math.floor(at), layer.frameCount - 1);
-            var after = Math.min(before + 1, layer.frameCount - 1);
-            var share = at - before;
-            var one = (index * layer.frameCount + before) * 9, two = (index * layer.frameCount + after) * 9;
-            function value(part) { return layer.frames[one + part] + (layer.frames[two + part] - layer.frames[one + part]) * share; }
+            return { before: before, after: Math.min(before + 1, layer.frameCount - 1), share: at - before };
+          }
+          function sample(layer, index, frames) {
+            frames = frames || layer.frames;
+            var moment = momentOf(layer), share = moment.share;
+            var one = (index * layer.frameCount + moment.before) * 9, two = (index * layer.frameCount + moment.after) * 9;
+            function value(part) { return frames[one + part] + (frames[two + part] - frames[one + part]) * share; }
             return [value(0), value(1), value(5), value(6), value(7), value(3), value(4)];
+          }
+
+          // Limbs bent towards a point (inverse kinematics), as Wallpaper Engine's puppets have
+          // them: the last bone of a limb says `ik`, and how many bones above it bend (`ikd`).
+          // Where the limb reaches is its target controller, a point of the puppet's own space
+          // that the animations move — not a bone, so a foot stays planted while the body
+          // squats, and the limb is pulled straight when the point goes past its reach. The
+          // joints bend towards the limb's orientation controller (`ikg`), else the way the
+          // animation has them bent. Stretched past its reach, the last bone turns to point at
+          // the target (`ikr`), all the way once the target is `ikrd` beyond — its axis `a`
+          // being the limb's forward direction.
+          var controllers = (said.controllers || []).map(function (each) {
+            return { bone: number(each.bone, -1), orients: each.orients === true, rest: [number(each.x, 0), number(each.y, 0)] };
+          });
+          var limbs = [];
+          (said.bones || []).forEach(function (bone, end) {
+            var settings = null;
+            try { settings = typeof bone.physics === 'string' && bone.physics.charAt(0) === '{' ? JSON.parse(bone.physics) : null; } catch (error) {}
+            if (!settings || settings.ik !== true) return;
+            var chain = [end];
+            var depth = Math.max(1, Math.min(16, Math.round(number(settings.ikd, 2))));
+            while (chain.length <= depth && bones[bones[chain[0]].parent]) chain.unshift(bones[chain[0]].parent);
+            var target = -1, orient = -1;
+            controllers.forEach(function (each, index) {
+              if (each.bone !== end) return;
+              if (each.orients) { if (orient < 0) orient = index; } else if (target < 0) target = index;
+            });
+            if (chain.length < 2 || target < 0) return;
+            var axis = numbers(settings.a, 3, 0);
+            limbs.push({ chain: chain, target: target, orient: settings.ikg !== false ? orient : -1,
+                         rope: settings.ikm === 'rope', turns: settings.ikr !== false, reach: Math.max(1e-3, number(settings.ikrd, 25)),
+                         axis: Math.hypot(axis[0], axis[1]) > 1e-6 ? Math.atan2(axis[1], axis[0]) : 0 });
+          });
+          // Where each controller is on this frame: as the animation that sets the bones has
+          // it, then moved further by those that add, as much as each one's blend says.
+          function controllerSpots(base, adding) {
+            return controllers.map(function (each, index) {
+              var spot = each.rest.slice();
+              if (base && base.controls) {
+                var said = sample(base, index, base.controls);
+                spot[0] += (said[0] - each.rest[0]) * base.blend;
+                spot[1] += (said[1] - each.rest[1]) * base.blend;
+              }
+              adding.forEach(function (layer) {
+                if (!layer.controls) return;
+                var more = sample(layer, index, layer.controls);
+                spot[0] += (more[0] - each.rest[0]) * layer.blend;
+                spot[1] += (more[1] - each.rest[1]) * layer.blend;
+              });
+              return spot;
+            });
+          }
+          // A bone turned about its own root, in the puppet's space, by `angle`: its frame from
+          // its parent made over so.
+          function turnBone(index, above, angle) {
+            var bone = bones[index];
+            var world = above ? joined(above, bone.now) : bone.now;
+            var cos = Math.cos(angle), sin = Math.sin(angle), x = world[4], y = world[5];
+            var turned = joined([cos, sin, -sin, cos, x - cos * x + sin * y, y - sin * x - cos * y], world);
+            bone.now = above ? joined(undone(above), turned) : turned;
+          }
+          function bend(limb, spots, whole) {
+            var chain = limb.chain, top = bones[chain[0]].parent;
+            var above = bones[top] ? whole(top, 0) : null;
+            function worlds() {
+              var into = above, all = [];
+              chain.forEach(function (index) {
+                into = into ? joined(into, bones[index].now) : bones[index].now;
+                all.push(into);
+              });
+              return all;
+            }
+            var now = worlds();
+            var points = now.map(function (world) { return [world[4], world[5]]; });
+            var lengths = [], reach = 0;
+            for (var link = 0; link + 1 < points.length; link++) {
+              lengths.push(Math.hypot(points[link + 1][0] - points[link][0], points[link + 1][1] - points[link][1]));
+              reach += lengths[link];
+            }
+            if (!(reach > 1e-6)) return;
+            var target = spots[limb.target], root = points[0];
+            var toward = [target[0] - root[0], target[1] - root[1]], away = Math.hypot(toward[0], toward[1]);
+            var wanted = points.map(function (point) { return point.slice(); });
+            if (points.length === 3 && !limb.rope) {
+              // Two bones: the joint where both reach, on the side the orientation controller
+              // (or the animation's own bend) is.
+              var first = lengths[0], second = lengths[1];
+              var span = Math.max(Math.abs(first - second) + 1e-4, Math.min(first + second - 1e-4, away));
+              var heading = Math.atan2(toward[1], toward[0]);
+              var opening = Math.acos(Math.max(-1, Math.min(1, (first * first + span * span - second * second) / (2 * first * span))));
+              var side = limb.orient >= 0 && spots[limb.orient] ? spots[limb.orient] : points[1];
+              var cross = toward[0] * (side[1] - root[1]) - toward[1] * (side[0] - root[0]);
+              var joint = heading + (cross >= 0 ? opening : -opening);
+              wanted[1] = [root[0] + Math.cos(joint) * first, root[1] + Math.sin(joint) * first];
+              var last = Math.atan2(target[1] - wanted[1][1], target[0] - wanted[1][0]);
+              wanted[2] = [wanted[1][0] + Math.cos(last) * second, wanted[1][1] + Math.sin(last) * second];
+            } else {
+              // More bones, or a rope: drawn to the target and back to the root, again and again.
+              if (limb.orient >= 0 && spots[limb.orient]) {
+                for (var each = 1; each + 1 < wanted.length; each++) {
+                  wanted[each][0] += (spots[limb.orient][0] - wanted[each][0]) * 0.1;
+                  wanted[each][1] += (spots[limb.orient][1] - wanted[each][1]) * 0.1;
+                }
+              }
+              for (var round = 0; round < 12; round++) {
+                wanted[wanted.length - 1] = target.slice();
+                for (var back = wanted.length - 2; back >= 0; back--) pullTo(wanted, back, back + 1, lengths[back]);
+                wanted[0] = root.slice();
+                for (var on = 1; on < wanted.length; on++) pullTo(wanted, on, on - 1, lengths[on - 1]);
+              }
+            }
+            // Each bone of the limb turned so that the next one's root is where it is wanted.
+            for (var turning = 0; turning + 1 < chain.length; turning++) {
+              now = worlds();
+              var from = [now[turning][4], now[turning][5]], to = [now[turning + 1][4], now[turning + 1][5]];
+              var angle = Math.atan2(wanted[turning + 1][1] - from[1], wanted[turning + 1][0] - from[0]) -
+                          Math.atan2(to[1] - from[1], to[0] - from[0]);
+              turnBone(chain[turning], turning ? now[turning - 1] : above, angle);
+            }
+            // Past its reach, the last bone points at the target.
+            if (limb.turns && away > reach) {
+              now = worlds();
+              var end = now[now.length - 1];
+              var pointing = Math.atan2(end[1], end[0]) + limb.axis;
+              var aim = Math.atan2(target[1] - end[5], target[0] - end[4]) - pointing;
+              aim = Math.atan2(Math.sin(aim), Math.cos(aim)) * Math.min(1, (away - reach) / limb.reach);
+              turnBone(chain[chain.length - 1], now.length > 1 ? now[now.length - 2] : above, aim);
+            }
+          }
+          function pullTo(points, which, toward, length) {
+            var dx = points[which][0] - points[toward][0], dy = points[which][1] - points[toward][1];
+            var apart = Math.hypot(dx, dy) || 1e-6;
+            points[which] = [points[toward][0] + dx / apart * length, points[toward][1] + dy / apart * length];
+          }
+
+          // Blend shapes: the picture bent by hand, each corner that takes part moved by its
+          // offset times how strongly the animations weigh the shape on this frame.
+          var blendShapes = (said.blendShapes || []).map(function (each) { return numbersOf(each.offsets, Float32Array); });
+          var shapeSlots = blendShapes.length && said.shapeSlots ? numbersOf(said.shapeSlots, Float32Array) : null;
+          function shapeWeights(base, adding) {
+            var weights = blendShapes.map(function () { return 0; }), any = false;
+            function take(layer, share) {
+              if (!layer || !layer.shapes.length) return;
+              var moment = momentOf(layer);
+              layer.shapes.forEach(function (track) {
+                if (!(track.shape >= 0 && track.shape < weights.length)) return;
+                var one = track.weights[moment.before], two = track.weights[moment.after];
+                if (one === undefined || two === undefined) return;
+                weights[track.shape] += (one + (two - one) * moment.share) * share;
+                any = true;
+              });
+            }
+            take(base, base ? base.blend : 0);
+            adding.forEach(function (layer) { take(layer, layer.blend); });
+            return any ? weights : null;
           }
 
           var places = new Float32Array(count * 2);
@@ -6039,10 +6201,24 @@ public enum WallpaperEngineRuntime {
               }
               return bone.moved;
             }
+            // Limbs bent to their controllers before anything hangs on them.
+            if (limbs.length && !puppet.held) {
+              var spots = controllerSpots(base, adding);
+              limbs.forEach(function (limb) { bend(limb, spots, whole); });
+            }
+            var weights = shapeSlots && !puppet.held ? shapeWeights(base, adding) : null;
             bones.forEach(function (bone, index) { whole(index, 0); });
             for (var corner = 0; corner < count; corner++) {
               var base = corner * 12;
               var x = corners[base], y = corners[base + 1];
+              var shapeAt = weights ? shapeSlots[corner] : -1;
+              if (shapeAt >= 0) {
+                for (var shapeIndex = 0; shapeIndex < weights.length; shapeIndex++) {
+                  if (!weights[shapeIndex]) continue;
+                  x += blendShapes[shapeIndex][shapeAt * 2] * weights[shapeIndex];
+                  y += blendShapes[shapeIndex][shapeAt * 2 + 1] * weights[shapeIndex];
+                }
+              }
               var newX = 0, newY = 0, total = 0;
               for (var slot = 0; slot < 4; slot++) {
                 var weight = corners[base + 8 + slot];

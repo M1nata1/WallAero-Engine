@@ -1694,7 +1694,7 @@ final class WallpaperEngineSceneTests: XCTestCase {
     /// animation.
     private func puppet(triangle: [UInt16] = [0, 1, 2], bones: [UInt32] = [0, 1, 1], newer: Bool = false,
                         attachedTo attachmentBone: UInt16? = nil, clipped: Bool = false, sway: String = "",
-                        deep: Bool = false) -> Data {
+                        deep: Bool = false, limb: Bool = false, shaped: Bool = false) -> Data {
         func float(_ value: Float) -> Data { withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) } }
         var file = Data("MDLV00\(newer ? 23 : 13)\0".utf8)
         let head: [Data] = [number(0x0180_0009), number(1), number(1), Data("materials/Sky.json\0".utf8), number(0)]
@@ -1709,8 +1709,9 @@ final class WallpaperEngineSceneTests: XCTestCase {
             let v: Float = 0.5 - place.1 / 10
             var corner: [Data] = [float(place.0), float(place.1), float(0)]
             if deep {
-                // Some files keep one more number after the place: 84 bytes a corner.
-                corner.append(float(0))
+                // Some files keep one more number after the place: 84 bytes a corner. With blend
+                // shapes it says which offset moves the corner, counting from one.
+                corner.append(float(shaped ? [1, 0, 2][index] : 0))
             }
             if newer {
                 corner += [float(0), float(0), float(1), float(1), float(0), float(0), float(1)]
@@ -1745,7 +1746,18 @@ final class WallpaperEngineSceneTests: XCTestCase {
             }
             skeleton += Data("\(name == "hair" ? sway : "")\0".utf8)
         }
-        if newer {
+        if limb {
+            // The hair bends towards controllers: where it reaches (kind 0), where it bends to (1).
+            skeleton += Data([2, 0])
+            for (kind, x, y) in [(UInt32(1), Float(1), Float(4)), (0, 3, 0)] {
+                skeleton += Data([0])
+                skeleton += number(1)
+                skeleton += number(Int(kind))
+                for value in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, 0, 1] as [Float] {
+                    skeleton += float(value)
+                }
+            }
+        } else if newer {
             // What makes the bones sway, for each of them.
             let sway: [Data] = [Data(count: 11), Data([1]), float(10), float(6.5), float(6.5)]
             sway.forEach { skeleton += $0 }
@@ -1778,10 +1790,70 @@ final class WallpaperEngineSceneTests: XCTestCase {
                     }
                 }
             }
-            // What follows an animation: a number, and in later versions more.
-            file += newer ? Data(count: 35) : number(0)
+            if limb {
+                // Where the controllers are in it: the one it reaches for moves on.
+                for (x, y, further) in [(Float(1), Float(4), Float(0)), (3, 0, 2)] {
+                    file += number(0)
+                    file += number(2 * 36)
+                    for frame in 0..<2 {
+                        for value in [x + further * Float(frame), y, 0, 0, 0, 0, 1, 1, 1] as [Float] {
+                            file += float(value)
+                        }
+                    }
+                }
+            }
+            // What follows an animation: a number, and in later versions more — here, how
+            // strongly the blend shape bends the picture in each frame.
+            if shaped {
+                let tail: [Data] = [Data(count: 5), Data([1]), number(1), float(10), Data([1, 0, 0, 0]), number(8), float(0), float(0.5),
+                                    Data(count: 29)]
+                tail.forEach { file += $0 }
+            } else {
+                file += newer ? Data(count: 35) : number(0)
+            }
+        }
+        if shaped {
+            // The blend shape: two corners move, by offsets in whole numbers of 32767ths of ten.
+            func short(_ value: Int16) -> Data { withUnsafeBytes(of: value.littleEndian) { Data($0) } }
+            let shapes: [Data] = [Data("MDMP0001\0".utf8), number(0), Data([1, 0]), float(10), number(2),
+                                  number(7), number(0), Data("Shape 7\0".utf8), number(12),
+                                  short(32767), short(0), short(0), short(0), short(-16384), short(0),
+                                  number(4), short(32767), short(32767)]
+            shapes.forEach { file += $0 }
         }
         return file
+    }
+
+    func testALimbBendsTowardsItsControllers() throws {
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true, sway: #"{"ik":true,"ikd":1}"#, limb: true)))
+        XCTAssertEqual(read.controllers, [WallpaperEnginePuppet.Controller(bone: 1, orients: true, x: 1, y: 4),
+                                          WallpaperEnginePuppet.Controller(bone: 1, orients: false, x: 3, y: 0)])
+        // Both animations are read whole, with the controllers' frames that follow the bones'.
+        XCTAssertEqual(read.animations.map(\.id), [51, 52])
+        let controls = read.animations[1].controls
+        XCTAssertEqual(controls.count, 2 * 2 * 9)
+        XCTAssertEqual([controls[(2 + 1) * 9], controls[(2 + 1) * 9 + 1]], [5, 0], "the target, second frame")
+        let table = read.table
+        let controllers = try XCTUnwrap(table["controllers"] as? [[String: Any]])
+        XCTAssertEqual(controllers.map { $0["orients"] as? Bool }, [true, false])
+        XCTAssertNotNil((table["animations"] as? [[String: Any]])?.first?["controls"])
+        // A file without them has none.
+        XCTAssertTrue(try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true))).controllers.isEmpty)
+    }
+
+    func testABlendShapeMovesTheCornersItNames() throws {
+        let read = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true, deep: true, shaped: true)))
+        XCTAssertEqual(read.blendShapes.map(\.name), ["Shape 7"])
+        XCTAssertEqual(read.blendShapes[0].offsets, [10, 0, 0, Float(-16384) / 32767 * 10])
+        XCTAssertEqual(read.shapeSlots, [0, -1, 1])
+        XCTAssertEqual(read.animations.map(\.id), [51, 52])
+        XCTAssertEqual(read.animations.map { $0.shapes.map(\.shape) }, [[0], [0]])
+        XCTAssertEqual(read.animations[0].shapes[0].weights, [0, 0.5])
+        XCTAssertNotNil(read.table["shapeSlots"])
+        // Corners of that length without blend shapes say nothing of them.
+        let plain = try XCTUnwrap(WallpaperEnginePuppet(data: puppet(newer: true, deep: true)))
+        XCTAssertTrue(plain.blendShapes.isEmpty)
+        XCTAssertTrue(plain.shapeSlots.isEmpty)
     }
 
     func testAPuppetIsReadWithItsBonesAndAnimations() throws {

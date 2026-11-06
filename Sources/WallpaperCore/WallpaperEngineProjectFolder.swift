@@ -219,7 +219,7 @@ extension WallpaperEngineProjectFolder {
 
     /// What the layout is made by: raised when the app reads more of a project than before, so
     /// that a scene laid out by an earlier version is laid out again.
-    public static let layoutVersion = 5
+    public static let layoutVersion = 6
     static let versionFileName = "layout-version"
 
     /// Whether the scene's project was laid out by an earlier version of the app.
