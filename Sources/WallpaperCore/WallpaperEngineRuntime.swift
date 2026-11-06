@@ -6541,7 +6541,7 @@ public enum WallpaperEngineRuntime {
           var up = Math.abs(way[1]) > 0.95 ? [0, 0, 1] : [0, 1, 0];
           var eye = eyePlace();
           var shot = activeCamera(), ahead;
-          if (shot) { var c = standing(shot, true).matrix; ahead = [-c[8], -c[9], -c[10]]; }
+          if (shot) { var c = cameraMatrix(shot); ahead = [-c[8], -c[9], -c[10]]; }
           else {
             var said = description.camera || {};
             var centre0 = numbers(said.center, 3, 0);
@@ -6666,7 +6666,9 @@ public enum WallpaperEngineRuntime {
           // shows, where it stands — it may hang on what moves it — looking down its own −z; else
           // the scene's own eye, looking at its centre. As wide as the camera sees, up and down.
           var shot = activeCamera();
-          var fov = ((shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) || number(general.perspectiveoverridefov, number(general.fov, 50))) * Math.PI / 180;
+          var onPath = pathLook(shot);
+          var fov = ((onPath && onPath.fov > 0 && onPath.fov) || (shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) ||
+                     number(general.perspectiveoverridefov, number(general.fov, 50))) * Math.PI / 180;
           var near = Math.max(0.0001, number(general.nearz, 0.01)), f = 1 / Math.tan(fov / 2), aspect = w / h;
           var lens = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
           if (freeLook() && editorView.flat > 0) {
@@ -6682,7 +6684,7 @@ public enum WallpaperEngineRuntime {
             var put = scriptedLook;
             look = Mat4.lookAt(new Vec3(put.eye[0], put.eye[1], put.eye[2]), new Vec3(put.center[0], put.center[1], put.center[2]), new Vec3(put.up[0], put.up[1], put.up[2])).m;
           } else if (shot) {
-            look = m4invert(standing(shot, true).matrix);
+            look = m4invert(cameraMatrix(shot));
           } else {
             var eyeSaid = (description.camera || {});
             var eye = numbers(eyeSaid.eye, 3, 0), centre = numbers(eyeSaid.center, 3, 0), up = numbers(eyeSaid.up, 3, 0);
@@ -7242,6 +7244,8 @@ public enum WallpaperEngineRuntime {
           if (object.camera !== undefined && object.camera !== null) {
             thing.isCamera = true;
             thing.lives.zoom = live(object.zoom === undefined ? 1 : object.zoom, 1, 1, thing);
+            thing.paths = cameraPathsOf(plain(object.path));
+            thing.pathOrder = key(String(plain(object.queuemode) || 'sequential')) === 'random' ? 'random' : 'sequential';
           }
           // Whatever else of it has a script behind it: the script is run for what it does.
           Object.keys(object).forEach(function (name) {
@@ -7280,7 +7284,7 @@ public enum WallpaperEngineRuntime {
           if (scriptedLook) return scriptedLook;
           var shot = activeCamera();
           if (shot) {
-            var m = standing(shot, true).matrix;
+            var m = cameraMatrix(shot);
             return { eye: [m[12], m[13], m[14]], center: [m[12] - m[8], m[13] - m[9], m[14] - m[10]], up: [m[4], m[5], m[6]] };
           }
           var said = description.camera || {};
@@ -7294,7 +7298,7 @@ public enum WallpaperEngineRuntime {
           if (inDepth && scriptedLook) return scriptedLook.eye;
           if (inDepth) {
             var shot = activeCamera();
-            if (shot) { var m = standing(shot, true).matrix; return [m[12], m[13], m[14]]; }
+            if (shot) { var m = cameraMatrix(shot); return [m[12], m[13], m[14]]; }
             var eye = numbers((description.camera || {}).eye, 3, 0);
             return (description.camera || {}).eye ? eye : [0, 0, 1];
           }
@@ -7305,6 +7309,84 @@ public enum WallpaperEngineRuntime {
             if (things[index].isCamera && showsAll(things[index])) return things[index];
           }
           return null;
+        }
+
+        // A camera's paths, as Wallpaper Engine's editor keeps them beside the scene
+        // (`scripts/camera_paths_<id>.json`): each a timeline of where the eye is, what it looks
+        // at, which way is up and how wide it sees, in the space of what the camera hangs on.
+        // The camera follows one path after another, in their order or at random as the camera
+        // says (`queuemode`); a path that plays once gives way to the next when it ends, one
+        // that loops or mirrors is followed for good.
+        function cameraPathsOf(name) {
+          if (typeof name !== 'string' || !name) return null;
+          var text = files[key(name)], said;
+          try { said = typeof text === 'string' ? JSON.parse(text) : null; } catch (error) { return null; }
+          var paths = (said && Array.isArray(said.paths) ? said.paths : []).filter(function (path) {
+            return path && path.visible !== false;
+          }).map(function (path) {
+            var options = path.options || {};
+            function curve(channels) {
+              if (Array.isArray(channels)) channels = { c0: channels };
+              if (!channels || typeof channels !== 'object') return null;
+              return curveOf({ c0: channels.c0, c1: channels.c1, c2: channels.c2, options: options });
+            }
+            var mode = String(options.mode || 'single').toLowerCase();
+            var rate = Number(options.fps) > 0 ? Number(options.fps) : 30;
+            return { eye: curve(path.eye), center: curve(path.center), up: curve(path.up), fov: curve(path.fov),
+                     ends: mode === 'single', seconds: Math.max(0, Number(options.length) || 0) / rate };
+          }).filter(function (path) { return path.eye && path.center; });
+          return paths.length ? paths : null;
+        }
+        // Chosen at random, the same way every time the scene plays, so that its pictures can
+        // be compared; never the same path twice in a row when there is another.
+        var pathLuck = 7;
+        function nextPath(shot, after) {
+          var count = shot.paths.length;
+          if (count < 2) return 0;
+          if (shot.pathOrder !== 'random') return after < 0 ? 0 : (after + 1) % count;
+          pathLuck = (pathLuck * 1103515245 + 12345) % 2147483648;
+          var pick = pathLuck % (after < 0 ? count : count - 1);
+          return after >= 0 && pick >= after ? pick + 1 : pick;
+        }
+        // Where the active camera's path has it on this frame — eye, centre, up and how wide it
+        // sees — and how dark the scene is while one path gives way to the next (`camerafade`);
+        // null for a camera without paths.
+        var PATH_FADE = 0.35; // seconds of darkening on each side of a change of path (not measured)
+        function pathLook(shot) {
+          if (!shot || !shot.paths) return null;
+          if (shot.pathFrame === frames && shot.pathLook) return shot.pathLook;
+          var play = shot.pathPlay;
+          if (!play || time < play.from) play = shot.pathPlay = { index: nextPath(shot, -1), from: time };
+          for (var guard = 0; guard < 256; guard++) {
+            var playing = shot.paths[play.index];
+            if (!playing.ends || !(playing.seconds > 0) || time - play.from < playing.seconds) break;
+            play.from += playing.seconds;
+            play.index = nextPath(shot, play.index);
+            play.changed = true;
+          }
+          var path = shot.paths[play.index], into = time - play.from;
+          var eye = path.eye(into, [0, 0, 0]), center = path.center(into, [0, 0, -1]);
+          var up = path.up ? path.up(into, [0, 1, 0]) : [0, 1, 0];
+          if (!(up[0] || up[1] || up[2])) up = [0, 1, 0];
+          var dark = 0;
+          if (shot.paths.length > 1 && flag(general.camerafade, true)) {
+            if (path.ends && path.seconds > 0) dark = Math.max(dark, 1 - (path.seconds - into) / PATH_FADE);
+            if (play.changed) dark = Math.max(dark, 1 - into / PATH_FADE);
+          }
+          shot.pathFrame = frames;
+          shot.pathLook = { eye: eye, center: center, up: up, fov: path.fov ? path.fov(into, [0])[0] : 0,
+                            dark: Math.max(0, Math.min(1, dark)) };
+          return shot.pathLook;
+        }
+        // Where a camera stands in the scene: on its path, if it has one, else where it is put.
+        function cameraMatrix(shot) {
+          var look = pathLook(shot);
+          if (!look) return standing(shot, true).matrix;
+          var seen = Mat4.lookAt(new Vec3(look.eye[0], look.eye[1], look.eye[2]), new Vec3(look.center[0], look.center[1], look.center[2]),
+                                 new Vec3(look.up[0], look.up[1], look.up[2])).m;
+          var own = m4invert(seen);
+          var parent = shot.parent !== undefined ? byId[String(shot.parent)] : null;
+          return parent && parent !== shot ? m4mul(standing(parent, true).matrix, own) : own;
         }
         function view() {
           if (viewOnce.frame === frames) return viewOnce;
@@ -8771,7 +8853,7 @@ public enum WallpaperEngineRuntime {
         function eyeBasis() {
           var eye = eyePlace(), shot = activeCamera();
           if (shot && !scriptedLook && !freeLook()) {
-            var m = standing(shot, true).matrix;
+            var m = cameraMatrix(shot);
             return { right: [m[0], m[1], m[2]], up: [m[4], m[5], m[6]], eye: eye };
           }
           var said = freeLook() || cameraLook();
@@ -11097,6 +11179,7 @@ public enum WallpaperEngineRuntime {
 
         var frames = 0;
 
+        var fadeWhite = null; // a white picture, darkened to black, for the camera's fade
         var keptWidth = 0; // the size of the picture kept from before, for a scene that does not clear it
         function draw() {
           gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
@@ -11147,6 +11230,14 @@ public enum WallpaperEngineRuntime {
             });
           });
           if (flag(general.bloom, false)) glow();
+          // Dark for a moment while the camera goes from one of its paths to the next.
+          var onPath = inDepth && !freeLook() ? pathLook(activeCamera()) : null;
+          if (onPath && onPath.dark > 0) {
+            fadeWhite = fadeWhite || flat(255, 255, 255, 255);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
+            gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
+            put(fadeWhite.layers[0], FILL, [0, 0, 0, onPath.dark], 'translucent');
+          }
           // Onto the canvas, turned over: the scene is kept with its top row first.
           gl.bindFramebuffer(gl.READ_FRAMEBUFFER, sceneTarget.framebuffer);
           gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
