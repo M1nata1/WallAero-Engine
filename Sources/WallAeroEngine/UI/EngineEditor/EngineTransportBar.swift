@@ -1,47 +1,62 @@
 import SwiftUI
 import WallpaperCore
 
-/// The scene's time, always under the scene, as Blender's timeline has it: a header with how
-/// it plays, the buttons to go through it, the frame it stands at and the part played; under it
-/// the frames, where the selected object's keys are marked and a drag goes along. The scene
-/// moves only by it: the editor opens with the scene standing at the start.
-struct EngineTransportBar: View {
-    @ObservedObject var model: EngineEditorModel
+/// The scene's time, always under the scene, as Blender's timeline has it: the moment, the
+/// buttons to go through it and the frame it stands at; under it the frames, where keys are
+/// marked and a drag goes along. A wallpaper plays without end, so the time has none. Shared
+/// by the editor of Wallpaper Engine's scenes and that of web wallpapers.
+struct SceneTimeBar: View {
+    /// What the bar shows and does.
+    struct Time {
+        var seconds: Double
+        var rate: Double
+        /// How much of the time the ruler shows.
+        var length: Double
+        var isPlaying: Bool
+        /// The moments marked on the ruler, up to a moment.
+        var keys: (Double) -> [Double] = { _ in [] }
+        var go: (Double) -> Void
+        var play: (Bool) -> Void
+        /// Going to the key before or after, where there are keys.
+        var jumpToKey: ((Bool) -> Void)?
+    }
+
+    let time: Time
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            EngineFrameRuler(model: model)
+            SceneFrameRuler(time: time)
         }
     }
 
-    private var rate: Double { model.timelineRate }
-
     private var header: some View {
         HStack(spacing: 10) {
-            Text(verbatim: Self.clock(model.timelineSeconds))
+            Text(verbatim: Self.clock(time.seconds))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .help("The moment of the scene")
             Spacer(minLength: 8)
             HStack(spacing: 2) {
-                Button { model.jumpToStart() } label: { Image(systemName: "backward.end.fill") }
+                Button { time.go(0) } label: { Image(systemName: "backward.end.fill") }
                     .help("Jump to Start (Shift ←)")
-                Button { model.jumpToKey(forward: false) } label: { Image(systemName: "backward.frame.fill") }
-                    .help("Previous Keyframe (↓)")
-                    .disabled(model.activeAnimation == nil)
-                Button { model.isPlaying.toggle() } label: {
-                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                if let jump = time.jumpToKey {
+                    Button { jump(false) } label: { Image(systemName: "backward.frame.fill") }
+                        .help("Previous Keyframe (↓)")
+                }
+                Button { time.play(!time.isPlaying) } label: {
+                    Image(systemName: time.isPlaying ? "pause.fill" : "play.fill")
                         .frame(width: 22)
                 }
-                .help(model.isPlaying ? "Pause (Space)" : "Play (Space)")
-                Button { model.jumpToKey(forward: true) } label: { Image(systemName: "forward.frame.fill") }
-                    .help("Next Keyframe (↑)")
-                    .disabled(model.activeAnimation == nil)
+                .help(time.isPlaying ? "Pause (Space)" : "Play (Space)")
+                if let jump = time.jumpToKey {
+                    Button { jump(true) } label: { Image(systemName: "forward.frame.fill") }
+                        .help("Next Keyframe (↑)")
+                }
             }
             .buttonStyle(.borderless)
             Spacer(minLength: 8)
-            frameField(Binding(get: { model.timelineSeconds * rate }, set: { model.timelineSeconds = max(0, $0) / rate }))
+            frameField(Binding(get: { time.seconds * time.rate }, set: { time.go(max(0, $0) / time.rate) }))
                 .help("Frame")
         }
         .font(.callout)
@@ -66,21 +81,32 @@ struct EngineTransportBar: View {
     }
 }
 
-/// The frames of the scene from its start to past the end played, numbered as Blender numbers
-/// them; the part played is lit, the selected object's keys are marked, and the frame the scene
-/// stands at is boxed with its number. A drag goes along it.
-private struct EngineFrameRuler: View {
+/// The time bar of a Wallpaper Engine scene: the keys marked are the selected object's.
+struct EngineTransportBar: View {
     @ObservedObject var model: EngineEditorModel
+
+    var body: some View {
+        SceneTimeBar(time: .init(seconds: model.timelineSeconds, rate: model.timelineRate, length: model.playLength,
+                                 isPlaying: model.isPlaying, keys: { model.keyMoments(upTo: $0) },
+                                 go: { model.timelineSeconds = $0 }, play: { model.isPlaying = $0 },
+                                 jumpToKey: model.activeAnimation == nil ? nil : { model.jumpToKey(forward: $0) }))
+    }
+}
+
+/// The frames of the scene from its start, numbered as Blender numbers them; keys are marked,
+/// and the frame the scene stands at is boxed with its number. A drag goes along it.
+struct SceneFrameRuler: View {
+    let time: SceneTimeBar.Time
     static let height: CGFloat = 40
     @State private var dragFrames: Double?
 
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            let rate = model.timelineRate
+            let rate = time.rate
             let margin: CGFloat = 16
             // While dragged, the ruler keeps the length it had: it would grow under the pointer.
-            let frames = dragFrames ?? max(model.playLength * rate, 2)
+            let frames = dragFrames ?? max(time.length * rate, 2)
             Canvas { context, size in
                 func x(_ frame: Double) -> CGFloat { margin + CGFloat(frame / frames) * (size.width - margin * 2) }
                 // A number every so many frames, as many as have room.
@@ -97,7 +123,7 @@ private struct EngineFrameRuler: View {
                     frame += step
                 }
                 // The selected object's keys, each round of its animations as the scene plays them.
-                for seconds in model.keyMoments(upTo: frames / rate) {
+                for seconds in time.keys(frames / rate) {
                     let at = x(seconds * rate), r: CGFloat = 4, y = size.height - 10
                     var diamond = Path()
                     diamond.move(to: CGPoint(x: at, y: y - r))
@@ -107,7 +133,7 @@ private struct EngineFrameRuler: View {
                     diamond.closeSubpath()
                     context.fill(diamond, with: .color(.primary.opacity(0.7)))
                 }
-                let current = (model.timelineSeconds * rate).rounded()
+                let current = (time.seconds * rate).rounded()
                 let head = x(min(current, frames))
                 var line = Path()
                 line.move(to: CGPoint(x: head, y: 16))
@@ -123,7 +149,7 @@ private struct EngineFrameRuler: View {
                 .onChanged { drag in
                     if dragFrames == nil { dragFrames = frames }
                     let share = Double((drag.location.x - margin) / max(width - margin * 2, 1))
-                    model.timelineSeconds = (max(0, min(1, share)) * frames).rounded() / rate
+                    time.go((max(0, min(1, share)) * frames).rounded() / rate)
                 }
                 .onEnded { _ in dragFrames = nil })
         }

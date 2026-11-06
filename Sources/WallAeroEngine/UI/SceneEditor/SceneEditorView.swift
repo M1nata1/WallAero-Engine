@@ -15,22 +15,18 @@ struct SceneEditorView: View {
             .frame(minHeight: 600)
     }
 
-    /// The three parts are the system's own sidebar, content and side panel where it has them
-    /// for a window like this (macOS 14), and three columns under a line of buttons before that.
+    /// Laid out as Blender is, as the editor of Wallpaper Engine's scenes: the workspaces'
+    /// tabs, the page with its header and view controls and its time under it; on the right the
+    /// layers and variables over the properties.
     @ViewBuilder
     private var layout: some View {
         if #available(macOS 14.0, *) {
-            NavigationSplitView(columnVisibility: .constant(.all)) {
-                LayerList(model: model)
+            NavigationSplitView(columnVisibility: .constant(.detailOnly)) {
+                Color.clear
                     .toolbar(removing: .sidebarToggle)
-                    .navigationSplitViewColumnWidth(min: 210, ideal: 210, max: 320)
             } detail: {
-                canvas
+                middle
                     .toolbar {
-                        ToolbarItemGroup {
-                            addLayerMenu
-                            addVariableMenu
-                        }
                         ToolbarItemGroup {
                             undoButton
                             redoButton
@@ -38,8 +34,8 @@ struct SceneEditorView: View {
                     }
             }
             .inspector(isPresented: .constant(true)) {
-                SceneInspector(model: model)
-                    .inspectorColumnWidth(340)
+                side
+                    .inspectorColumnWidth(min: 300, ideal: 360, max: 460)
                     .toolbar {
                         Spacer()
                         showFolderButton
@@ -48,10 +44,6 @@ struct SceneEditorView: View {
         } else {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
-                    addLayerMenu
-                        .fixedSize()
-                    addVariableMenu
-                        .fixedSize()
                     undoButton
                     redoButton
                     Spacer()
@@ -62,21 +54,56 @@ struct SceneEditorView: View {
                 .padding(.vertical, 8)
                 Divider()
                 HStack(spacing: 0) {
-                    LayerList(model: model)
-                        .frame(width: 210)
+                    middle
                     Divider()
-                    canvas
-                    Divider()
-                    SceneInspector(model: model)
-                        .frame(width: 340)
+                    side.frame(width: 360)
                 }
             }
         }
     }
 
-    private var canvas: some View {
-        SceneEditorPreview(controller: preview)
-            .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+    private var side: some View {
+        VSplitView {
+            LayerList(model: model)
+                .frame(minHeight: 140, idealHeight: 300)
+            SceneInspector(model: model)
+                .frame(minHeight: 240, idealHeight: 500)
+        }
+    }
+
+    private var middle: some View {
+        VStack(spacing: 0) {
+            SceneWorkspaceTabs(model: model)
+            Divider()
+            if model.workspace == .scripting {
+                HSplitView {
+                    viewport
+                        .frame(minWidth: 300, idealWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+                    WebCodeEditor(model: model)
+                        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                viewport
+            }
+        }
+        .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+        .bottomBar {
+            VStack(spacing: 0) {
+                SceneTimeBar(time: .init(seconds: model.timelineSeconds, rate: model.timelineRate, length: model.playLength,
+                                         isPlaying: model.isPlaying, go: { model.timelineSeconds = $0 },
+                                         play: { model.isPlaying = $0 }))
+            }
+        }
+    }
+
+    private var viewport: some View {
+        VStack(spacing: 0) {
+            WebViewportHeader(model: model, addLayerMenu: addLayerMenu, addVariableMenu: addVariableMenu)
+            Divider()
+            SceneEditorPreview(controller: preview, model: model)
+                .overlay(alignment: .topLeading) { WebViewportCaption(model: model).padding(12) }
+                .overlay(alignment: .topTrailing) { WebNavigationGizmo(model: model) }
+        }
     }
 
     // MARK: - Tools

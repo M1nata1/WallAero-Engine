@@ -57,6 +57,9 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
     // The scene editor shows its preview with this view too. These are set before `show`.
     /// A script added to the page after its own; its `wallaeroEditor` messages go to `onEditorMessage`.
     var editorScript: String?
+    /// Set before `show` in the editor: the page's time is then the editor's timeline's, see
+    /// `editorClockScript`.
+    var followsEditorClock = false
     var onEditorMessage: (([String: Any]) -> Void)?
     /// The editor owns the scene and pushes it to the page itself. When this is set, a change of
     /// the scene file is reported here instead of being shown.
@@ -417,6 +420,11 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
             CEFUserScript(source: source, atDocumentEnd: false, mainFrameOnly: true),
             CEFUserScript(source: Self.frameScript, atDocumentEnd: false, mainFrameOnly: false),
         ]
+        if followsEditorClock {
+            // Before anything of the page's, in every frame, so that all it asks the time of is
+            // the editor's.
+            scripts.insert(CEFUserScript(source: Self.editorClockScript, atDocumentEnd: false, mainFrameOnly: false), at: 0)
+        }
         if let editorScript {
             scripts.append(CEFUserScript(source: editorScript, atDocumentEnd: true, mainFrameOnly: true))
         }
@@ -748,6 +756,239 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
     })();
     """#
 
+    /// The page loaded anew, as the editor asks when its timeline goes back in time.
+    func reloadForEditor() {
+        reloadPage()
+    }
+
+    /// In the editor, before anything else, in the page and every page in a frame of it: the
+    /// page's time is the timeline's. The time it is told (`performance.now`, `Date`), the frames
+    /// it draws, its timers, its animations written in CSS and its videos all go by a clock the
+    /// editor holds still, lets run, or takes on to a moment a thirtieth of a second at a time;
+    /// chance comes the same from the start each time. The editor's own scripts keep the real
+    /// ones, as `__wallaeroReal`. Timers already due still run while the clock stands: a page
+    /// waits on them as it loads.
+    private static let editorClockScript = #"""
+    (function () {
+      if (window.__wallaeroClock) return;
+      var real = {
+        requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
+        setTimeout: window.setTimeout.bind(window), clearTimeout: window.clearTimeout.bind(window),
+        setInterval: window.setInterval.bind(window), clearInterval: window.clearInterval.bind(window),
+        now: performance.now.bind(performance), Date: window.Date, random: Math.random
+      };
+      window.__wallaeroReal = real;
+      // The pages in frames are told by messages: a frame's page may be of another origin to
+      // the one above it, which then cannot reach into it.
+      var top = window.parent === window;
+      // In milliseconds, as the page counts. A page in a frame starts from nought too, held, and
+      // once loaded asks the one above where it is, to go on there as if it had been all along.
+      var clock = { time: 0, held: true };
+      var epoch = real.Date.now();
+      if (!top) {
+        window.addEventListener('load', function () {
+          window.parent.postMessage({ __wallaeroClock: { op: 'hello' } }, '*');
+        });
+      }
+      var state = 0x2545F491;
+      var counts = { randoms: 0, steps: 0, frames: 0, timers: 0 };
+      Math.random = function () {
+        counts.randoms++;
+        state = (state + 0x6D2B79F5) | 0;
+        var t = Math.imul(state ^ (state >>> 15), 1 | state);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+      performance.now = function () { return clock.time; };
+      var RealDate = real.Date;
+      function ClockDate() {
+        if (!(this instanceof ClockDate)) return new RealDate(epoch + clock.time).toString();
+        if (arguments.length === 0) return new RealDate(epoch + clock.time);
+        return new (Function.prototype.bind.apply(RealDate, [null].concat(Array.prototype.slice.call(arguments))))();
+      }
+      ClockDate.prototype = RealDate.prototype;
+      ClockDate.now = function () { return epoch + clock.time; };
+      ClockDate.UTC = RealDate.UTC;
+      ClockDate.parse = RealDate.parse;
+      window.Date = ClockDate;
+
+      // The sound the Mac plays reaches the page only while it plays: what comes in at any odd
+      // moment would make one moment of the timeline come out another each time.
+      var hearing = null;
+      try {
+        Object.defineProperty(window, 'wallpaperRegisterAudioListener', {
+          configurable: true,
+          get: function () { return hearing; },
+          set: function (register) {
+            hearing = typeof register !== 'function' ? register : function (listener) {
+              return register(function (levels) { if (!clock.held) listener(levels); });
+            };
+          }
+        });
+      } catch (error) {}
+
+      var timers = [], lastTimer = 0;
+      function timer(callback, wait, args, repeats) {
+        if (typeof callback !== 'function') {
+          var code = String(callback);
+          callback = function () { (0, eval)(code); };
+        }
+        var every = Math.max(0, Number(wait) || 0);
+        timers.push({ id: ++lastTimer, due: clock.time + every, every: repeats ? Math.max(1, every) : 0, callback: callback, args: args });
+        return lastTimer;
+      }
+      window.setTimeout = function (callback, wait) { return timer(callback, wait, Array.prototype.slice.call(arguments, 2), false); };
+      window.setInterval = function (callback, wait) { return timer(callback, wait, Array.prototype.slice.call(arguments, 2), true); };
+      window.clearTimeout = window.clearInterval = function (id) {
+        timers = timers.filter(function (each) { return each.id !== id; });
+      };
+      function report(error) { real.setTimeout(function () { throw error; }); }
+      function runDue() {
+        for (var guard = 0; guard < 10000; guard++) {
+          var next = null;
+          timers.forEach(function (each) { if (each.due <= clock.time && (!next || each.due < next.due)) next = each; });
+          if (!next) return;
+          if (next.every) next.due += next.every; else timers.splice(timers.indexOf(next), 1);
+          counts.timers++;
+          try { next.callback.apply(window, next.args); } catch (error) { report(error); }
+        }
+      }
+      var frames = new Map(), lastFrame = 0;
+      window.requestAnimationFrame = function (callback) { frames.set(++lastFrame, callback); return lastFrame; };
+      window.cancelAnimationFrame = function (id) { frames.delete(id); };
+      function runFrames() {
+        var due = frames;
+        frames = new Map();
+        counts.frames += due.size;
+        due.forEach(function (callback) { try { callback(clock.time); } catch (error) { report(error); } });
+      }
+      // Animations written in CSS, and videos, stand at the page's moment: each from when it
+      // was first seen.
+      function settle() {
+        if (document.getAnimations) {
+          document.getAnimations().forEach(function (animation) {
+            if (animation.__wallaeroBorn === undefined) animation.__wallaeroBorn = clock.time;
+            try {
+              if (animation.playState !== 'paused') animation.pause();
+              animation.currentTime = clock.time - animation.__wallaeroBorn;
+            } catch (error) {}
+          });
+        }
+        Array.prototype.forEach.call(document.querySelectorAll('video, audio'), function (media) {
+          if (media.__wallaeroBorn === undefined) media.__wallaeroBorn = clock.time;
+          var length = media.duration;
+          if (clock.held) {
+            if (!media.paused) media.pause();
+            var at = length > 0 && isFinite(length) ? ((clock.time - media.__wallaeroBorn) / 1000) % length : 0;
+            if (Math.abs(media.currentTime - at) > 0.04) media.currentTime = at;
+            media.__wallaeroHeld = true;
+          } else if (media.__wallaeroHeld) {
+            media.__wallaeroHeld = false;
+            var playing = media.play();
+            if (playing && playing.catch) playing.catch(function () {});
+          }
+        });
+      }
+      function goOn(by) {
+        counts.steps++;
+        clock.time += by;
+        runDue();
+        settle();
+        runFrames();
+      }
+      function below(said) {
+        for (var i = 0; i < window.frames.length; i++) {
+          try { window.frames[i].postMessage({ __wallaeroClock: said }, '*'); } catch (error) {}
+        }
+      }
+      // To the editor, from the page at the top; a page in a frame hands it up.
+      function up(said) {
+        if (!top) { window.parent.postMessage({ __wallaeroClock: { op: 'up', said: said } }, '*'); return; }
+        try { window.webkit.messageHandlers.wallaeroEditor.postMessage(said); } catch (error) {}
+      }
+      window.addEventListener('message', function (event) {
+        var said = event.data && event.data.__wallaeroClock;
+        if (!said || typeof said !== 'object') return;
+        var api = window.__wallaeroClock;
+        if (said.op === 'hello') {
+          try { event.source.postMessage({ __wallaeroClock: { op: 'sync', time: clock.time / 1000, held: clock.held, epoch: epoch } }, '*'); } catch (error) {}
+        } else if (said.op === 'up') {
+          up(said.said);
+        } else if (event.source === window.parent && said.op === 'sync') {
+          epoch = said.epoch;
+          if (said.time > 0) api.goTo(said.time);
+          api.hold(said.held);
+        } else if (event.source === window.parent && said.op === 'hold') {
+          api.hold(said.held);
+        } else if (event.source === window.parent && said.op === 'goTo') {
+          api.goTo(said.seconds);
+        } else if (event.source === window.parent && said.op === 'counts') {
+          api.counts();
+        }
+      });
+      var draws = true, before = null, told = 0;
+      function tell() {
+        // The editor learns the moment from the page at the top, as it plays.
+        if (top) up({ type: 'clock', time: clock.time / 1000, held: clock.held });
+      }
+      function pump(now) {
+        real.requestAnimationFrame(pump);
+        if (clock.held) {
+          before = null;
+          runDue();
+          if (draws) { draws = false; settle(); runFrames(); }
+          return;
+        }
+        var by = before === null ? 0 : Math.min(100, now - before);
+        before = now;
+        goOn(by);
+        if (now - told > 66) { told = now; tell(); }
+      }
+      real.requestAnimationFrame(pump);
+      // A page made larger or smaller while it stands draws itself again at the same moment.
+      window.addEventListener('resize', function () { draws = true; });
+      window.__wallaeroClock = {
+        time: function () { return clock.time / 1000; },
+        // What has gone on so far in each page, told to the editor: for looking into why two
+        // ways to one moment differ.
+        counts: function () {
+          up({ type: 'counts', counts: JSON.stringify({ at: location.pathname.split('/').slice(-2).join('/'), time: clock.time, held: clock.held, counts: counts }) });
+          below({ op: 'counts' });
+        },
+        hold: function (held) {
+          clock.held = !!held;
+          before = null;
+          settle();
+          below({ op: 'hold', held: !!held });
+          tell();
+        },
+        // On to a moment, in seconds, as the page would have played up to it; false for one gone
+        // by, which only loading the page anew comes back to.
+        goTo: function (seconds) {
+          var target = Number(seconds) * 1000;
+          if (!isFinite(target)) return false;
+          if (target < clock.time - 0.5) return false;
+          // Frame by frame on a grid of thirtieths from the start, the same however the moment
+          // is come to: a page that draws, or takes chance, once a frame would come out another
+          // after a sliver of a frame more.
+          var step = 1000 / 30, since = real.now();
+          while (clock.time < target - 0.001) {
+            var next = Math.min(target, (Math.floor(clock.time / step + 1e-6) + 1) * step);
+            if (Math.abs(next - target) < 0.001) next = target;
+            goOn(next - clock.time);
+            clock.time = next;
+            // A page too heavy to go on so quickly gets there in one step.
+            if (real.now() - since > 3000 && clock.time < target) { goOn(target - clock.time); clock.time = target; }
+          }
+          draws = true;
+          below({ op: 'goTo', seconds: seconds });
+          tell();
+          return true;
+        }
+      };
+    })();
+    """#
+
     /// Runs first, in the page and in every page in a frame of it. Keeps what the page's scripts
     /// draw within the frame rate and the density the app allows.
     ///
@@ -950,21 +1191,13 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
     }
 
     /// Loads the page anew, from its files as they are now, behind a picture of how it looked.
+    /// It is made anew in a new browser: loaded again in the same one, the page in a frame of it
+    /// — a web wallpaper's own page — had none of the app's scripts, so drew at any frame rate
+    /// and density, and in the editor kept its own time.
     private func reloadPage() {
-        guard let project, let webView, let reread = WebProject(folder: project.folder) else { return }
-        self.project = reread
-        installUserScripts(in: webView, for: reread)
-        hasLoaded = false
-        pageWantsSound = false
-        pageWantsMedia = false
-        updateListening()
-        beginLoading()
-        coverWhileLoading()
-        webView.pageHidden = false
-        isFrozen = false
-        freezeGeneration += 1
-        webView.readableFolders = [reread.folder.path]
-        webView.load(reread.entryURL)
+        guard let project, let reread = WebProject(folder: project.folder) else { return }
+        let picture = still()
+        show(reread, backdrop: picture, watchingForChanges: watcher != nil)
     }
 }
 

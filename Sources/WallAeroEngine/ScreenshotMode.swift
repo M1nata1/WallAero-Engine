@@ -1057,6 +1057,17 @@ enum ScreenshotMode {
                 preview.view.evaluate(script)
                 try? await Task.sleep(nanoseconds: 600_000_000)
             }
+            // `--web-clock-test <dir>`: the page stands, goes on, back, plays; `--web-workspace scripting`.
+            if let folder = values(of: "--web-clock-test").last {
+                await webClockTest(model, preview, into: URL(fileURLWithPath: folder, isDirectory: true))
+            }
+            if values(of: "--web-workspace").last == "scripting" {
+                model.workspace = .scripting
+                model.findCodeFiles()
+            }
+            if values(of: "--web-view").last == "card" {
+                model.setViewIn3D(true)
+            }
             for kind in values(of: "--add").compactMap(WallpaperScene.Layer.Kind.init(rawValue:)) {
                 model.addLayer(kind)
                 try? await Task.sleep(nanoseconds: 400_000_000)
@@ -1186,6 +1197,11 @@ enum ScreenshotMode {
             }
             // `--timeline`, `--curves`: the timeline open, on its keys or on its curves.
             model.showsTimeline = CommandLine.arguments.contains("--timeline")
+            // `--workspace <layout|animation|scripting>`: the editor on that tab.
+            if let name = values(of: "--workspace").last,
+               let workspace = EngineEditorModel.Workspace.allCases.first(where: { $0.title.lowercased() == name }) {
+                model.workspace = workspace
+            }
             model.timelineCurves = CommandLine.arguments.contains("--curves")
             // `--effect-switch <effect> <name> <value>`: a switch of an effect of the selection set.
             if let index = CommandLine.arguments.firstIndex(of: "--effect-switch"), index + 3 < CommandLine.arguments.count,
@@ -1634,6 +1650,43 @@ enum ScreenshotMode {
             print("aligned: \(String(describing: model.cameraView?.look)), free \(model.viewsFreely)")
             await shoot("aligned")
         }
+    }
+
+    private static func webClockTest(_ model: SceneEditorModel, _ preview: SceneEditorPreviewController, into folder: URL) async {
+        func pause(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        @MainActor func shoot(_ name: String) async {
+            await pause(1.2)
+            print("shot \(name):")
+            preview.view.evaluate("window.__wallaeroClock.counts()")
+            await pause(0.2)
+            guard let image = await preview.view.snapshot() else { return print("\(name): no picture") }
+            let url = folder.appendingPathComponent(name + ".png")
+            if let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) {
+                CGImageDestinationAddImage(destination, image, nil)
+                CGImageDestinationFinalize(destination)
+            }
+        }
+        await shoot("start")
+        await shoot("start-later")
+        model.timelineSeconds = 3
+        await shoot("at3-direct")
+        model.timelineSeconds = 1
+        await pause(2)
+        await shoot("at1")
+        model.timelineSeconds = 2
+        model.timelineSeconds = 3
+        await shoot("at3-stepped")
+        model.timelineSeconds = 0.5
+        await pause(2)
+        model.timelineSeconds = 3
+        await shoot("at3-again")
+        model.isPlaying = true
+        await pause(2)
+        print("web: playing 2 s from 3: timeline \(model.timelineSeconds)")
+        model.isPlaying = false
+        await pause(0.5)
+        print("web: stopped at \(model.timelineSeconds)")
     }
 
     private static func curveCheck(_ model: EngineEditorModel, _ preview: EngineEditorPreviewController) {

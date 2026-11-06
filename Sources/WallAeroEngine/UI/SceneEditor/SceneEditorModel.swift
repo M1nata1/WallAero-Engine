@@ -38,6 +38,31 @@ final class SceneEditorModel: ObservableObject {
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
 
+    // The editor's time and view, as the editor of Wallpaper Engine's scenes has them (see
+    // SceneEditorTime.swift), and the page's code.
+    @Published var workspace = Workspace.layout
+    @Published var isPlaying = false {
+        didSet { if isPlaying != oldValue { playingDidChange() } }
+    }
+    /// The page's moment, in seconds: the timeline's.
+    @Published var timelineSeconds = 0.0 {
+        didSet { if timelineSeconds != oldValue, !followsPlayback { preview?.show(moment: timelineSeconds) } }
+    }
+    var followsPlayback = false
+    var playedFrom = 0.0
+    var stopping = false
+    @Published var viewsFreely = false
+    @Published var viewIn3D = false
+    @Published var cardTurn = CGSize(width: -25, height: 15)
+    @Published var viewZoom: CGFloat = 1
+    @Published var viewPan = CGSize.zero
+    /// The page's files that can be written, the one open, and what is typed of it.
+    @Published var codeFiles: [String] = []
+    @Published var codeFile: String?
+    @Published var codeDraft = ""
+    @Published var codeSaved = ""
+    @Published var codeProblem: String?
+
     /// Called after the scene was written to disk.
     var onSave: (() -> Void)?
     weak var preview: SceneEditorPreviewController?

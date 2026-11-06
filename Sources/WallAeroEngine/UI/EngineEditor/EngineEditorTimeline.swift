@@ -145,7 +145,6 @@ extension EngineEditorModel {
             animation.setKey(frame: frame, channel: channel, value: new[channel] - (animation.isRelative ? base[channel] : 0))
         }
         document.setAnimation(animation, of: id, target)
-        if !showsTimeline { showsTimeline = true }
         return true
     }
 

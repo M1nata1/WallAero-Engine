@@ -1142,3 +1142,12 @@
 "User Orthographic" = "Свободная ортография";
 "2D: the free view moves and zooms, flat. Off: it turns about in depth." = "2D: свободный вид только сдвигается и приближается, без перспективы. Выключено: вид можно вращать в объёме.";
 "The moment of the scene" = "Момент сцены";
+
+/* Web wallpapers in the editor */
+"Files" = "Файлы";
+"Save" = "Сохранить";
+"This file is not text the editor can read." = "Этот файл не текстовый, редактор не может его открыть.";
+"Not written yet" = "Не сохранено";
+"Write the file; the page loads anew at the timeline's moment (⌘S)" = "Сохранить файл; страница перезагрузится в текущий момент таймлайна (⌘S)";
+"This wallpaper has no code of its own to write." = "У этих обоев нет своего кода, который можно править.";
+"Look at the page as the wallpaper shows it, or freely (0)" = "Смотреть на страницу так, как покажут обои, или свободно (0)";

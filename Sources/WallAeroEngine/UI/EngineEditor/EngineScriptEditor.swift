@@ -237,6 +237,8 @@ extension EngineEditorModel {
 /// The panel of scripts, under the scene: those of the selection, the one open, and its settings.
 struct EngineScriptPanel: View {
     @ObservedObject var model: EngineEditorModel
+    /// In the Scripting workspace the panel takes all the height there is.
+    var fillsHeight = false
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -265,7 +267,8 @@ struct EngineScriptPanel: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(height: 320)
+        .frame(height: fillsHeight ? nil : 320)
+        .frame(maxHeight: fillsHeight ? .infinity : nil)
         .onReceive(timer) { _ in model.readScriptReport() }
     }
 

@@ -313,7 +313,7 @@ final class EngineEditorPreviewController {
         case 14: return pick(.addBone)
         case 53 where overlay != nil && model.mode.tools.first != nil && model.tool != model.mode.tools.first:
             model.tool = model.mode.tools[0]
-        case 17 where overlay != nil: model.showsTimeline.toggle()
+        case 17 where overlay != nil: model.workspace = model.workspace == .animation ? .layout : .animation
         case 4:
             guard let selection = model.selection else { return false }
             model.toggleVisibility(of: selection)
@@ -531,6 +531,10 @@ final class EngineEditorPreviewController {
         guard let model else { return false }
         let keys = event.modifierFlags.intersection([.command, .control, .option, .shift])
         switch (event.keyCode, keys) {
+        case (116, [.control]), (121, [.control]):       // Page Up, Page Down
+            let all = EngineEditorModel.Workspace.allCases
+            let at = all.firstIndex(of: model.workspace) ?? 0
+            model.workspace = all[(at + (event.keyCode == 121 ? 1 : all.count - 1)) % all.count]
         case (49, []): model.isPlaying.toggle()
         case (53, []) where model.isPlaying: model.cancelPlaying()
         case (123, [.shift]): model.jumpToStart()
