@@ -103,7 +103,43 @@ struct EngineEditorView: View {
         }
     }
 
+    /// The workspaces' tabs over what each shows: the scene, with the keys under it in
+    /// Animation, beside the scripts in Scripting; the scene's time under them all.
     private var middle: some View {
+        VStack(spacing: 0) {
+            if preview.drawsNatively {
+                EngineWorkspaceTabs(model: model)
+                Divider()
+            }
+            if model.workspace == .scripting {
+                HSplitView {
+                    viewport
+                        .frame(minWidth: 300, idealWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+                    EngineScriptPanel(model: model, fillsHeight: true)
+                        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                viewport
+            }
+        }
+        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+        .bottomBar {
+            VStack(spacing: 0) {
+                if model.workspace == .animation {
+                    EngineTimelineView(model: model)
+                    Divider()
+                }
+                if preview.drawsNatively {
+                    EngineTransportBar(model: model)
+                    Divider()
+                }
+                statusLine
+            }
+        }
+    }
+
+    /// The scene with its header, and the tools and view controls on it.
+    private var viewport: some View {
         let size = model.document.size
         return VStack(spacing: 0) {
             if preview.drawsNatively {
@@ -125,24 +161,6 @@ struct EngineEditorView: View {
                     if preview.drawsNatively { EngineNavigationGizmo(model: model) }
                 }
         }
-        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-        .bottomBar {
-            VStack(spacing: 0) {
-                if model.showsTimeline {
-                    EngineTimelineView(model: model)
-                    Divider()
-                }
-                if model.showsScripts {
-                    EngineScriptPanel(model: model)
-                    Divider()
-                }
-                if preview.drawsNatively {
-                    EngineTransportBar(model: model)
-                    Divider()
-                }
-                statusLine
-            }
-        }
     }
 
     /// The panels under the scene, and how the scene is shown. What a tool does is said when the
@@ -150,20 +168,6 @@ struct EngineEditorView: View {
     private var statusLine: some View {
         HStack(spacing: SystemLook.barSpacing) {
             Spacer(minLength: SystemLook.barSpacing)
-            if preview.drawsNatively {
-                Toggle(isOn: $model.showsTimeline) {
-                    Label("Timeline", systemImage: "timeline.selection")
-                }
-                .toggleStyle(.button)
-                .barButtonStyle()
-                .help("Timeline (T)")
-                Toggle(isOn: $model.showsScripts) {
-                    Label("Scripts", systemImage: "curlybraces")
-                }
-                .toggleStyle(.button)
-                .barButtonStyle()
-                .help("Scripts of the selection")
-            }
             Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
                 .foregroundStyle(.secondary)
                 .monospacedDigit()

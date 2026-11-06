@@ -7,7 +7,37 @@ struct EngineViewportHeader<Add: View>: View {
     @ObservedObject var model: EngineEditorModel
     let addMenu: Add
 
+    /// All of it where there is room; where there is not, as in Scripting's narrow column, the
+    /// mode, the view and how it is looked at.
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            full
+            compact
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+    }
+
+    private var compact: some View {
+        HStack(spacing: 10) {
+            EngineModeMenu(model: model)
+                .menuStyle(.borderlessButton)
+                .labelStyle(.iconOnly)
+            viewMenu
+            Spacer(minLength: 4)
+            Picker("", selection: Binding(get: { model.viewsFreely }, set: { model.setViewsFreely($0) })) {
+                Image(systemName: "video").tag(false)
+                Image(systemName: "move.3d").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Look through the scene's camera, as the wallpaper shows it, or freely (0)")
+        }
+    }
+
+    private var full: some View {
         HStack(spacing: 14) {
             EngineModeMenu(model: model)
                 .menuStyle(.borderlessButton)
@@ -43,9 +73,6 @@ struct EngineViewportHeader<Add: View>: View {
             .fixedSize()
             .help("Look through the scene's camera, as the wallpaper shows it, or freely (0)")
         }
-        .font(.callout)
-        .padding(.horizontal, 12)
-        .frame(height: 34)
     }
 
     private var viewMenu: some View {
@@ -61,8 +88,9 @@ struct EngineViewportHeader<Add: View>: View {
                     .disabled(!model.canAlignCamera)
             }
             Divider()
-            Toggle("Timeline", isOn: $model.showsTimeline)
-            Toggle("Scripts", isOn: $model.showsScripts)
+            Picker("Workspace", selection: $model.workspace) {
+                ForEach(EngineEditorModel.Workspace.allCases, id: \.self) { Text(verbatim: $0.title).tag($0) }
+            }
             Divider()
             Button(model.isPlaying ? "Pause" : "Play") { model.isPlaying.toggle() }
             Button("Jump to Start") { model.jumpToStart() }

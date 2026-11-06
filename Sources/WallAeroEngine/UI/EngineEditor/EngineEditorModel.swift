@@ -107,15 +107,38 @@ final class EngineEditorModel: ObservableObject {
     /// Whether the properties are the scene's while an object is selected, as a scene's tab of
     /// Blender's properties shows it whatever is selected.
     @Published var showsSceneProperties = false
-    /// Whether the timeline is open under the scene; the scene then stands at its moment.
-    /// The panel of scripts under the scene; it and the timeline take turns there.
+    /// The workspace on show, as Blender's tabs at the top: the scene to lay out, its
+    /// animations' keys and curves, or its scripts.
+    @Published var workspace = Workspace.layout {
+        didSet {
+            guard workspace != oldValue else { return }
+            showsTimeline = workspace == .animation
+            showsScripts = workspace == .scripting
+        }
+    }
+
+    enum Workspace: CaseIterable {
+        case layout, animation, scripting
+
+        var title: String {
+            switch self {
+            case .layout: return "Layout"
+            case .animation: return "Animation"
+            case .scripting: return "Scripting"
+            }
+        }
+    }
+
+    /// Whether the scripts are open: the Scripting workspace.
     @Published var showsScripts = false {
         didSet {
             guard showsScripts != oldValue else { return }
             if showsScripts {
                 showsTimeline = false
+                workspace = .scripting
                 openScript(scriptTargets.first)
             } else {
+                if workspace == .scripting { workspace = .layout }
                 openScript(nil)
             }
         }
@@ -131,11 +154,17 @@ final class EngineEditorModel: ObservableObject {
     var scriptDrafts: [WallpaperEngineScriptTarget: String] = [:]
     var scriptValueTask: Task<Void, Never>?
     weak var scriptView: EngineScriptTextView?
-    /// Whether the keys and curves of the timeline are open under the scene.
+    /// Whether the keys and curves of the timeline are open under the scene: the Animation
+    /// workspace.
     @Published var showsTimeline = false {
         didSet {
             guard showsTimeline != oldValue else { return }
-            if showsTimeline { showsScripts = false }
+            if showsTimeline {
+                showsScripts = false
+                workspace = .animation
+            } else if workspace == .animation {
+                workspace = .layout
+            }
             showRig()
         }
     }
