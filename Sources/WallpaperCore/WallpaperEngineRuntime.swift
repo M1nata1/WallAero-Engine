@@ -1828,7 +1828,7 @@ public enum WallpaperEngineRuntime {
                     'cursorEnter', 'cursorLeave', 'cursorMove', 'cursorDown', 'cursorUp', 'cursorClick',
                     'mediaStatusChanged', 'mediaPropertiesChanged', 'mediaThumbnailChanged', 'mediaPlaybackChanged', 'mediaTimelineChanged',
                     'animationEvent'];
-      var KEPT_AWAY = ['window', 'document', 'globalThis', 'self', 'top', 'parent', 'frames', 'opener', 'fetch', 'XMLHttpRequest',
+      var KEPT_AWAY = ['window', 'document', 'self', 'top', 'parent', 'frames', 'opener', 'fetch', 'XMLHttpRequest',
                        'WebSocket', 'EventSource', 'Worker', 'navigator', 'location', 'history', 'indexedDB', 'sessionStorage',
                        'caches', 'eval', 'Function', 'open', 'postMessage', 'webkit'];
       function scriptBody(source) {
@@ -1847,10 +1847,19 @@ public enum WallpaperEngineRuntime {
         var tail = '\n;return {' + EVENTS.map(function (name) {
           return name + ': typeof ' + name + ' === "function" ? ' + name + ' : null';
         }).join(', ') + '};';
-        return 'return (function () {\n"use strict";\n' + text + tail + '\n}).call(undefined);';
+        // In Wallpaper Engine the scripts of a scene run in one context: what one puts on
+        // `globalThis` another reads, there or by its bare name (3800262433's lights and
+        // brightness, `globalThis.stageBri` here, `personBri` there). Here each scene has one
+        // such object of its own, without the page's names, seen through `with`.
+        // Only in a scene that uses it: names looked up through `with` cost scripts their speed.
+        var open = SCRIPTS_SHARE_GLOBAL ? 'with (globalThis) { ' : '', close = SCRIPTS_SHARE_GLOBAL ? ' }' : '';
+        return open + 'return (function () {\n"use strict";\n' + text + tail + '\n}).call(undefined);' + close;
       }
-      function compileScript(source, names, values) {
-        return Function.apply(null, names.concat(['__modules'], KEPT_AWAY, [scriptBody(source)])).apply(null, values.concat([MODULES]));
+      var SCRIPT_GLOBAL = Object.create(null);
+      var SCRIPTS_SHARE_GLOBAL = false;
+      function compileScript(source, names, values, own) {
+        return Function.apply(null, names.concat(['__modules', 'globalThis'], KEPT_AWAY, [scriptBody(source)]))
+          .apply(null, values.concat([MODULES, own || SCRIPT_GLOBAL]));
       }
 
       // The line of the script's own text an error stands on: what `Function` and `scriptBody`
@@ -1862,7 +1871,7 @@ public enum WallpaperEngineRuntime {
       // For the editor: whether a script can be read at all, without running any of it.
       function checkScript(source) {
         try {
-          Function.apply(null, ['__modules'].concat(KEPT_AWAY, [scriptBody(source)]));
+          Function.apply(null, ['__modules', 'globalThis'].concat(KEPT_AWAY, [scriptBody(source)]));
           return null;
         } catch (error) {
           return { message: error.message, line: scriptLine(error) };
@@ -1896,7 +1905,7 @@ public enum WallpaperEngineRuntime {
             ['engine', 'thisScene', 'thisLayer', 'thisObject', 'input', 'shared', 'console', 'localStorage', 'renderContext',
              'createScriptProperties', 'Vec2', 'Vec3', 'Vec4', 'Mat3', 'Mat4'],
             [nothing(), nothing(), nothing(), nothing(), nothing(), {}, nothing(), nothing(), nothing(),
-             function () { return builder; }, Vec2, Vec3, Vec4, Mat3, Mat4]);
+             function () { return builder; }, Vec2, Vec3, Vec4, Mat3, Mat4], Object.create(null));
         } catch (error) {}
         return found;
       }
@@ -2229,6 +2238,19 @@ public enum WallpaperEngineRuntime {
                        var slope = out * 0.95;
                        return [drop.dx / Math.max(drop.far, 0.0001) * slope, -drop.dy / Math.max(drop.far, 0.0001) * slope, 1 - smooth01(0.9, 1, out)]; }) };
           case 'particle/fog/fog1':
+            // Thin wisps of smoke, bright at their edges and dark between, that spread as the
+            // puff grows and fade over its last frames: sixty-four frames, eight by eight, a
+            // twentieth of the sheet covered on the whole (as Wallpaper Engine's own measures).
+            return { width: 512, height: 512, clamp: false, frames: builtinSheet(8, 8, 64, 64, 0.015625),
+                     pixels: whiteShape(512, 512, function (u, v, x, y) {
+                       var cell = Math.floor(y / 64) * 8 + Math.floor(x / 64), t = cell / 64;
+                       var cu = (x % 64 + 0.5) / 64, cv = (y % 64 + 0.5) / 64;
+                       var ragged = (fbm(cu * 3, cv * 3, 3, 11) - 0.5) * 0.5;
+                       var reach = 0.62 + 0.2 * t + ragged, r = radius(cu, cv);
+                       var curl = fbm(cu * 5 + Math.cos(t * 6.283) * 0.3, cv * 5 + Math.sin(t * 6.283) * 0.3 - t * 0.5, 4, 3);
+                       var ridge = 1 - Math.abs(curl * 2 - 1);
+                       var wisp = Math.pow(Math.max(0, ridge), 5);
+                       return Math.min(1, wisp * 0.68 * (1 - smooth01(reach * 0.45, reach, r)) * (1 - smooth01(0.72, 1, t))); }) };
           case 'particle/fog/fog3':
             // Smoke curling as it goes: sixty-four frames of one puff, eight by eight.
             var seed = name === 'particle/fog/fog1' ? 3 : 17, shadedFog = name === 'particle/fog/fog3';
@@ -2912,7 +2934,10 @@ public enum WallpaperEngineRuntime {
           case 'particle/nature/rain1':
             return sheetOf(2, 2, 256, 256, 0.25, function (i, x, y) {
               var column = Math.floor((x + 1) * 60), off = ((x + 1) * 60) % 1, start = hash(column, i, 349) * 2 - 1, long = 0.2 + hash(column, i + 4, 349) * 0.5;
-              return [1, hash(column, i + 8, 349) > 0.5 && y > start && y < start + long ? Math.exp(-Math.pow((off - 0.5) / 0.2, 2)) * 0.35 : 0];
+              // Faint streaks of many strengths in a soft round patch that fades to the frame's
+              // edges, as Wallpaper Engine's own: a sixth of a hundredth covered on the whole.
+              var patch = 1 - smooth01(0.45, 1, Math.hypot(x / 0.8, y / 0.92)), strength = 0.12 + 0.88 * Math.pow(hash(column, i + 12, 349), 2);
+              return [1, hash(column, i + 8, 349) > 0.4 && y > start && y < start + long ? Math.exp(-Math.pow((off - 0.5) / 0.2, 2)) * 1.15 * strength * patch : 0];
             });
           case 'particle/nature/snow':
             return sheetOf(2, 2, 128, 128, 0, function (i, x, y) {
@@ -3273,6 +3298,9 @@ public enum WallpaperEngineRuntime {
           return result;
         }
         var files = keyed(scene && scene.files);
+        SCRIPTS_SHARE_GLOBAL = Object.keys(files).some(function (name) {
+          return typeof files[name] === 'string' && files[name].indexOf('globalThis') >= 0;
+        });
         // Materials Wallpaper Engine has for its effects and a scene names without bringing them,
         // made here to the same purpose. Its compose pass puts the layer's picture over what the
         // scene shows under the layer, as much as the picture is not see-through, and leaves
@@ -6308,10 +6336,28 @@ public enum WallpaperEngineRuntime {
           'uniform float u_Metallic;',
           'uniform float u_Roughness;',
           'uniform int u_Lit;',             // 0: the material takes no light, and shows its own colors
+          'uniform int u_Classic;',         // 1: lit as Wallpaper Engine's generic2 lights, not by GGX
+          'uniform float u_HalfLambert;',   // generic2's Light: how far its light wraps round, 0 to 1
           'uniform sampler2D u_Masks;',     // metal, roughness, -, glow; each read where u_Maps says
           'uniform vec4 u_Maps;',
           'uniform vec3 u_Emissive;',       // the color it glows in, times how bright
           'uniform float u_Cutoff;',        // over 0: what is clearer than this is not drawn, the rest is whole
+          // Fog, as Wallpaper Engine's common_fog.h has it: by how far from the eye and by how
+          // high, each from where it starts over how far it grows, at a base density plus a
+          // share that grows as the square of the way in. `u_Fogged`: the material takes fog.
+          'uniform int u_Fogged;',
+          'uniform vec4 u_FogDist;',
+          'uniform vec3 u_FogDistColor;',
+          'uniform vec4 u_FogHeight;',
+          'uniform vec3 u_FogHeightColor;',
+          'vec3 fogged(vec3 c) {',
+          '  if (u_Fogged == 0) return c;',
+          '  if (u_FogHeight.y != 0.0) { float h = clamp((v_World.y - u_FogHeight.x) / u_FogHeight.y, 0.0, 1.0);',
+          '    c = mix(c, u_FogHeightColor, clamp(u_FogHeight.z + u_FogHeight.w * h * h, 0.0, 1.0)); }',
+          '  if (u_FogDist.y != 0.0) { float d = clamp((length(u_Eye - v_World) - u_FogDist.x) / u_FogDist.y, 0.0, 1.0);',
+          '    c = mix(c, u_FogDistColor, clamp(u_FogDist.z + u_FogDist.w * d * d, 0.0, 1.0)); }',
+          '  return c;',
+          '}',
           'uniform int u_LightCount;',
           'uniform vec4 u_LightPlace[' + MAX_LIGHTS + '];', // where (w 1), or which way it shines (w 0)
           'uniform vec4 u_LightColor[' + MAX_LIGHTS + '];', // color times strength, and how far it reaches
@@ -6394,7 +6440,7 @@ public enum WallpaperEngineRuntime {
           '  vec4 masks = u_Maps == vec4(0.0) ? vec4(0.0) : texture(u_Masks, v_Uv);',
           // What glows does so whatever light falls on it, at least as bright as its glow.
           '  vec3 glow = u_Emissive * base.rgb * masks.a * u_Maps.w;',
-          '  if (u_Lit == 0) { color = vec4(base.rgb + glow, base.a); return; }',
+          '  if (u_Lit == 0) { color = vec4(fogged(base.rgb + glow), base.a); return; }',
           '  vec3 n = normalize(v_Normal);',
           '  if (!gl_FrontFacing) n = -n;',
           '  vec3 toEye = normalize(u_Eye - v_World);',
@@ -6404,6 +6450,35 @@ public enum WallpaperEngineRuntime {
           // As Wallpaper Engine's generic4: the sky's light from below blending into the ambient
           // light from above, by which way the surface faces.
           '  vec3 around = mix(u_Sky, u_Ambient, dot(n, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5) * base.rgb;',
+          // As Wallpaper Engine's generic2 and generic light a model (common_fragment.h,
+          // ComputeLightSpecular): lambert, wrapped round as far as the material's Light says, a
+          // rim that grows with its metal, a highlight as sharp and strong as its roughness and
+          // metal make it, each falling off as the square of the way to the light's reach.
+          '  if (u_Classic == 1) {',
+          '    vec3 light = mix(u_Sky, u_Ambient, dot(n, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5);',
+          '    vec3 highlight = vec3(0.0);',
+          '    float power = (1.01 - u_Roughness) * mix(400.0, 250.0, u_Metallic);',
+          '    float strength = (0.5 + u_Metallic * 0.5) * (1.0 - u_Roughness * 0.9);',
+          '    for (int i = 0; i < ' + MAX_LIGHTS + '; i++) {',
+          '      if (i >= u_LightCount) break;',
+          '      vec3 dir; float attn = 1.0;',
+          '      if (u_LightPlace[i].w > 0.5) {',
+          '        vec3 way = u_LightPlace[i].xyz - v_World; float far = max(length(way), 0.0001);',
+          '        dir = way / far;',
+          '        float reach = u_LightColor[i].w;',
+          '        if (reach > 0.0) attn = clamp((reach - far) / reach, 0.0, 1.0);',
+          '      } else { dir = normalize(-u_LightPlace[i].xyz); }',
+          '      vec3 c = u_LightColor[i].rgb;',
+          '      highlight += pow(max(0.0, dot(normalize(toEye + dir), n)), power) * strength * attn * c;',
+          '      float d = dot(dir, n), wrap = d * 0.5 + 0.5;',
+          '      d = mix(d, wrap, u_HalfLambert);',
+          '      float rim = u_Metallic * 2.0;',
+          '      rim = pow((1.0 - clamp(dot(n, toEye), 0.0, 1.0)) * pow(wrap, 0.25), 6.0 - rim) * rim;',
+          '      light += c * (clamp(d, 0.0, 1.0) + rim) * attn * attn;',
+          '    }',
+          '    color = vec4(fogged(max(base.rgb * light + highlight, glow)), base.a);',
+          '    return;',
+          '  }',
           '  vec3 lit = vec3(0.0);',
           '  for (int i = 0; i < ' + MAX_LIGHTS + '; i++) {',
           '    if (i >= u_LightCount) break;',
@@ -6429,7 +6504,7 @@ public enum WallpaperEngineRuntime {
           // Engine's lighting; the diffuse part is the albedo over pi of it.
           '    lit += shade(n, toEye, toLight, base.rgb, u_LightColor[i].rgb * left, f0, rough, metal);',
           '  }',
-          '  color = vec4(max(lit, glow) + around, base.a);',
+          '  color = vec4(fogged(max(lit, glow) + around), base.a);',
           '}'
         ].join('\n');
         var modelProgram = link([
@@ -6602,6 +6677,21 @@ public enum WallpaperEngineRuntime {
           shadowState = { matrices: matrices, textures: textures };
           return shadowState;
         }
+        // Hands the scene's fog to a program that draws models: by distance (`fogdistance`) and
+        // by height (`fogheight`), each from `…start` to `…end`, at `…startdensity` growing to
+        // `…enddensity`, in `…color`. How the settings become the shader's four numbers (start,
+        // reach, base, growth) is worked out from common_fog.h, not measured on a scene.
+        function useFog(at) {
+          ['distance', 'height'].forEach(function (kind) {
+            var on = flag(plain(general['fog' + kind]), false);
+            var start = number(plain(general['fog' + kind + 'start']), 0), end = number(plain(general['fog' + kind + 'end']), 0);
+            var from = number(plain(general['fog' + kind + 'startdensity']), 0), to = number(plain(general['fog' + kind + 'enddensity']), 1);
+            var color = numbers(plain(general['fog' + kind + 'color']), 3, 1);
+            var name = kind === 'distance' ? 'u_FogDist' : 'u_FogHeight';
+            gl.uniform4f(at(name), start, on && end !== start ? end - start : 0, from, to - from);
+            gl.uniform3f(at(name + 'Color'), color[0], color[1], color[2]);
+          });
+        }
         // Hands the shadows to a program that lights.
         function useShadows(at, unit) {
           var shadows = shadowState;
@@ -6686,13 +6776,24 @@ public enum WallpaperEngineRuntime {
           } else if (shot) {
             look = m4invert(cameraMatrix(shot));
           } else {
-            var eyeSaid = (description.camera || {});
+            var eyeSaid = (description.camera || {}), onScenePath = scenePathLook();
             var eye = numbers(eyeSaid.eye, 3, 0), centre = numbers(eyeSaid.center, 3, 0), up = numbers(eyeSaid.up, 3, 0);
             if (!eyeSaid.eye) { eye = [0, 0, 1]; centre = [0, 0, 0]; }
+            if (onScenePath) { eye = onScenePath.eye; centre = onScenePath.center; up = onScenePath.up; }
             if (!(up[0] || up[1] || up[2])) up = [0, 1, 0];
             look = Mat4.lookAt(new Vec3(eye[0], eye[1], eye[2]), new Vec3(centre[0], centre[1], centre[2]), new Vec3(up[0], up[1], up[2])).m;
           }
           var seen = times4(lens, look);
+          // The camera's shake, in a scene in three dimensions: the picture sways on the screen by
+          // as much of it as in a flat scene — measured on Wallpaper Engine (2098326060): a few
+          // pixels from frame to frame, smoothly, not the metres a shift of the world would make.
+          if (inDepth && shake && shake.on && !editorView.free && (shake.x || shake.y)) {
+            var dx = 2 * shake.x / Math.max(1, sceneWidth), dy = 2 * shake.y / Math.max(1, sceneHeight);
+            for (var column = 0; column < 4; column++) {
+              seen[column * 4] += dx * seen[column * 4 + 3];
+              seen[column * 4 + 1] += dy * seen[column * 4 + 3];
+            }
+          }
           [1, 5, 9, 13].forEach(function (index) { seen[index] = -seen[index]; });
           return seen;
         }
@@ -6895,8 +6996,11 @@ public enum WallpaperEngineRuntime {
               tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
               writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
               blending: key(String(pass.blending || 'normal')),
-              metallic: number(plain(constants.metallic), 0), roughness: number(plain(constants.roughness), 0.5),
-              lit: number((pass.combos || {}).LIGHTING, 1) !== 0,
+              metallic: number(plain(constants.metallic !== undefined ? constants.metallic : constants.metal), 0),
+              roughness: number(plain(constants.roughness !== undefined ? constants.roughness : constants.rough), 0.5),
+              lit: alwaysLit(pass) || number((pass.combos || {}).LIGHTING, 1) !== 0,
+              classic: alwaysLit(pass), halfLambert: number(plain(constants.light), 0),
+              fogged: number((pass.combos || {}).FOG, 1) !== 0,
               surface: surfaceOf(pass, constants),
               // How much it shows, as its material says: a number, or what a script makes of it —
               // a flame that shows only while the button is held.
@@ -6951,6 +7055,7 @@ public enum WallpaperEngineRuntime {
             gl.uniformMatrix3fv(at('u_NormalMatrix'), false, new Float32Array(new Mat4(model).normalMatrix().m));
             gl.uniformMatrix4fv(at('u_Skin[0]') || at('u_Skin'), false, skin);
             useShadows(at, 3);
+            useFog(at);
             var tint = thing.state.color || [1, 1, 1];
             gl.uniform4f(at('u_Tint'), tint[0], tint[1], tint[2], stands.alpha);
             var ambient = numbers(plain(general.ambientcolor), 3, 0), sky = numbers(plain(general.skylightcolor), 3, 0);
@@ -6978,7 +7083,8 @@ public enum WallpaperEngineRuntime {
               var through = part.blending === 'additive' || part.blending === 'translucent';
               if (inDepth && through !== (pass === 'through')) return;
               gl.uniform1f(at('u_Metallic'), part.metallic);
-              gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
+              gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0); gl.uniform1i(at('u_Classic'), part.classic ? 1 : 0); gl.uniform1f(at('u_HalfLambert'), part.halfLambert || 0);
+              gl.uniform1i(at('u_Fogged'), part.fogged ? 1 : 0);
               gl.uniform1f(at('u_Roughness'), part.roughness);
               useSurface(at, part.surface);
               gl.uniform1f(at('u_Cutoff'), part.blending === 'alphatocoverage' ? 0.5 : 0);
@@ -7005,6 +7111,14 @@ public enum WallpaperEngineRuntime {
             gl.depthMask(true);
           };
           return thing;
+        }
+
+        // Wallpaper Engine's older model shaders, generic and generic2, light what they draw
+        // whatever the material's LIGHTING says: they have no such switch (2854680269's statue,
+        // purple in its light); generic2 names its metal and roughness Metal and Rough.
+        function alwaysLit(pass) {
+          var shader = key(String(pass.shader || ''));
+          return shader === 'generic' || shader === 'generic2';
         }
 
         function buildModel(object, thing) {
@@ -7059,9 +7173,12 @@ public enum WallpaperEngineRuntime {
               tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
               writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
               blending: key(String(pass.blending || 'normal')),
-              metallic: number(plain(constants.metallic), 0), roughness: number(plain(constants.roughness), 0.5),
+              metallic: number(plain(constants.metallic !== undefined ? constants.metallic : constants.metal), 0),
+              roughness: number(plain(constants.roughness !== undefined ? constants.roughness : constants.rough), 0.5),
               // Lit unless the material says not: a model's material is, in Wallpaper Engine.
-              lit: number((pass.combos || {}).LIGHTING, 1) !== 0,
+              lit: alwaysLit(pass) || number((pass.combos || {}).LIGHTING, 1) !== 0,
+              classic: alwaysLit(pass), halfLambert: number(plain(constants.light), 0),
+              fogged: number((pass.combos || {}).FOG, 1) !== 0,
               surface: surfaceOf(pass, constants),
               // How much it shows and the color laid over its picture, as its material says —
               // numbers, or what scripts make of them: a sky that darkens at night.
@@ -7112,6 +7229,7 @@ public enum WallpaperEngineRuntime {
             gl.uniformMatrix4fv(at('u_ViewProjection'), false, new Float32Array(viewProjection()));
             gl.uniformMatrix3fv(at('u_NormalMatrix'), false, new Float32Array(new Mat4(model).normalMatrix().m));
             useShadows(at, 3);
+            useFog(at);
             var tint = thing.state.color || [1, 1, 1];
             gl.uniform4f(at('u_Tint'), tint[0], tint[1], tint[2], stands.alpha);
             var ambient = numbers(plain(general.ambientcolor), 3, 0), sky = numbers(plain(general.skylightcolor), 3, 0);
@@ -7140,7 +7258,8 @@ public enum WallpaperEngineRuntime {
               var through = part.blending === 'additive' || part.blending === 'translucent';
               if (inDepth && through !== (pass === 'through')) return;
               gl.uniform1f(at('u_Metallic'), part.metallic);
-              gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0);
+              gl.uniform1i(at('u_Lit'), part.lit ? 1 : 0); gl.uniform1i(at('u_Classic'), part.classic ? 1 : 0); gl.uniform1f(at('u_HalfLambert'), part.halfLambert || 0);
+              gl.uniform1i(at('u_Fogged'), part.fogged ? 1 : 0);
               gl.uniform1f(at('u_Roughness'), part.roughness);
               useSurface(at, part.surface);
               gl.uniform1f(at('u_Cutoff'), part.blending === 'alphatocoverage' ? 0.5 : 0);
@@ -7287,6 +7406,8 @@ public enum WallpaperEngineRuntime {
             var m = cameraMatrix(shot);
             return { eye: [m[12], m[13], m[14]], center: [m[12] - m[8], m[13] - m[9], m[14] - m[10]], up: [m[4], m[5], m[6]] };
           }
+          var onScenePath = scenePathLook();
+          if (onScenePath) return { eye: onScenePath.eye.slice(), center: onScenePath.center.slice(), up: onScenePath.up.slice() };
           var said = description.camera || {};
           var eye = numbers(said.eye, 3, 0), center = numbers(said.center, 3, 0), up = numbers(said.up, 3, 0);
           if (!said.eye) { eye = [0, 0, 1]; center = [0, 0, 0]; }
@@ -7299,6 +7420,7 @@ public enum WallpaperEngineRuntime {
           if (inDepth) {
             var shot = activeCamera();
             if (shot) { var m = cameraMatrix(shot); return [m[12], m[13], m[14]]; }
+            if (scenePathLook()) return scenePathLook().eye;
             var eye = numbers((description.camera || {}).eye, 3, 0);
             return (description.camera || {}).eye ? eye : [0, 0, 1];
           }
@@ -7336,6 +7458,51 @@ public enum WallpaperEngineRuntime {
                      ends: mode === 'single', seconds: Math.max(0, Number(options.length) || 0) / rate };
           }).filter(function (path) { return path.eye && path.center; });
           return paths.length ? paths : null;
+        }
+        // The paths of the scene's own camera, as older scenes keep them (`camera.paths`: files of
+        // `{paths: [{duration, transforms: [{timestamp, eye, center, up, zoom}]}]}`): played one
+        // after another and over again, the eye going straight from one key to the next.
+        var scenePaths;
+        function scenePathLook() {
+          if (scenePaths === undefined) {
+            scenePaths = [];
+            var named = (description.camera || {}).paths;
+            (Array.isArray(named) ? named : []).forEach(function (name) {
+              var said;
+              try { said = JSON.parse(files[key(String(name))]); } catch (error) { return; }
+              (said && Array.isArray(said.paths) ? said.paths : []).forEach(function (path) {
+                var keys = (Array.isArray(path && path.transforms) ? path.transforms : []).map(function (each) {
+                  return { at: number(each.timestamp, 0), eye: numbers(each.eye, 3, 0), center: numbers(each.center, 3, 0),
+                           up: numbers(each.up, 3, 0), zoom: number(each.zoom, 1) };
+                }).sort(function (a, b) { return a.at - b.at; });
+                var seconds = number(path.duration, keys.length ? keys[keys.length - 1].at : 0);
+                if (keys.length && seconds > 0) scenePaths.push({ keys: keys, seconds: seconds });
+              });
+            });
+          }
+          if (!scenePaths.length) return null;
+          if (scenePaths.frame === frames) return scenePaths.look;
+          var total = scenePaths.reduce(function (sum, path) { return sum + path.seconds; }, 0);
+          var into = ((time % total) + total) % total, path = scenePaths[0];
+          for (var index = 0; index < scenePaths.length; index++) {
+            path = scenePaths[index];
+            if (into < path.seconds || index === scenePaths.length - 1) break;
+            into -= path.seconds;
+          }
+          var keys = path.keys, before = keys[0], after = keys[0];
+          for (var at = 0; at < keys.length; at++) {
+            after = keys[at];
+            if (keys[at].at > into) break;
+            before = keys[at];
+          }
+          var share = after.at > before.at ? Math.max(0, Math.min(1, (into - before.at) / (after.at - before.at))) : 0;
+          function mix(a, b) { return [a[0] + (b[0] - a[0]) * share, a[1] + (b[1] - a[1]) * share, a[2] + (b[2] - a[2]) * share]; }
+          var up = mix(before.up, after.up);
+          if (!(up[0] || up[1] || up[2])) up = [0, 1, 0];
+          scenePaths.frame = frames;
+          scenePaths.look = { eye: mix(before.eye, after.eye), center: mix(before.center, after.center), up: up,
+                              zoom: before.zoom + (after.zoom - before.zoom) * share };
+          return scenePaths.look;
         }
         // Chosen at random, the same way every time the scene plays, so that its pictures can
         // be compared; never the same path twice in a row when there is another.
@@ -7471,8 +7638,10 @@ public enum WallpaperEngineRuntime {
             if (!editorView.free && ((eye && eye.on) || (shake && shake.on))) {
               // What hangs together moves with the pointer together, and shakes with the camera.
               var moved = shifted(thing);
-              matrix[12] += moved[0] + (shake ? shake.x : 0);
-              matrix[13] += moved[1] + (shake ? shake.y : 0);
+              // In a scene in three dimensions the shake moves the picture, not the world: see
+              // `viewProjection`.
+              matrix[12] += moved[0] + (shake && !inDepth ? shake.x : 0);
+              matrix[13] += moved[1] + (shake && !inDepth ? shake.y : 0);
             }
             var seen = inDepth || editorView.free ? { x: 0, y: 0, zoom: 1 } : view();
             if (seen.x || seen.y || seen.zoom !== 1) {
@@ -7753,9 +7922,13 @@ public enum WallpaperEngineRuntime {
               metallic: number(plain(own.metallic), 0.5), roughness: number(plain(own.roughness), 0.5),
               reflectivity: number(plain(own.reflectivity), 1),
               emissive: numbers(plain(own.emissivecolor), 3, 1), glow: number(plain(own.emissivebrightness), 1),
-              // Which of the four channels of the masks stand for what.
-              maps: [number(combos.METALLIC_MAP, 0), number(combos.ROUGHNESS_MAP, 0), number(combos.REFLECTION_MAP, 0), number(combos.EMISSIVE_MAP, 0)]
-                      .map(function (on) { return masks && on === 1 ? 1 : 0; }),
+              // Which of the four channels of the masks stand for what: as the material's combos
+              // say, else as the masks' own file says (bits 20 to 23 of its flags), as with a
+              // model — 3437487219's Milky Way glows by such a mask its material says nothing of.
+              maps: ['METALLIC_MAP', 'ROUGHNESS_MAP', 'REFLECTION_MAP', 'EMISSIVE_MAP'].map(function (combo, index) {
+                if (!masks) return 0;
+                return (isSet(combos[combo]) ? number(combos[combo], 0) === 1 : ((masks.maps || 0) >> index & 1) === 1) ? 1 : 0;
+              }),
               target: null
             };
             // Lights move, and what is behind a polished picture changes.
@@ -8903,8 +9076,11 @@ public enum WallpaperEngineRuntime {
                 particle.vz += pick(least[2], most[2]);
               };
             case 'colorrandom':
-              least = color(said.min, 255);
-              most = color(said.max, 255);
+              // One end said alone stands for both: a system that says only `max: "0 0 0"` makes
+              // black particles in Wallpaper Engine (3598808038's dark vapor), one that says only
+              // `min` white ones; neither said, white.
+              least = color(isSet(said.min) ? said.min : said.max, 255);
+              most = color(isSet(said.max) ? said.max : said.min, 255);
               return function (particle) {
                 // One of the colors between the two, not each part of it on its own.
                 var share = pick(0, 1);
@@ -10343,8 +10519,9 @@ public enum WallpaperEngineRuntime {
                 var previous = points[Math.max(0, i - 1)].spot, next = points[Math.min(count - 1, i + 1)].spot;
                 var dx = next[0] - previous[0], dy = next[1] - previous[1];
                 var far = Math.sqrt(dx * dx + dy * dy);
-                // As wide as the particle is large. Where the band does not go on, it has no width:
-                // a rope lying in one spot is not seen.
+                // As wide as the particle is large (measured on Wallpaper Engine: 1425503532's
+                // trail is as high as Pac-Man). Where the band does not go on, it has no width: a
+                // rope lying in one spot is not seen.
                 var half = far > 0.0001 ? point.size * system.sizeBy / 2 / far : 0;
                 for (var side = 0; side < 2; side++) {
                   var at = (i * 2 + side) * 8, turn = side ? 1 : -1;
@@ -10940,7 +11117,11 @@ public enum WallpaperEngineRuntime {
             }
             return built;
           }
-          if (thing.state.visible || (!object.image && !object.particle && !object.model) || usedByOthers[String(object.id)]) {
+          // Scripts run in Wallpaper Engine whether what carries them shows or not: a hidden layer
+          // whose effect works out the time of day for the rest of the scene (3151551777's
+          // "DAY-NIGHT") is made at once, for its scripts to run.
+          var effectsScripted = /"script"\s*:/.test(JSON.stringify(object.effects || []));
+          if (thing.state.visible || (!object.image && !object.particle && !object.model) || usedByOthers[String(object.id)] || effectsScripted) {
             finish();
           } else {
             // A picture that is hidden is made ready when it first shows: its files are not

@@ -507,18 +507,24 @@ struct WallpaperEnginePuppet {
         for place in start..<min(start + 512, end - 8) {
             guard let cornerBytes = number(in: data, at: place), cornerBytes > 0, cornerBytes <= 256 * 1024 * 1024,
                   place + 4 + cornerBytes + 4 <= end,
-                  let triangleBytes = number(in: data, at: place + 4 + cornerBytes), triangleBytes > 0, triangleBytes % (wide ? 12 : 6) == 0,
+                  let triangleBytes = number(in: data, at: place + 4 + cornerBytes), triangleBytes > 0,
+                  // A model in three dimensions may end its list with a triangle cut short
+                  // (2098326060: 62 corners of triangles); what makes no whole triangle is left out.
+                  triangleBytes % (onBones ? (wide ? 12 : 6) : (wide ? 4 : 2)) == 0,
                   place + 4 + cornerBytes + 4 + triangleBytes <= end
             else {
                 continue
             }
             let trianglesAt = data.startIndex + place + 4 + cornerBytes + 4
-            let triangles = data.subdata(in: trianglesAt..<(trianglesAt + triangleBytes)).withUnsafeBytes { raw -> [UInt32] in
+            let listed = data.subdata(in: trianglesAt..<(trianglesAt + triangleBytes)).withUnsafeBytes { raw -> [UInt32] in
                 wide ? (0..<(triangleBytes / 4)).map { UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self)) }
                      : (0..<(triangleBytes / 2)).map { UInt32(UInt16(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self))) }
             }
+            // The last corner named counts every one of them, whole triangles or not.
+            let last = Int(listed.max() ?? 0)
+            let triangles = Array(listed.prefix(listed.count / 3 * 3))
+            guard !triangles.isEmpty else { continue }
             let packed = data.subdata(in: (data.startIndex + place + 4)..<(data.startIndex + place + 4 + cornerBytes))
-            let last = Int(triangles.max() ?? 0)
             let sizes = cornerSizes.map { onBones ? $0 : $0 - bonesAndWeights }.filter { cornerBytes % $0 == 0 }
             for size in sizes.filter({ cornerBytes / $0 == last + 1 }) + sizes.filter({ cornerBytes / $0 != last + 1 }) {
                 guard last < cornerBytes / size, let corners = corners(in: packed, each: size, onBones: onBones) else { continue }
@@ -576,6 +582,9 @@ struct WallpaperEnginePuppet {
         let count = packed.count / size
         var corners: [Float] = []
         corners.reserveCapacity(count * floatsPerCorner)
+        // A model in three dimensions may lay its picture over and over across a face: places in
+        // the picture in the thousands (2098326060's motorbike, −4883). A flat picture's stay near it.
+        let pictureReach: Float = !onBones && (size == 32 || size == 48) ? 1_000_000 : 1024
         let whole = packed.withUnsafeBytes { raw -> Bool in
             func float(_ at: Int) -> Float {
                 Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: at, as: UInt32.self)))
@@ -598,7 +607,7 @@ struct WallpaperEnginePuppet {
                 }
                 let u = float(base + size - 8), v = float(base + size - 4)
                 guard x.isFinite, y.isFinite, u.isFinite, v.isFinite, abs(x) < 1_000_000, abs(y) < 1_000_000,
-                      abs(u) < 1024, abs(v) < 1024
+                      abs(u) < pictureReach, abs(v) < pictureReach
                 else {
                     return false
                 }
