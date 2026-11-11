@@ -218,14 +218,32 @@ final class Canvas2D {
         }
     }
 
+    /// How far a font reaches above and below its line, the gap between lines counted below, as
+    /// Wallpaper Engine sets lines: by the font's `hhea` table, its ascender, descender and line
+    /// gap (measured on its own texts: Arial at 1.15 of a size, Source Han Sans at 1.5, where the
+    /// Mac, told to use the typographic metrics of the latter, would give 1.0). Without the
+    /// table, what Core Text says.
+    static func lineReach(_ font: CTFont) -> (above: Double, below: Double) {
+        let size = Double(CTFontGetSize(font)), unitsPerEm = Double(CTFontGetUnitsPerEm(font))
+        if unitsPerEm > 0, let table = CTFontCopyTable(font, CTFontTableTag(kCTFontTableHhea), []) as Data?, table.count >= 10 {
+            func signed(_ at: Int) -> Double { Double(Int16(bitPattern: UInt16(table[at]) << 8 | UInt16(table[at + 1]))) }
+            let ascender = signed(4), descender = signed(6), gap = max(0, signed(8))
+            if ascender > 0 {
+                return (ascender / unitsPerEm * size, (abs(descender) + gap) / unitsPerEm * size)
+            }
+        }
+        return (Double(CTFontGetAscent(font)), Double(CTFontGetDescent(font)))
+    }
+
     /// What `measureText` gives: the width, and how far the font reaches above and below.
     func measure(_ text: String) -> [String: Double] {
         let made = line(text, color: nil)
         var ascent: CGFloat = 0, descent: CGFloat = 0
         let width = CTLineGetTypographicBounds(made, &ascent, &descent, nil)
         let bounds = CTLineGetBoundsWithOptions(made, .useGlyphPathBounds)
-        return ["width": width, "fontBoundingBoxAscent": Double(CTFontGetAscent(style.font)),
-                "fontBoundingBoxDescent": Double(CTFontGetDescent(style.font)),
+        let reach = Self.lineReach(style.font)
+        return ["width": width, "fontBoundingBoxAscent": reach.above,
+                "fontBoundingBoxDescent": reach.below,
                 "actualBoundingBoxAscent": Double(bounds.maxY), "actualBoundingBoxDescent": Double(-bounds.minY),
                 "actualBoundingBoxLeft": Double(-bounds.minX), "actualBoundingBoxRight": Double(bounds.maxX)]
     }
