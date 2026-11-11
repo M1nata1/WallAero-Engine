@@ -2238,19 +2238,22 @@ public enum WallpaperEngineRuntime {
                        var slope = out * 0.95;
                        return [drop.dx / Math.max(drop.far, 0.0001) * slope, -drop.dy / Math.max(drop.far, 0.0001) * slope, 1 - smooth01(0.9, 1, out)]; }) };
           case 'particle/fog/fog1':
-            // Thin wisps of smoke, bright at their edges and dark between, that spread as the
-            // puff grows and fade over its last frames: sixty-four frames, eight by eight, a
-            // twentieth of the sheet covered on the whole (as Wallpaper Engine's own measures).
+            // A puff of smoke whirling around a dark middle, sixty-four frames, eight by eight,
+            // that turns as it plays and comes back to where it began. As Wallpaper Engine's own
+            // sheet measures: a twentieth covered on the whole, about 0.02 in the middle, most
+            // (0.13–0.15) halfway out, next to nothing at the rim.
             return { width: 512, height: 512, clamp: false, frames: builtinSheet(8, 8, 64, 64, 0.015625),
                      pixels: whiteShape(512, 512, function (u, v, x, y) {
-                       var cell = Math.floor(y / 64) * 8 + Math.floor(x / 64), t = cell / 64;
-                       var cu = (x % 64 + 0.5) / 64, cv = (y % 64 + 0.5) / 64;
-                       var ragged = (fbm(cu * 3, cv * 3, 3, 11) - 0.5) * 0.5;
-                       var reach = 0.62 + 0.2 * t + ragged, r = radius(cu, cv);
-                       var curl = fbm(cu * 5 + Math.cos(t * 6.283) * 0.3, cv * 5 + Math.sin(t * 6.283) * 0.3 - t * 0.5, 4, 3);
-                       var ridge = 1 - Math.abs(curl * 2 - 1);
-                       var wisp = Math.pow(Math.max(0, ridge), 5);
-                       return Math.min(1, wisp * 0.68 * (1 - smooth01(reach * 0.45, reach, r)) * (1 - smooth01(0.72, 1, t))); }) };
+                       var cell = Math.floor(y / 64) * 8 + Math.floor(x / 64), turn = cell / 64 * 6.283;
+                       var dx = (x % 64 + 0.5) / 32 - 1, dy = (y % 64 + 0.5) / 32 - 1, r = Math.sqrt(dx * dx + dy * dy);
+                       var a = Math.atan2(dy, dx) + 0.7 * r + 0.3 * Math.sin(turn);
+                       var px = r * Math.cos(a), py = r * Math.sin(a);
+                       var lumps = fbm(px * 2.6 + Math.cos(turn) * 0.5 + 7, py * 2.6 + Math.sin(turn) * 0.5 + 7, 5, 5);
+                       var curl = fbm(px * 6 + Math.sin(turn) * 0.4, py * 6 + Math.cos(turn) * 0.4, 3, 13);
+                       var wisp = Math.pow(Math.max(0, lumps - 0.42) * 3, 1.6) * (0.55 + 0.9 * Math.pow(1 - Math.abs(curl * 2 - 1), 3));
+                       var ragged = (fbm(px * 2 + Math.cos(turn) * 0.3, py * 2 + Math.sin(turn) * 0.3, 2, 9) - 0.5) * 0.45;
+                       var body = smooth01(0.04, 0.42, r) * (1 - smooth01(0.36 + ragged, 0.9 + ragged, r));
+                       return Math.min(1, 0.655 * wisp * body + 0.02 * (1 - smooth01(0, 0.2, r))); }) };
           case 'particle/fog/fog3':
             // Smoke curling as it goes: sixty-four frames of one puff, eight by eight.
             var seed = name === 'particle/fog/fog1' ? 3 : 17, shadedFog = name === 'particle/fog/fog3';
@@ -2932,12 +2935,24 @@ public enum WallpaperEngineRuntime {
           case 'particle/nature/leaves9': return drawnSheet(6, 5, 85.334, 102.4, 1 / 30, function (c, i, share, hw, hh) { leafOf(c, i, share, hw, hh, 'oak', [[176, 140, 52], [156, 120, 40], [196, 160, 70]]); }, 30);
           case 'particle/nature/leaves10': return drawnSheet(6, 5, 85.334, 51.2, 1 / 30, function (c, i, share, hw, hh) { leafOf(c, i, share, hw, hh, 'oak', [[214, 150, 52], [196, 128, 40], [228, 170, 70]]); }, 30);
           case 'particle/nature/rain1':
-            return sheetOf(2, 2, 256, 256, 0.25, function (i, x, y) {
-              var column = Math.floor((x + 1) * 60), off = ((x + 1) * 60) % 1, start = hash(column, i, 349) * 2 - 1, long = 0.2 + hash(column, i + 4, 349) * 0.5;
-              // Faint streaks of many strengths in a soft round patch that fades to the frame's
-              // edges, as Wallpaper Engine's own: a sixth of a hundredth covered on the whole.
-              var patch = 1 - smooth01(0.45, 1, Math.hypot(x / 0.8, y / 0.92)), strength = 0.12 + 0.88 * Math.pow(hash(column, i + 12, 349), 2);
-              return [1, hash(column, i + 8, 349) > 0.4 && y > start && y < start + long ? Math.exp(-Math.pow((off - 0.5) / 0.2, 2)) * 1.15 * strength * patch : 0];
+            // Many faint threads of rain a pixel wide, long, in bunches, uneven along their length,
+            // in a soft round patch, as Wallpaper Engine's own sheet measures: about thirty across
+            // a row of a frame, most 0.08 bright and a tenth over 0.2, 0.006 on the whole.
+            return sheetOf(2, 2, 512, 512, 0.25, function (i, x, y) {
+              var at = (x + 1) * 120, lane = Math.floor(at), off = at - lane - 0.5;
+              var across = Math.exp(-Math.pow(off / 0.22, 2));
+              var patch = 1 - smooth01(0.5, 1, Math.hypot(x / 0.8, y / 0.92));
+              if (across * patch < 0.002) return [1, 0];
+              var bunch = smoothNoise(lane / 9, i * 7, 4096, 352), sum = 0;
+              for (var k = 0; k < 3; k++) {
+                if (hash(lane, i * 3 + k, 351) > 0.25 + 0.75 * bunch) continue;
+                var start = hash(lane, i * 3 + k + 8, 351) * 2.4 - 1.4, long = 0.6 + hash(lane, i * 3 + k + 16, 351) * 1.1;
+                var along = (y - start) / long;
+                if (along <= 0 || along >= 1) continue;
+                var strength = 0.03 + 0.42 * Math.pow(hash(lane, i * 3 + k + 24, 351), 3);
+                sum += strength * Math.sin(along * Math.PI) * (0.4 + 0.6 * smoothNoise(y * 9, lane * 3 + k, 4096, 353));
+              }
+              return [1, Math.min(1, sum * across * patch)];
             });
           case 'particle/nature/snow':
             return sheetOf(2, 2, 128, 128, 0, function (i, x, y) {
@@ -8447,7 +8462,10 @@ public enum WallpaperEngineRuntime {
             }
             return;
           }
-          if (!shows && !(ahead && layer.composite)) return;
+          // A hidden layer others take the finished picture of is still made in its turn, only not
+          // put on the scene: Wallpaper Engine fills it all the same (2938612768's capsule takes
+          // its color from a hidden layer over the background, and is not seen against it).
+          if (!shows && !layer.composite) return;
           var nominal = layer.size;
           var matrix = layer.shift ? nudged(stands.matrix, layer.shift[0], layer.shift[1]) : stands.matrix;
           // The layer's effects are worked out no finer than the layer shows on the screen: one
@@ -8896,10 +8914,11 @@ public enum WallpaperEngineRuntime {
           '}'
         ].join('\n'), 'the player\'s own shader');
         var FLOATS = 16; // to a particle, for the shader
-        // A particle's size is the corner to corner of its square, not its side: so many times
-        // smaller each side is drawn. Measured on Wallpaper Engine's own videos of three scenes —
-        // a circle of runes, petals, drops on glass — whatever the scene's own size for them.
-        var PARTICLE_SIDE = Math.SQRT1_2;
+        // A particle's square is half its size on a side: Wallpaper Engine hands its shaders half
+        // the size and its sprite spans that much (measured in its own window: white squares of
+        // 30 are 5 pixels at a third). Turned by its random angle a square reaches 0.71 of its
+        // size across, which is what its videos of runes, petals and drops showed.
+        var PARTICLE_SIDE = 0.5;
         // Particles drawn as a rope: one band through them all, in the order they were made, as
         // wide as each is large. The picture is laid across the band, and along it where the band
         // is the tail of one particle.
@@ -9089,8 +9108,10 @@ public enum WallpaperEngineRuntime {
                 particle.blue = mix(least[2], most[2], share);
               };
             case 'rotationrandom':
+              // Without bounds a particle is turned anyhow, up to a whole turn (Wallpaper Engine
+              // draws the squares of such a fog every which way).
               least = numbers(said.min, 3, 0)[2];
-              most = numbers(said.max, 3, 0)[2];
+              most = numbers(said.max, 3, [0, 0, Math.PI * 2])[2];
               return function (particle) { particle.angle = pick(least, most); };
             case 'angularvelocityrandom':
               least = numbers(said.min, 3, 0)[2];
@@ -9330,7 +9351,10 @@ public enum WallpaperEngineRuntime {
               };
             case 'sizechange':
               var sizeFrom = number(said.startvalue, 1), sizeTo = number(said.endvalue, 0);
-              return function (particle, seconds, share) { particle.sizeNow *= mix(sizeFrom, sizeTo, ramp(share, start, end)); };
+              // The scene's own size factor counts once more here: Wallpaper Engine scales this
+              // change by it as well as the particle (measured on ropes in its own window: 0.2 of
+              // 40 at size 2 is 32 wide, not 16 — oscillatesize and alphachange take it only once).
+              return function (particle, seconds, share) { particle.sizeNow *= mix(sizeFrom, sizeTo, ramp(share, start, end)) * system.sizeBy; };
             case 'alphachange':
               var alphaFrom = number(said.startvalue, 1), alphaTo = number(said.endvalue, 0);
               return function (particle, seconds, share) { particle.alphaNow *= mix(alphaFrom, alphaTo, ramp(share, start, end)); };
@@ -9963,8 +9987,10 @@ public enum WallpaperEngineRuntime {
             var kind = key(renderer.name);
             if (kind === 'rope') {
               system.rope = true;
-              // So many points between two particles, on a curve through them.
-              system.subdivision = Math.max(0, Math.min(16, Math.round(number(plain(renderer.subdivision), 0))));
+              // So many points between two particles, on a curve through them. A rope that does not
+              // say bends as smoothly as one of 3 in Wallpaper Engine's own window; one of 0 has
+              // sharp corners there.
+              system.subdivision = Math.max(0, Math.min(16, Math.round(number(plain(renderer.subdivision), 3))));
             } else if (kind === 'spritetrail') {
               // Stretched along its way: so many times its width to a unit of speed, within bounds.
               system.trail = { by: number(renderer.length, 0.05), least: Math.max(0, number(renderer.minlength, 0)),
@@ -11263,10 +11289,17 @@ public enum WallpaperEngineRuntime {
           'void main() {',
           '  vec3 c = (texture(u_Texture, v_Uv + u_Texel * vec2(-1.0, -1.0)).rgb + texture(u_Texture, v_Uv + u_Texel * vec2(1.0, -1.0)).rgb +',
           '            texture(u_Texture, v_Uv + u_Texel * vec2(-1.0, 1.0)).rgb + texture(u_Texture, v_Uv + u_Texel * vec2(1.0, 1.0)).rgb) * 0.25;',
-          '  float over = max(0.0, dot(c, vec3(0.2126, 0.7152, 0.0722)) - u_Threshold);',
-          '  color = vec4(c * over * u_Strength, 1.0);',
+          // As Wallpaper Engine's own glow: the brightest of the three channels over the
+          // threshold says how much, so a deep blue light glows too, and the glow is made twice
+          // as colorful as it is.
+          '  float over = clamp(max(max(c.r, c.g), c.b) - u_Threshold, 0.0, 1.0);',
+          '  c *= over;',
+          '  c = c * 2.0 - dot(vec3(0.2989, 0.5870, 0.1140), c);',
+          '  color = vec4(max(vec3(0.0), c * u_Strength), 1.0);',
           '}'
         ].join('\n'), 'the player\'s own shader');
+        // Thirteen steps of an eighth of the picture apart, weighed as Wallpaper Engine's glow
+        // weighs them, across and then down.
         var blurProgram = link(fillVertex, [
           '#version 300 es',
           'precision highp float;',
@@ -11274,10 +11307,12 @@ public enum WallpaperEngineRuntime {
           'uniform sampler2D u_Texture;',
           'uniform vec2 u_Step;',
           'out vec4 color;',
+          'const float WEIGHT[7] = float[7](0.171834, 0.156756, 0.119007, 0.075189, 0.039533, 0.017298, 0.006299);',
           'void main() {',
-          '  vec3 c = texture(u_Texture, v_Uv).rgb * 0.2270270270;',
-          '  c += (texture(u_Texture, v_Uv + u_Step * 1.3846153846).rgb + texture(u_Texture, v_Uv - u_Step * 1.3846153846).rgb) * 0.3162162162;',
-          '  c += (texture(u_Texture, v_Uv + u_Step * 3.2307692308).rgb + texture(u_Texture, v_Uv - u_Step * 3.2307692308).rgb) * 0.0702702703;',
+          '  vec3 c = texture(u_Texture, v_Uv).rgb * WEIGHT[0];',
+          '  for (int i = 1; i < 7; i++) {',
+          '    c += (texture(u_Texture, v_Uv + u_Step * float(i)).rgb + texture(u_Texture, v_Uv - u_Step * float(i)).rgb) * WEIGHT[i];',
+          '  }',
           '  color = vec4(c, 1.0);',
           '}'
         ].join('\n'), 'the player\'s own shader');
