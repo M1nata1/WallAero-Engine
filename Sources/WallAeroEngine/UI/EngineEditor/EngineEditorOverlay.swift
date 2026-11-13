@@ -174,7 +174,10 @@ final class EngineEditorOverlay: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if model?.showsCard == true { return }
+        if model?.showsCard == true {
+            drawCardFrame()
+            return
+        }
         drawCameraFrame()
         if let painting {
             drawPainting(painting)
@@ -212,6 +215,35 @@ final class EngineEditorOverlay: NSView {
             accent.setStroke()
             mark.stroke()
         }
+    }
+
+    /// A flat scene turned as a card is only looked at, so the selected object has its frame
+    /// laid on the turned scene, without handles.
+    private func drawCardFrame() {
+        guard let player, let outline, let shape else { return }
+        func shown(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            let point = CGPoint(x: outline.middle.x + x * cos(shape.turn) - y * sin(shape.turn),
+                                y: outline.middle.y + x * sin(shape.turn) + y * cos(shape.turn))
+            return player.shownPoint(point)
+        }
+        let frame = NSBezierPath()
+        if outline.corners == nil {
+            // An object with no size of its own: its mark, a ring.
+            let points = stride(from: 0.0, to: 2 * .pi, by: .pi / 16).map { shown(7 * cos($0), 7 * sin($0)) }
+            frame.move(to: points[0])
+            points.dropFirst().forEach(frame.line(to:))
+        } else {
+            let w = shape.width / 2, h = shape.height / 2
+            frame.move(to: shown(-w, -h))
+            frame.line(to: shown(w, -h))
+            frame.line(to: shown(w, h))
+            frame.line(to: shown(-w, h))
+        }
+        frame.close()
+        frame.lineWidth = 1.5
+        if !outline.visible { frame.setLineDash([5, 3], count: 2, phase: 0) }
+        NSColor.controlAccentColor.setStroke()
+        frame.stroke()
     }
 
     // MARK: - The mouse
@@ -537,7 +569,17 @@ final class EngineEditorOverlay: NSView {
     /// Over a flat scene looked at freely, what its camera shows: framed, the rest dimmed, as
     /// Blender has the camera's frame and passepartout.
     private func drawCameraFrame() {
-        guard let model, model.viewsFreely, let camera = model.cameraView, !camera.inDepth else { return }
+        guard let model else { return }
+        if !model.viewsFreely {
+            // Through the camera the scene is what it shows: its edges are the camera's, dashed.
+            let line = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
+            line.lineWidth = 1
+            line.setLineDash([6, 4], count: 2, phase: 0)
+            NSColor.white.withAlphaComponent(0.85).setStroke()
+            line.stroke()
+            return
+        }
+        guard let camera = model.cameraView, !camera.inDepth else { return }
         let size = model.document.size
         guard size.width > 0, size.height > 0 else { return }
         let width = size.width / camera.zoom, height = size.height / camera.zoom
