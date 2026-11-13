@@ -30,6 +30,10 @@ final class EngineEditorPreviewController {
             scene.setAudio(muted: true, volume: 0)
             scene.setPlaying(true, rate: 1)
             let overlay = EngineEditorOverlay(frame: frame)
+            if #available(macOS 14, *) {
+                // A flat scene turned as a card, and its frame, may reach past where it stands flat.
+                [container, scene, overlay].forEach { $0.clipsToBounds = false }
+            }
             container.addSubview(scene)
             container.addSubview(overlay)
             view = container
@@ -502,10 +506,16 @@ final class EngineEditorPreviewController {
                                                 CATransform3DMakeTranslation(middle.x, middle.y, 0))
             if cardBackdrop == nil { cardBackdrop = player.layer.backgroundColor }
             player.layer.sublayerTransform = transform
-            player.layer.backgroundColor = NSColor.underPageBackgroundColor.cgColor
+            // The card lies on the editor's field itself: nothing behind it, and turned it may
+            // reach past where the scene stands flat.
+            player.layer.backgroundColor = nil
+            player.layer.masksToBounds = false
+            sceneView?.layer?.backgroundColor = nil
         } else if let backdrop = cardBackdrop {
             player.layer.sublayerTransform = CATransform3DIdentity
             player.layer.backgroundColor = backdrop
+            sceneView?.layer?.backgroundColor = NSColor.black.cgColor
+            player.layer.masksToBounds = true
             cardBackdrop = nil
         }
         CATransaction.commit()
@@ -675,9 +685,9 @@ struct EngineEditorPreview: View {
             let available = CGSize(width: max(geometry.size.width - 32, 100), height: max(geometry.size.height - 32, 100))
             let width = min(available.width, available.height * aspectRatio)
             EnginePreviewHost(view: controller.view)
+                // One field, as Blender's viewport: the scene lies on it with no box of its own —
+                // no rounded corners, no shadow; looking through the camera, its edges are dashed.
                 .frame(width: width * model.viewZoom, height: width / aspectRatio * model.viewZoom)
-                .clipShape(RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous))
-                .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
                 .offset(model.viewPan)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

@@ -174,6 +174,17 @@ public final class MetalScenePlayer {
         call("__dispatchWindow", ["resize", [:] as [String: Any]])
     }
 
+    /// Where a point of the view, in points from the top left, is shown now that the layer may
+    /// turn what it holds (`sublayerTransform`, as the editor turns a flat scene into a card):
+    /// worked out by Core Animation itself, the way it draws it.
+    public func shownPoint(_ point: CGPoint) -> CGPoint {
+        // A layer counts from the bottom; the canvas lies in the layer at its frame.
+        let inLayer = CGPoint(x: point.x, y: size.height - point.y)
+        let inCanvas = CGPoint(x: inLayer.x - metalLayer.frame.minX, y: inLayer.y - metalLayer.frame.minY)
+        let shown = layer.convert(inCanvas, from: metalLayer)
+        return CGPoint(x: shown.x, y: size.height - shown.y)
+    }
+
     /// Where the whole canvas is in the view, in points from the top left; parts of it may be
     /// cut off. As the scene player works it out for the pointer (`shownAt`).
     private func canvasFrame(canvas: CGSize, in size: CGSize? = nil) -> CGRect {

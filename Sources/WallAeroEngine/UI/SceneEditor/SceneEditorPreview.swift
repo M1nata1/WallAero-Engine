@@ -261,9 +261,9 @@ struct SceneEditorPreview: View {
             let available = CGSize(width: max(geometry.size.width - 32, 100), height: max(geometry.size.height - 32, 100))
             let width = min(available.width, available.height * aspectRatio)
             WebPreviewHost(view: controller.view)
+                // One field: the page lies on it with no box of its own — no rounded corners, so
+                // the outline of a selection stays whole, and no shadow.
                 .frame(width: width * model.viewZoom, height: width / aspectRatio * model.viewZoom)
-                .clipShape(RoundedRectangle(cornerRadius: SystemLook.tileCornerRadius, style: .continuous))
-                .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
                 // Turned as a card, the page is only looked at: a drag turns it, with Shift moves it.
                 .overlay {
                     if model.showsCard {
