@@ -56,6 +56,7 @@ xattr -dr com.apple.quarantine "/Applications/WallAero Engine.app"
 - **Search and tags:** find a wallpaper by its name, give wallpapers tags of your own, sort the tags into categories and tick the ones the library should show.
 - **Settings of every wallpaper:** scaling (fill / fit / stretch), which part stays in view when filling crops the picture, speed and music. A scene adds the settings its author put up for changing.
 - **Settings of the app:** sound and volume, open at login, and the wallpaper on the lock screen (the frame it showed when the screen locked; Mission Control shows a still of it).
+- **The look of your macOS:** the app is drawn by the system's own controls, so on macOS 26 Tahoe it wears Liquid Glass like Apple's apps, and on earlier versions their look. It follows the Mac's accent color and light or dark appearance as they change. The screenshots here are from macOS 26.
 - **Interface language:** English or Russian, following the system language; any other language gets English. To change it for WallAero Engine alone, go to System Settings → General → Language & Region → Applications.
 
 ## Building from source
@@ -81,11 +82,19 @@ scripts/screenshots.sh        # retake the README screenshots in both languages 
 2. Drag files or folders into the window, or click + in the toolbar.
 3. Double-click a wallpaper (or click Set as Wallpaper), and it is on your desktop.
 
-Above the wallpapers there is a search field and the Tags button. The search looks in names and tags; ⌘F puts the cursor into it. Tags drops down the library's tags, each with a checkbox, under the names of their categories. Tick tags of one category and the wallpapers that have any of them stay; tick tags of several categories and a wallpaper needs one from each.
+At the top of the window, Library and Steam Workshop switch between your wallpapers and the Workshop; next to them, the pencil button makes a new scene and + adds files. The bar at the bottom is about the desktop: pause, Turn Off and Set as Wallpaper, and, with several displays, the display they act on.
+
+Above the wallpapers there is a search field, the Tags button, the type to show (All Types, Scenes, Videos, Web Pages or Pictures) and the order (Newest, Oldest or By Name). The search looks in names and tags; ⌘F puts the cursor into it. Tags drops down the library's tags, each with a checkbox, under the names of their categories. Tick tags of one category and the wallpapers that have any of them stay; tick tags of several categories and a wallpaper needs one from each.
 
 A wallpaper gets its tags in its settings, under Tags: type one and press Return, or pick one other wallpapers already have. Click a tag there to put it into a category or to make a new one; the category goes with the tag on every wallpaper. Tags are in a wallpaper's context menu as well.
 
-The settings are at the side of the same window; the gear button hides and shows them, and ⌘, opens the app's own. They have two tabs. Wallpaper is about the wallpaper selected in the library: its preview, the button that opens it in the editor, its scaling, position and speed, and the [variables](#scenes) of a scene. General holds the app's own settings. Everything else is in the menu bar icon. While its windows are closed, the app takes no space in the Dock.
+The settings are at the side of the same window; the gear button hides and shows them, and ⌘, opens the app's own. They have two tabs. Wallpaper is about the wallpaper selected in the library: a large moving preview, its name, type and size, its tags, Edit… that opens it in the editor, its [music](#music), its scaling, position and speed, and the [settings](#scenes) of a scene. General holds the app's own settings: playback, energy, the lock screen and the [cursor](#cursors). Everything else is in the menu bar icon. While its windows are closed, the app takes no space in the Dock.
+
+<p align="center">
+  <img src="docs/screenshots/en/workshop.png" width="900" alt="The Steam Workshop section of the WallAero Engine window: the Workshop's wallpapers, and the selected one at the side with Download">
+</p>
+
+Steam Workshop shows Wallpaper Engine's Workshop in the same window, laid out as the library: a search field, tags, the type and the order (Popular This Week, Newest or Most Subscribed). Click a wallpaper and its moving preview, author, rating, size and tags open at the side; Download brings it into the library, and its tile shows the progress until it is there — click the ring to stop. Sign In to Steam… at the bottom asks for the account the downloads go through.
 
 ## Music
 
@@ -104,11 +113,15 @@ Music is set wallpaper by wallpaper. Select a wallpaper in the library, and in i
 ## Scenes
 
 <p align="center">
-  <img src="docs/screenshots/en/editor.png" width="900" alt="The WallAero Engine scene editor: the scene's objects, the preview and the selected object's properties">
+  <img src="docs/screenshots/en/editor.png" width="900" alt="The WallAero Engine scene editor: the Layout, Animation and Scripting tabs, the scene with its tools and timeline, and on the right the layers and the selected layer's properties">
 </p>
 
-A scene is a wallpaper made the way Wallpaper Engine makes its scenes, and the editor works like Wallpaper Engine's own, in the manner of a Mac app. File → New Scene (⌘N) makes an empty one at the size of your display; Edit as Scene… in the settings of a video or a picture makes one with it as the background. A Wallpaper Engine scene you add opens in the editor as it is.
+A scene is a wallpaper made the way Wallpaper Engine makes its scenes, and the editor does what Wallpaper Engine's own does, laid out the way Blender is, in the manner of a Mac app. File → New Scene (⌘N) or the pencil button in the toolbar makes an empty one at the size of your display; Edit as Scene… in the settings of a video or a picture makes one with it as the background. A Wallpaper Engine scene you add opens in the editor as it is, with Edit… in its settings.
 
+- **The window:** the scene in the middle, its layers on the right with Find a Layer above them, and the selected one's properties under the list, in tabs down their side. Undo, redo and the export menu are in the title bar.
+- **Workspaces:** the tabs Layout, Animation and Scripting, as in Blender. Layout is for placing things; Animation adds the keys and their curves under the scene; Scripting opens the scene's scripts beside it.
+- **Modes and tools:** the mode menu (Tab goes in and out) switches between Object Mode, Mesh Mode, Rig Mode, Weight Paint, Pose Mode and Mask Paint, each with its own tools down the left of the scene: select, move, rotate and scale in Object Mode. View, Select, Add and Object menus follow it.
+- **Views:** Camera View shows the scene as the desktop will; Free View lets you move about it, flat with 2D on or in depth with it off. The timeline under the scene plays the scene and goes to any frame.
 - **Objects:** pictures, videos, texts, solid colors, particles, sounds, composition layers and groups, listed front first, each with what hangs on it under it. Select one in the list or in the preview; drag it, pull its corners, turn it by the round handle. Its properties — position, scale, rotation, parallax depth, opacity, color, blend mode, and what belongs to its kind — are on the right.
 - **Effects:** Add Effect… puts one of the app's sixteen effects on a picture or a text — tint, color adjustment, blur, shake, sway, water ripple and waves, shine, film grain and more. Each can be switched off, set, moved or removed.
 - **Particles:** snow, rain, fireflies, dust, embers and bubbles to start from. Edit Particle System… changes where particles are made, what each starts with, what happens to it over time and how it is drawn.

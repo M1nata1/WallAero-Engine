@@ -13,6 +13,8 @@ APP="build/WallAero Engine.app"
 shoot() {
     mkdir -p "docs/screenshots/$1"
     "$APP/Contents/MacOS/WallAeroEngine" --screenshots "$PWD/docs/screenshots/$1" -AppleLanguages "($1)" -AppleLocale "$2"
+    # The Steam Workshop's part of the window, as Steam lists it now, with its first wallpaper open.
+    "$APP/Contents/MacOS/WallAeroEngine" --screenshots "$PWD/docs/screenshots/$1" --workshop --workshop-select 1 -AppleLanguages "($1)" -AppleLocale "$2"
 }
 
 shoot en en_US
