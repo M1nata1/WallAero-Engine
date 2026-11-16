@@ -44,6 +44,25 @@ public enum WallpaperEngineRuntime {
       // names; what comes by chance comes the same each time it plays from the start, so that
       // a moment looks the same however it was come to.
       var editorClock = { on: window.__wallaeroEditorClock === true, held: window.__wallaeroEditorClock === true };
+      // For a test that must come out the same each time it runs (`--freeze`): the date the
+      // scene is told is a fixed one, `window.__wallaeroTestEpoch` milliseconds, on by the scene's
+      // own time; and the editor's steps to a moment are never cut short by how long they take.
+      var realNow = Date.now;
+      var testClock = typeof window.__wallaeroTestEpoch === 'number' ? { epoch: window.__wallaeroTestEpoch, at: 0 } : null;
+      if (testClock) {
+        var RealDate = Date;
+        var TestDate = function () {
+          if (!(this instanceof TestDate)) return new RealDate(testClock.epoch + testClock.at).toString();
+          if (arguments.length === 0) return new RealDate(testClock.epoch + testClock.at);
+          return new (Function.prototype.bind.apply(RealDate, [null].concat(Array.prototype.slice.call(arguments))))();
+        };
+        TestDate.prototype = RealDate.prototype;
+        TestDate.now = function () { return testClock.epoch + testClock.at; };
+        TestDate.UTC = RealDate.UTC;
+        TestDate.parse = RealDate.parse;
+        window.Date = TestDate;
+        Date = TestDate;
+      }
       var unseeded = Math.random;
       // How the editor looks at the scene: through its camera, as the wallpaper shows it, or
       // freely — a flat scene whole, without the camera's moves, zoom, shake or parallax; one in
@@ -51,8 +70,9 @@ public enum WallpaperEngineRuntime {
       // `flat`: half the height seen, for one in three dimensions looked at flat, without
       // perspective, as Unity's 2D view does.
       var editorView = { free: false, look: null, flat: 0 };
-      function seedChance() {
-        var state = 0x2545F491;
+      // `key` gives another sequence for each moment (see `goOn`).
+      function seedChance(key) {
+        var state = (0x2545F491 ^ Math.imul(key | 0, 0x9E3779B1)) | 0;
         Math.random = function () {
           state = (state + 0x6D2B79F5) | 0;
           var t = Math.imul(state ^ (state >>> 15), 1 | state);
@@ -4401,10 +4421,20 @@ public enum WallpaperEngineRuntime {
         function runScript(script, current) {
           current = readyScript(script, current);
           if (script.made && script.made.update) {
+            // By the editor's clock a script is run once a moment, until the editor or the
+            // settings change something: frames drawn while the scene stands, as many as it takes
+            // its pictures to come in, would each take it on a step (a twinkle, a smoothing, a
+            // value it adds to its own last) where no time has gone by.
+            if (editorClock.on && script.ranAt === time && script.ranFor === editions) return script.ranTo;
             var answer = call(script, 'update', toScript(script, current));
             // One that gives nothing back has done its work on the scene by itself.
             script.quiet = answer === undefined;
             current = fromScript(script, answer, current);
+            if (editorClock.on) {
+              script.ranAt = time;
+              script.ranFor = editions;
+              script.ranTo = current;
+            }
           }
           return current;
         }
@@ -11593,9 +11623,19 @@ public enum WallpaperEngineRuntime {
           if (!asked && !stopped) asked = requestAnimationFrame(frame);
         }
 
+        var testBegun = false;
+        // How many times the editor or the settings have changed the scene (see `runScript`).
+        var editions = 0;
         function frame(now) {
           asked = 0;
           if (stopped) return;
+          // In a test, once the first frame has made the scene's objects, nothing more is done
+          // until their pictures are all in: how many frames that takes varies from run to run.
+          if (testClock && testBegun && loading > 0) {
+            wake();
+            return;
+          }
+          testBegun = true;
           // The speed the app plays the wallpaper at; a long gap, as after a pause, counts as none.
           // Held by the editor, the scene's time stands.
           var host = window.__wallaeroHost;
@@ -11625,7 +11665,12 @@ public enum WallpaperEngineRuntime {
           // Never nought for scripts, as in Wallpaper Engine: the first frame takes the one before
           // as long as a sixtieth (3737268876's camera works out `frametime * (1 / frametime)`).
           if (passed > 0) frameTime = passed;
+          // By the editor's clock each frame draws its chances afresh from the moment it starts
+          // at: what frames drawn while the scene stood (as its pictures came in, a number that
+          // varies from run to run) took of them changes nothing of what comes after.
+          if (editorClock.on) seedChance(Math.round(time * 1000) + 1);
           time += passed;
+          if (testClock) testClock.at = time * 1000;
           // The editor's timeline shows every animation at the scene's moment; standing, at
           // the moment the editor shows it at.
           if (editorClock.on && passed > 0) timelineAt = time;
@@ -11785,6 +11830,7 @@ public enum WallpaperEngineRuntime {
           // The wallpaper's settings, by the names the scene has for them: those that are now set
           // to something else show at once.
           setProperties: function (settings) {
+            editions++;
             var other = {};
             var any = false;
             Object.keys(settings || {}).forEach(function (name) {
@@ -11826,6 +11872,7 @@ public enum WallpaperEngineRuntime {
           // What the editor has changed of the scene: what is now changed otherwise shows at once.
           // False when it cannot be shown without the scene being played anew.
           setChanges: function (next) {
+            editions++;
             var text = JSON.stringify(next || {});
             if (stopped || text === JSON.stringify(changes)) return true;
             changes = JSON.parse(text);
@@ -11841,6 +11888,7 @@ public enum WallpaperEngineRuntime {
           // played as they change shows at once; false when anything else changed, which needs the
           // scene played anew from the new file.
           setDescription: function (text) {
+            editions++;
             var next;
             try { next = JSON.parse(text); } catch (error) { return false; }
             if (stopped) return true;
@@ -11914,11 +11962,12 @@ public enum WallpaperEngineRuntime {
           goTo: function (seconds) {
             if (!(typeof seconds === 'number' && isFinite(seconds)) || stopped) return false;
             if (seconds < time - 1e-6) return false;
-            var since = Date.now();
+            var since = realNow();
             while (time < seconds - 1e-6) {
               goOn(Math.min(1 / 30, seconds - time));
-              // A scene too heavy to go on so quickly gets there in bigger steps.
-              if (Date.now() - since > 2000) goOn(Math.max(0, seconds - time));
+              // A scene too heavy to go on so quickly gets there in bigger steps; not in a test,
+              // which must step the same each time.
+              if (!testClock && realNow() - since > 2000) goOn(Math.max(0, seconds - time));
             }
             timelineAt = time;
             holdFilms();

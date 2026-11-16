@@ -28,6 +28,13 @@ public final class MetalScenePlayer {
     /// Whether the scene's time is the editor's: it stands until the editor plays it, and goes
     /// to the moments the editor names. Set before the scene starts.
     public var followsEditorClock = false
+    /// For a test that must come out the same each time: the date the scene is told, in
+    /// milliseconds since 1970, going on only with the scene's own time. Set before `start`.
+    public var testEpoch: Double?
+    /// Set to keep how long each frame took to make and hand to the screen, in milliseconds
+    /// (the scene's script and the encoding of its drawing, not the GPU's own work).
+    public var measuresFrames = false
+    public private(set) var frameTimes: [Double] = []
     /// Called when the scene's first frame is on the screen.
     public var onFirstFrame: (() -> Void)?
     private var toldFirstFrame = false
@@ -119,6 +126,7 @@ public final class MetalScenePlayer {
         call("__wallaeroHost.apply", [hostSettings])
         if rendersStill { context.evaluateScript("window.wallaeroStill = true;") }
         if followsEditorClock { context.evaluateScript("window.__wallaeroEditorClock = true;") }
+        if let testEpoch { context.evaluateScript("window.__wallaeroTestEpoch = \(testEpoch);") }
         applySize()
         let table = folder.appendingPathComponent("engine/files.js")
         guard let files = try? String(contentsOf: table, encoding: .utf8) else {
@@ -427,6 +435,7 @@ public final class MetalScenePlayer {
         let now = (CACurrentMediaTime() - started) * 1000
         call("__frame", [now])
         gl.present()
+        if measuresFrames { frameTimes.append((CACurrentMediaTime() - started) * 1000 - now) }
         // Shown once its pictures are all there, or after a few seconds whatever came: a scene
         // drawn while they arrive shows black, and its water ripples on what was not yet there.
         if !toldFirstFrame, CACurrentMediaTime() - started > 4 || (context.evaluateScript("WallaeroEngine.loading()")?.toInt32() ?? 0) == 0 {

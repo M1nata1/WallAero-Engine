@@ -1,0 +1,23 @@
+# Scenes scripts/compare.sh cannot expect to come out the same each run, with the reason.
+# One a line: <scene name as in the manifest><TAB><engine: native, chromium or *><TAB><reason>.
+# Their differences are listed apart in the report and do not fail the run.
+3154017672	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+3538758087	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+3744562824	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+3761154611	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+3804689861	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-2903412088	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-2938612768	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3122339805	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3572340969	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3585875739	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3605722997	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3660962877	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3794460976	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3795510669	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3797653753	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3800262433	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3804906814	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3819548334	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3824326992	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
+ws-3824523091	*	plays a video: its seek to a moment lands on a frame near it, not the same one each run
