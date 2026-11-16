@@ -60,6 +60,8 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
     /// Set before `show` in the editor: the page's time is then the editor's timeline's, see
     /// `editorClockScript`.
     var followsEditorClock = false
+    /// A test's own script, before anything of the page's (`--engine-test --freeze`).
+    var testScript: String?
     var onEditorMessage: (([String: Any]) -> Void)?
     /// The editor owns the scene and pushes it to the page itself. When this is set, a change of
     /// the scene file is reported here instead of being shown.
@@ -424,6 +426,9 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
             // Before anything of the page's, in every frame, so that all it asks the time of is
             // the editor's.
             scripts.insert(CEFUserScript(source: Self.editorClockScript, atDocumentEnd: false, mainFrameOnly: false), at: 0)
+        }
+        if let testScript {
+            scripts.insert(CEFUserScript(source: testScript, atDocumentEnd: false, mainFrameOnly: true), at: 0)
         }
         if let editorScript {
             scripts.append(CEFUserScript(source: editorScript, atDocumentEnd: true, mainFrameOnly: true))

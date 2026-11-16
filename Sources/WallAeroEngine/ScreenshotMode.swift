@@ -698,6 +698,7 @@ enum ScreenshotMode {
                     }
                     for item in added {
                         print("\(source.lastPathComponent) → “\(item.name)” [\(item.sourceFormat)] \(item.fileName), thumbnail: \(item.thumbnailFileName != nil)")
+                        print("  folder: \(library.projectURL(for: item).path)")
                         if !item.tagList.isEmpty {
                             print("  tags: " + item.tagList.map { "\($0) (\(library.category(of: $0) ?? "—"))" }.joined(separator: ", "))
                         }
@@ -1775,6 +1776,9 @@ enum ScreenshotMode {
     /// player of Wallpaper Engine's scenes has to report — what it drew, what it left out and
     /// why — and what the script comes to. A script given with `--eval-at` runs that many
     /// seconds in: to change a setting, or to move the pointer.
+    ///
+    /// `--freeze <moments> [--timing <seconds>]` takes pictures at set moments that come out the same each
+    /// run, as `--native-test` does (`FreezeShots`).
     static var engineTest: (folder: URL, output: URL)? {
         let arguments = CommandLine.arguments
         guard let index = arguments.firstIndex(of: "--engine-test"), index + 2 < arguments.count else { return nil }
@@ -1795,7 +1799,11 @@ enum ScreenshotMode {
             exit(1)
         }
         let view = WebWallpaperView(frame: NSRect(origin: .zero, size: size))
-        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: 40, y: 40), size: size), styleMask: [.borderless],
+        // `--screen <number>`: which of the Mac's screens the window opens on, 0 being the main one.
+        let screens = NSScreen.screens
+        let screen = values(of: "--screen").last.flatMap(Int.init).flatMap { screens.indices.contains($0) ? screens[$0] : nil }
+        let corner = screen.map { NSPoint(x: $0.frame.minX + 40, y: $0.frame.minY + 40) } ?? NSPoint(x: 40, y: 40)
+        let window = NSWindow(contentRect: NSRect(origin: corner, size: size), styleMask: [.borderless],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.level = .floating
@@ -1803,10 +1811,19 @@ enum ScreenshotMode {
         window.contentView = view
         window.orderFrontRegardless()
         view.frameRate = values(of: "--fps").last.flatMap(Int.init) ?? 0
+        let freeze = values(of: "--freeze").last.map(FreezeShots.moments)
+        if freeze != nil {
+            view.testScript = "window.__wallaeroEditorClock = true; window.__wallaeroTestEpoch = \(FreezeShots.epoch);"
+        }
         view.setPlaying(true, rate: 1)
         view.show(project, watchingForChanges: false)
         Task {
             await view.waitUntilLoaded()
+            if let freeze {
+                await freezeShots(view, moments: freeze, size: size, output: request.output, least: values(of: "--after").last.flatMap(Double.init) ?? 1,
+                                  timing: values(of: "--timing").last.flatMap(Double.init) ?? 0)
+                exit(0)
+            }
             for (index, argument) in arguments.enumerated() where argument == "--eval-at" && index + 2 < arguments.count {
                 guard let moment = Double(arguments[index + 1]) else { continue }
                 let script = arguments[index + 2]
@@ -1832,6 +1849,62 @@ enum ScreenshotMode {
             }
             exit(0)
         }
+    }
+
+    /// `--engine-test … --freeze`: the scene's pictures at set moments, as `FreezeShots` takes them
+    /// natively. With `--timing`, frames are counted by the page as it plays on (Chromium's own
+    /// time for a frame cannot be had from outside it): their gaps, not their cost.
+    static func freezeShots(_ view: WebWallpaperView, moments: [Double], size: NSSize, output: URL, least: Double, timing: Double) async {
+        let started = Date()
+        func pointer(_ index: Int) async {
+            let point = FreezeShots.pointer(index, in: size)
+            _ = await view.value(of: "window.dispatchEvent(new PointerEvent('pointermove', { clientX: \(point.0), clientY: \(point.1) })), true")
+        }
+        await pointer(0)
+        while Date().timeIntervalSince(started) < 30 {
+            let loading = await view.value(of: "window.WallaeroEngine && window.WallaeroEngine.loading ? window.WallaeroEngine.loading() : 1") as? Int ?? 1
+            if Date().timeIntervalSince(started) >= least, loading == 0 { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        var summary: [String: Any] = ["moments": moments, "loadSeconds": Date().timeIntervalSince(started)]
+        let stem = output.deletingPathExtension().path
+        for (index, moment) in moments.enumerated() {
+            await pointer(index)
+            let went = await view.value(of: "WallaeroEngine.goTo(\(moment))") as? Bool ?? false
+            // Drawn at the page's next frame; a video's seek takes a while to come.
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let file = URL(fileURLWithPath: stem + "-t" + FreezeShots.name(of: moment) + ".png")
+            if let image = await view.snapshot() {
+                try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: file)
+                print("wrote \(file.path) (\(image.width)×\(image.height))\(went ? "" : ", moment gone by")")
+            } else {
+                print("no picture at \(moment) s")
+            }
+        }
+        if timing > 0 {
+            let power = PowerSample()
+            power?.start()
+            _ = await view.value(of: """
+                (function () { window.__wallaeroGaps = []; var last = 0; WallaeroEngine.holdClock(false);
+                  function frame(now) { if (last) window.__wallaeroGaps.push(now - last); last = now; requestAnimationFrame(frame); }
+                  requestAnimationFrame(frame); return true; })()
+                """)
+            try? await Task.sleep(nanoseconds: UInt64(timing * 1_000_000_000))
+            let gaps = (await view.value(of: "window.__wallaeroGaps") as? [Double] ?? []).sorted()
+            func part(_ share: Double) -> Double { gaps.isEmpty ? 0 : gaps[min(gaps.count - 1, Int(Double(gaps.count) * share))] }
+            summary["timing"] = ["seconds": timing, "frames": gaps.count, "p50": part(0.5), "p95": part(0.95), "gaps": true]
+            print(String(format: "timing: %d frames in %g s, gaps p50 %.2f ms, p95 %.2f ms", gaps.count, timing, part(0.5), part(0.95)))
+            if let watts = power?.watts() {
+                summary["watts"] = watts
+                print(String(format: "watts: %.2f (gpu %.2f, cpu %.2f), whole Mac", watts["total"] ?? 0, watts["gpu"] ?? 0, watts["cpu"] ?? 0))
+            }
+        }
+        let report = await view.value(of: "window.WallaeroEngine && window.WallaeroEngine.report ? window.WallaeroEngine.report() : 'no player on the page'")
+        summary["report"] = report as? String ?? ""
+        if let data = try? JSONSerialization.data(withJSONObject: summary, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: stem + ".json"))
+        }
+        print(report as? String ?? "nothing reported")
     }
 
     // MARK: - Cover
