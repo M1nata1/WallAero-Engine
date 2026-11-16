@@ -2564,6 +2564,40 @@ public enum WallpaperEngineRuntime {
         var curl = fbm(x * 1.6 + Math.cos(share * 6.283) * 0.5, y * 1.6 + Math.sin(share * 6.283) * 0.5 - share * 0.7, 5, seed);
         return Math.max(0, curl * 1.7 - 0.5) * (1 - smooth01(rounded || 0.3, 0.95, r));
       }
+      // A cloud of round billows, as Wallpaper Engine's smoke2 is: a big one in the middle and a
+      // ring of smaller ones about it, each with a ragged rim, turning a little as the sheet goes
+      // on. Gives [shade, opacity]: the creases between billows darker. Its opacity ring by ring
+      // follows the measured one (0.96 to half the radius, 0.49 at three quarters, 0.15 at the
+      // rim; a mean of 0.46).
+      function billows(x, y, share, seed) {
+        var turn = share * 0.9;
+        function billow(cx, cy, radius, k) {
+          var rag = fbm(x * 4.5 + k * 5.7, y * 4.5 - share * 1.3 + k * 2.3, 4, seed + k) - 0.5;
+          return 1 - smooth01(0.55, 1.0, Math.hypot(x - cx, y - cy) / radius + rag * 0.8);
+        }
+        var opacity = billow(0, 0, 0.64, 0), crease = 0;
+        for (var k = 1; k <= 10; k++) {
+          var toward = (k / 10) * Math.PI * 2 + (hash(k, 1, seed) - 0.5) * 1.2 + turn;
+          var far = 0.34 + hash(k, 2, seed) * 0.32, radius = 0.2 + hash(k, 3, seed) * 0.24;
+          var one = billow(Math.cos(toward) * far, Math.sin(toward) * far, radius, k);
+          crease = Math.max(crease, Math.min(opacity, one));
+          opacity = Math.max(opacity, one);
+        }
+        return [1 - 0.18 * crease * (1 - opacity * 0.5), Math.min(0.97, opacity)];
+      }
+      // Torn wisps, as Wallpaper Engine's fog2 is: ridges of a curling noise, kept within a
+      // wreath whose opacity ring by ring is the measured one (thickest a third of the way out,
+      // a mean of 0.17).
+      var FOG2_RINGS = [0.52, 0.62, 0.72, 0.64, 0.44, 0.26, 0.14, 0.08, 0.05, 0.01];
+      function wisps(x, y, share, seed) {
+        var at = Math.sqrt(x * x + y * y) * 10 - 0.5, ring;
+        if (at <= 0) ring = FOG2_RINGS[0];
+        else if (at >= 9) ring = FOG2_RINGS[9] * Math.max(0, 1 - (at - 9) * 2);
+        else ring = FOG2_RINGS[Math.floor(at)] + (FOG2_RINGS[Math.floor(at) + 1] - FOG2_RINGS[Math.floor(at)]) * (at - Math.floor(at));
+        var n = fbm(x * 2.6 + Math.cos(share * 6.283) * 0.6, y * 2.6 + Math.sin(share * 6.283) * 0.6, 5, seed);
+        var ridge = 1 - Math.abs(n * 2 - 1);
+        return Math.min(1, ring * 1.37 * Math.pow(ridge, 1.6));
+      }
       // A flame in a cell, licking up as the sheet goes on.
       function flame(x, y, share, seed, narrow) {
         var rise = (1 - y) / 2;
@@ -2749,9 +2783,22 @@ public enum WallpaperEngineRuntime {
         var sizes = { 'particle/star': 64, 'particle/swirl_0': 256, 'particle/misc/star_0': 128, 'particle/shape/star_4_thick_glow': 128 };
         if (shapes[name]) return shapeOf(sizes[name] || 256, shapes[name]);
 
-        var smoke = { 'particle/smoke/smoke1': [8, 8, 64, 0.015625, 131, false], 'particle/smoke/smoke2': [8, 8, 64, 0.015625, 137, true],
-                      'particle/smoke/smoke2light': [8, 8, 64, 0.015625, 139, true], 'particle/smoke/smoke3': [8, 8, 64, 0, 149, false],
-                      'particle/smoke/smoke4': [8, 4, 64, 0.03125, 151, true], 'particle/fog/fog2': [8, 8, 64, 0.015625, 157, true] };
+        // Measured on Wallpaper Engine's own sheets: how opaque ring by ring, and how light where
+        // they show (luminance where opacity passes 0.3): smoke2 0.95, smoke2light 0.54, fog2
+        // 0.5. 3598808038's calm fog, of smoke2, had been a third as thick.
+        if (name === 'particle/smoke/smoke2' || name === 'particle/smoke/smoke2light') {
+          // The same sheet, only grey.
+          var grey = name === 'particle/smoke/smoke2' ? 0.97 : 0.55, seedOf = 137;
+          return sheetOf(8, 8, 64, 64, 0.015625, function (i, x, y, share) {
+            var b = billows(x, y, share, seedOf);
+            return [grey * b[0], b[1]];
+          });
+        }
+        if (name === 'particle/fog/fog2') {
+          return sheetOf(8, 8, 64, 64, 0.015625, function (i, x, y, share) { return [0.5, wisps(x, y, share, 157)]; });
+        }
+        var smoke = { 'particle/smoke/smoke1': [8, 8, 64, 0.015625, 131, false], 'particle/smoke/smoke3': [8, 8, 64, 0, 149, false],
+                      'particle/smoke/smoke4': [8, 4, 64, 0.03125, 151, true] };
         if (smoke[name]) {
           var s = smoke[name];
           return sheetOf(s[0], s[1], s[2], s[2], s[3], function (i, x, y, share) {
@@ -2935,21 +2982,23 @@ public enum WallpaperEngineRuntime {
           case 'particle/nature/leaves9': return drawnSheet(6, 5, 85.334, 102.4, 1 / 30, function (c, i, share, hw, hh) { leafOf(c, i, share, hw, hh, 'oak', [[176, 140, 52], [156, 120, 40], [196, 160, 70]]); }, 30);
           case 'particle/nature/leaves10': return drawnSheet(6, 5, 85.334, 51.2, 1 / 30, function (c, i, share, hw, hh) { leafOf(c, i, share, hw, hh, 'oak', [[214, 150, 52], [196, 128, 40], [228, 170, 70]]); }, 30);
           case 'particle/nature/rain1':
-            // Many faint threads of rain a pixel wide, long, in bunches, uneven along their length,
-            // in a soft round patch, as Wallpaper Engine's own sheet measures: about thirty across
-            // a row of a frame, most 0.08 bright and a tenth over 0.2, 0.006 on the whole.
+            // Many faint threads of rain a pixel wide, as Wallpaper Engine's own sheet measures:
+            // about thirty across a row of a frame, most 0.08 bright and a tenth over 0.2, 0.006 on
+            // the whole; each about a fifth of the frame long, scattered evenly up and down it and
+            // gathered to its middle across (column bands of 0.001, 0.005, 0.008, 0.012 from the
+            // side in). Long threads in a round patch had made 1823900922's rain fall in blots.
             return sheetOf(2, 2, 512, 512, 0.25, function (i, x, y) {
               var at = (x + 1) * 120, lane = Math.floor(at), off = at - lane - 0.5;
               var across = Math.exp(-Math.pow(off / 0.22, 2));
-              var patch = 1 - smooth01(0.5, 1, Math.hypot(x / 0.8, y / 0.92));
+              var patch = (1 - smooth01(0.3, 0.78, Math.abs(x))) * (1 - smooth01(0.62, 0.97, Math.abs(y)));
               if (across * patch < 0.002) return [1, 0];
               var bunch = smoothNoise(lane / 9, i * 7, 4096, 352), sum = 0;
-              for (var k = 0; k < 3; k++) {
-                if (hash(lane, i * 3 + k, 351) > 0.25 + 0.75 * bunch) continue;
-                var start = hash(lane, i * 3 + k + 8, 351) * 2.4 - 1.4, long = 0.6 + hash(lane, i * 3 + k + 16, 351) * 1.1;
+              for (var k = 0; k < 5; k++) {
+                if (hash(lane, i * 7 + k, 351) > 0.25 + 0.75 * bunch) continue;
+                var start = hash(lane, i * 7 + k + 40, 351) * 2.3 - 1.25, long = 0.3 + hash(lane, i * 7 + k + 80, 351) * 0.22;
                 var along = (y - start) / long;
                 if (along <= 0 || along >= 1) continue;
-                var strength = 0.03 + 0.42 * Math.pow(hash(lane, i * 3 + k + 24, 351), 3);
+                var strength = 0.03 + 0.42 * Math.pow(hash(lane, i * 7 + k + 120, 351), 3);
                 sum += strength * Math.sin(along * Math.PI) * (0.4 + 0.6 * smoothNoise(y * 9, lane * 3 + k, 4096, 353));
               }
               return [1, Math.min(1, sum * across * patch)];
@@ -3836,6 +3885,9 @@ public enum WallpaperEngineRuntime {
 
         var description = json('scene.json') || {};
         var general = description.general || {};
+        // The version of Wallpaper Engine's scene format the scene was saved in: some things are
+        // drawn otherwise from one version on.
+        var sceneVersion = number(description.version, 1);
         // A scene in three dimensions, seen through a camera that stands in it, rather than a
         // picture of so many pixels: there the scene's pixels and the camera's 2D offsets mean nothing.
         var inDepth = !general.orthogonalprojection;
@@ -4571,7 +4623,7 @@ public enum WallpaperEngineRuntime {
             });
             Object.defineProperty(object.instanceValues, 'colorn', {
               enumerable: true,
-              get: function () { var c = thing.recolor || [1, 1, 1]; return new Vec3(c[0], c[1], c[2]); },
+              get: function () { var c = thing.recolorGiven || [1, 1, 1]; return new Vec3(c[0], c[1], c[2]); },
               set: function (value) { override().colorn = String(value); thing.settle(); dirty = true; }
             });
             object.instanceValues.setControlPointPosition = function (index, value) {
@@ -7319,6 +7371,18 @@ public enum WallpaperEngineRuntime {
           // A tube reaches as far each way from its middle as its control point says, along the
           // light's own axes.
           thing.tubeReach = numbers(plain(object.controlpoint), 3, 0);
+          // A light's place animated with nothing said of `relative` moves about where it stands,
+          // as Wallpaper Engine moves it: 2854680269's lamp at 9 goes down by 3 and back, and its
+          // angel is lit from above, changing as it goes (taken as said, the lamp would sink to
+          // the statue's feet and light it from below). A picture's place so animated is set by
+          // the numbers as they are (measured in Wallpaper Engine's window).
+          var where = object.origin;
+          if (where && typeof where === 'object' && !Array.isArray(where) && where.animation && typeof where.animation === 'object' &&
+              where.animation.relative === undefined) {
+            var moved = JSON.parse(JSON.stringify(where));
+            moved.animation.relative = true;
+            thing.lives.origin = live(moved, 3, unplaced(object), thing);
+          }
           also(thing, 'intensity', live(object.intensity === undefined ? 1 : object.intensity, 1, 1, thing));
           also(thing, 'radius', live(object.radius === undefined ? 0 : object.radius, 1, 0, thing));
           also(thing, 'exponent', live(object.exponent === undefined ? 1 : object.exponent, 1, 1, thing));
@@ -7810,6 +7874,8 @@ public enum WallpaperEngineRuntime {
                   pass.inputs[slot] = { previous: true };
                 } else if (compositeNamed(name)) {
                   pass.inputs[slot] = { picture: compositeNamed(name) };
+                  // What it made is kept only while the layer it takes stays as it was.
+                  (thing.takesComposites = thing.takesComposites || []).push(compositeNamed(name));
                 } else if (/^_rt_/.test(key(name)) || built.targets.some(function (target) { return target.name === key(name); })) {
                   // A target of Wallpaper Engine's, or one of the effect's own, whatever its name:
                   // `_coc`, `render_target`.
@@ -8523,12 +8589,12 @@ public enum WallpaperEngineRuntime {
           // One that does not move is drawn once and kept — at the size it is now shown at, and
           // of the color it had.
           if (layer.kept && (layer.kept.width !== Math.max(1, Math.round(width)) || layer.kept.height !== Math.max(1, Math.round(height)) ||
-                             (atBase && !same(layer.keptTint, tint)))) {
+                             (atBase && !same(layer.keptTint, tint)) || compositesChanged(layer))) {
             release(layer.kept);
             layer.kept = null;
           }
           if (layer.kept) {
-            if (layer.composite) keepComposite(layer, layer.kept, width, height);
+            if (layer.composite) keepComposite(layer, layer.kept, width, height, false);
             if (shows) put(withLooks({ texture: layer.kept.texture }, layer), place, finished, how, mesh);
             return;
           }
@@ -8712,7 +8778,7 @@ public enum WallpaperEngineRuntime {
             });
           });
 
-          if (layer.composite) keepComposite(layer, previous, width, height);
+          if (layer.composite) keepComposite(layer, previous, width, height, true);
           gl.bindFramebuffer(gl.FRAMEBUFFER, onto.target.framebuffer);
           gl.viewport(0, 0, onto.target.width, onto.target.height);
           if (shows && !straight) put(withLooks({ texture: previous.texture }, layer), place, finished, how, mesh);
@@ -8720,20 +8786,33 @@ public enum WallpaperEngineRuntime {
           if (!layer.moving && !layer.holds && held && loading === 0 && !straight) {
             layer.kept = held;
             layer.keptTint = tint.slice();
+            layer.keptAt = frames;
             release(spare[0] === held ? spare[1] : spare[0]);
           } else {
             spare.forEach(release);
           }
         }
 
+        // Whether a layer that takes others' finished pictures in its effects must be drawn anew:
+        // one of them was made anew since it was kept (2938612768's bar takes the scene under a
+        // hidden layer, and kept from the first frame it showed a dark box ever after). Also when
+        // made in the very frame it was kept, as a layer drawn later in the scene's order makes it.
+        function compositesChanged(layer) {
+          return !!layer.takesComposites && layer.takesComposites.some(function (composite) {
+            return composite.changed !== undefined && composite.changed >= layer.keptAt;
+          });
+        }
+
         // The finished picture of a layer copied into one of its own, which no other drawing
-        // takes, for those that take it by name; marked as made in this frame.
-        function keepComposite(layer, made, width, height) {
+        // takes, for those that take it by name; marked as made in this frame, and, if `fresh`
+        // (not from what the layer kept), as changed.
+        function keepComposite(layer, made, width, height, fresh) {
           var wide = Math.max(1, Math.round(width)), high = Math.max(1, Math.round(height));
           var target = layer.composite.target;
           if (!target || target.width !== wide || target.height !== high) {
             if (target) releaseRepeated(target);
             target = layer.composite.target = acquire(wide, high);
+            fresh = true;
             // Taken by a model, it repeats past its edges unless the layer says not, as a picture
             // does (3737268876's eyes reach past them).
             if (!layer.clampsUvs) {
@@ -8758,6 +8837,7 @@ public enum WallpaperEngineRuntime {
           layer.composite.width = target.width;
           layer.composite.height = target.height;
           layer.composite.frame = frames;
+          if (fresh) layer.composite.changed = frames;
           gl.bindFramebuffer(gl.FRAMEBUFFER, surface.target.framebuffer);
           gl.viewport(0, 0, surface.target.width, surface.target.height);
         }
@@ -8831,7 +8911,7 @@ public enum WallpaperEngineRuntime {
           '  vec4 c = texture(u_Texture, v_Uv);',
           '  if (u_Channels == 1) c = vec4(1.0, 1.0, 1.0, c.r);',
           '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
-          '  color = vec4(c.rgb * v_Color.rgb * u_Bright, c.a * v_Color.a);',
+          '  color = vec4(c.rgb * v_Color.rgb * u_Bright, clamp(c.a * v_Color.a, 0.0, 1.0));',
           '}'
         ].join('\n'), 'the player\'s own shader');
         // Particles that bend what is behind them — drops on glass, bubbles — rather than show a
@@ -8910,10 +8990,18 @@ public enum WallpaperEngineRuntime {
           '  }',
           '  vec2 at = gl_FragCoord.xy / u_BehindSize + slope * u_Amount * v_Color.a;',
           '  vec3 behind = texture(u_Behind, at).rgb;',
-          '  color = vec4(base.rgb * behind * u_Bright, base.a);',
+          '  color = vec4(base.rgb * behind * u_Bright, clamp(base.a, 0.0, 1.0));',
           '}'
         ].join('\n'), 'the player\'s own shader');
+        // How see-through a particle is goes to the shader as it is, past 1 if the scene's
+        // `alpha` says so, and is cut only after the picture's own is taken in: in Wallpaper
+        // Engine's window a soft halo given alpha 3 shows three times as far out, and one of 1/3
+        // given 3 as one of 1 (3598808038's vapor, alpha 2 and 3, is that much thicker).
         var FLOATS = 16; // to a particle, for the shader
+        // How far in front of a flat scene's middle Wallpaper Engine's rope shader puts the eye it
+        // turns its bands to, in the scene's units, whatever the scene's size (measured: 1975 to
+        // 2110 on scenes of 3840 by 2160 and 1920 by 1080).
+        var ROPE_EYE = 2048;
         // A particle's square is half its size on a side: Wallpaper Engine hands its shaders half
         // the size and its sprite spans that much (measured in its own window: white squares of
         // 30 are 5 pixels at a third). Turned by its random angle a square reaches 0.71 of its
@@ -8954,7 +9042,7 @@ public enum WallpaperEngineRuntime {
           '  vec4 c = texture(u_Texture, v_Uv);',
           '  if (u_Channels == 1) c = vec4(1.0, 1.0, 1.0, c.r);',
           '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
-          '  color = vec4(c.rgb * v_Color.rgb * u_Bright, c.a * v_Color.a);',
+          '  color = vec4(c.rgb * v_Color.rgb * u_Bright, clamp(c.a * v_Color.a, 0.0, 1.0));',
           // A band of water bends what is behind it, as Wallpaper Engine's rope shader does: its
           // colour is taken times what lies under it, looked at as far off as its normal map
           // says — across the band and along it, as the band lies on the screen — times the
@@ -9036,7 +9124,7 @@ public enum WallpaperEngineRuntime {
           '  vec4 c = texture(u_Texture, v_Uv);',
           '  if (u_Channels == 1) c = vec4(1.0, 1.0, 1.0, c.r);',
           '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
-          '  color = vec4(c.rgb * v_Color.rgb * u_Bright, c.a * v_Color.a);',
+          '  color = vec4(c.rgb * v_Color.rgb * u_Bright, clamp(c.a * v_Color.a, 0.0, 1.0));',
           '}'
         ].join('\n'), 'the player\'s own shader');
         var deepParticleBuffer = null, deepParticleShape = null, deepParticleData = new Float32Array(0);
@@ -9766,6 +9854,9 @@ public enum WallpaperEngineRuntime {
           var name = system.name;
           var material = ((json(said.material) || {}).passes || [])[0] || {};
           var over = thing.said.instanceoverride || {};
+          // Whether it picks its particles a color at random, which a color the scene gives takes
+          // the place of (see `settle`).
+          system.picksColor = (said.initializer || []).some(function (each) { return each && key(String(each.name || '')) === 'colorrandom'; });
           // What the scene changes of the particles may be a script's — more of them while the
           // button is held, none but on a birthday — kept with the object's values and read
           // every frame, once for the object however many systems it has.
@@ -9851,9 +9942,17 @@ public enum WallpaperEngineRuntime {
             system.tint = [1, 1, 1];
             // The color the scene gives is the particles' color, whatever the system would have
             // given them and however it would have changed it as they live: a fire that burns
-            // from yellow to red, given violet by the scene, is violet throughout.
+            // from yellow to red, given violet by the scene, is violet throughout. Wallpaper Engine
+            // tints the particles with it, and in scenes saved before version 5 of its format,
+            // where the system picks them a color at random, gives them this one in its place as
+            // well, so it is drawn squared (`colorn` and `color` alike; measured in its own window:
+            // 0.5 grey comes out 64 with colorrandom in versions 1 to 4, and 128 without it or in
+            // version 5; 2981249186's violet fog, version 1, 0.37 0.26 0.69, is 35 18 121, and
+            // 3598808038's calm fog, version 5, is not darkened).
             var colorn = overNow('colorn');
-            system.recolor = colorn !== undefined ? (Array.isArray(colorn) ? colorn.slice(0, 3) : color(colorn, 1)) : (over.color !== undefined ? color(over.color, 255) : null);
+            system.recolorGiven = colorn !== undefined ? (Array.isArray(colorn) ? colorn.slice(0, 3) : color(colorn, 1)) : (over.color !== undefined ? color(over.color, 255) : null);
+            var squared = system.picksColor && sceneVersion < 5;
+            system.recolor = system.recolorGiven ? system.recolorGiven.map(function (part) { return squared ? part * part : part; }) : null;
           };
           // The color of a particle as it is drawn.
           system.colorOf = function (particle, state) {
@@ -10079,14 +10178,25 @@ public enum WallpaperEngineRuntime {
                 away[axis] = side * mix(emitter.least[axis], emitter.most[axis], Math.random()) * emitter.directions[axis];
               }
             } else {
-              // Any direction, as far as somewhere between the least and the most.
-              var turn = Math.random() * Math.PI * 2, rise = Math.random() * 2 - 1, flat = Math.sqrt(1 - rise * rise);
-              var toward = [Math.cos(turn) * flat, Math.sin(turn) * flat, rise];
-              var far = mix(emitter.least[0], emitter.most[0], Math.random());
-              for (axis = 0; axis < 3; axis++) {
-                if (emitter.sign[axis] !== 0) toward[axis] = Math.abs(toward[axis]) * (emitter.sign[axis] > 0 ? 1 : -1);
-                away[axis] = toward[axis] * far * emitter.directions[axis];
-              }
+              // Anywhere in the ball as far out as the most, evenly through its volume, squeezed
+              // along each axis by the directions; not nearer the middle than the least once so
+              // squeezed. Measured in Wallpaper Engine's window: squeezed to a line, particles
+              // lie evenly along it with a gap at the middle as wide as the least; squeezed to a
+              // flat oval they thin out toward its rim as a ball seen from the side does
+              // (1823900922's rain had bunched in the middle of each system).
+              var least = emitter.least[0], most = emitter.most[0], tries = 0, reach;
+              var inner = Math.pow(Math.max(0, Math.min(least, most)), 3), outer = Math.pow(Math.max(0, most), 3);
+              do {
+                var turn = Math.random() * Math.PI * 2, rise = Math.random() * 2 - 1, flat = Math.sqrt(1 - rise * rise);
+                var toward = [Math.cos(turn) * flat, Math.sin(turn) * flat, rise];
+                var far = Math.cbrt(inner + (outer - inner) * Math.random());
+                reach = 0;
+                for (axis = 0; axis < 3; axis++) {
+                  if (emitter.sign[axis] !== 0) toward[axis] = Math.abs(toward[axis]) * (emitter.sign[axis] > 0 ? 1 : -1);
+                  away[axis] = toward[axis] * far * emitter.directions[axis];
+                  reach += away[axis] * away[axis];
+                }
+              } while (least > 0 && Math.sqrt(reach) < least && ++tries < 12);
             }
             var from = system.pointAt(emitter.point);
             particle.x = emitter.origin[0] + away[0] + from[0] + instance.at[0];
@@ -10251,7 +10361,7 @@ public enum WallpaperEngineRuntime {
               out.push(p[0], p[1], p[2], cell ? cell[0] + u * cell[2] : u, cell ? cell[1] + v * cell[3] : v, tint[0], tint[1], tint[2], tint[3]);
             }
             system.particles.slice(0, system.most).forEach(function (particle) {
-              var tint = system.colorOf(particle, state).concat([Math.max(0, Math.min(1, particle.alpha * particle.alphaNow * see))]);
+              var tint = system.colorOf(particle, state).concat([Math.max(0, particle.alpha * particle.alphaNow * see)]);
               if (!(tint[3] > 0.001)) return;
               var here = [particle.x + particle.shiftX, particle.y + particle.shiftY, particle.z];
               var size = particle.size * particle.sizeNow * system.sizeBy * PARTICLE_SIDE;
@@ -10293,7 +10403,8 @@ public enum WallpaperEngineRuntime {
                 var long = Math.max(system.trail.least, Math.min(system.trail.most, length * system.trail.by));
                 up = [speed[0] / length * long, speed[1] / length * long, speed[2] / length * long];
               } else {
-                var c0 = Math.cos(particle.angle || 0), s0 = Math.sin(particle.angle || 0);
+                // Clockwise, as on a flat scene.
+                var c0 = Math.cos(particle.angle || 0), s0 = -Math.sin(particle.angle || 0);
                 // Flat is along the system's x and z — measured on Wallpaper Engine's video of
                 // Sonic AKIBA, whose speed lines are flat sprites that point at the far end of the
                 // street; upright keeps the system's y up.
@@ -10398,7 +10509,10 @@ public enum WallpaperEngineRuntime {
                 y = middleY + (y - middleY) * near;
               }
               var at = i * FLOATS;
-              var turned = particle.angle, long = 1;
+              // A particle's own angle turns it clockwise, as Wallpaper Engine does (measured in its
+              // window: 0.5 leans a light shaft's top to the right, and a spin of −0.1 turns it
+              // the other way; 3598808038's shafts had leant twice as far as its own).
+              var turned = -particle.angle, long = 1;
               if (system.trail) {
                 var speed = Math.sqrt(particle.vx * particle.vx + particle.vy * particle.vy);
                 long = Math.max(system.trail.least, Math.min(system.trail.most, speed * system.trail.by));
@@ -10412,7 +10526,7 @@ public enum WallpaperEngineRuntime {
               data[at + 4] = shade[0];
               data[at + 5] = shade[1];
               data[at + 6] = shade[2];
-              data[at + 7] = Math.max(0, Math.min(1, particle.alpha * particle.alphaNow * see));
+              data[at + 7] = Math.max(0, particle.alpha * particle.alphaNow * see);
               // The frame of a sheet it shows: one chosen when it was made, or one after another
               // along its life, as many times over as the system says.
               var cell = frames ? frames[system.randomFrame
@@ -10499,10 +10613,10 @@ public enum WallpaperEngineRuntime {
               var state = system.state;
               var matrix = stands.matrix;
               var see = system.alphaBy * stands.alpha;
-              // The band is laid out in the system's own space, as Wallpaper Engine's rope shader
-              // does, and only then placed: a system scaled more one way than the other stretches
-              // its band that way too, so a rope rising through a wide system becomes a flat
-              // streak, not a thick bar.
+              // The rope's course is laid out in the system's own space and then placed, so a
+              // system scaled more one way than the other stretches where it goes; its width is
+              // the scene's (see below), so a rope rising through a wide system is a thin wavy
+              // line, not a thick bar.
               var spots = [];
               var i;
               for (i = 0; i < count; i++) {
@@ -10514,7 +10628,7 @@ public enum WallpaperEngineRuntime {
               function pointOf(spot, each) {
                 var shade = system.colorOf(each, state);
                 return { spot: spot, size: each.size * each.sizeNow, shade: [shade[0], shade[1], shade[2]],
-                         alpha: Math.max(0, Math.min(1, each.alpha * each.alphaNow * see)) };
+                         alpha: Math.max(0, each.alpha * each.alphaNow * see) };
               }
               for (i = 0; i < count; i++) {
                 var here = pointOf(spots[i], system.particles[i]);
@@ -10540,20 +10654,31 @@ public enum WallpaperEngineRuntime {
                 }
               }
               count = points.length;
+              // Where the rope goes in the scene: its points through the system's matrix.
+              var placed = points.map(function (point) {
+                return [matrix[12] + matrix[0] * point.spot[0] + matrix[4] * point.spot[1],
+                        matrix[13] + matrix[1] * point.spot[0] + matrix[5] * point.spot[1]];
+              });
               for (i = 0; i < count; i++) {
-                var point = points[i];
-                var previous = points[Math.max(0, i - 1)].spot, next = points[Math.min(count - 1, i + 1)].spot;
+                var point = points[i], here = placed[i];
+                var previous = placed[Math.max(0, i - 1)], next = placed[Math.min(count - 1, i + 1)];
                 var dx = next[0] - previous[0], dy = next[1] - previous[1];
-                var far = Math.sqrt(dx * dx + dy * dy);
-                // As wide as the particle is large (measured on Wallpaper Engine: 1425503532's
-                // trail is as high as Pac-Man). Where the band does not go on, it has no width: a
-                // rope lying in one spot is not seen.
-                var half = far > 0.0001 ? point.size * system.sizeBy / 2 / far : 0;
+                // As wide as the particle is large, in the scene's own units whatever the system's
+                // scale, and turned across its way to an eye ROPE_EYE in front of the scene's middle:
+                // away from the middle the band leans from the eye and shows narrower. Measured in
+                // Wallpaper Engine's window: a rope of 120 is 120 wide at the middle at any scale
+                // from 0.5 to 2, 0.79 of that 1580 to the side and 0.91 of it 920 above, on scenes
+                // of 3840 and of 1920 alike (3598808038's vapor was a third as thick).
+                // Where the band does not go on, it has no width: a rope lying in one spot is not
+                // seen.
+                var toEyeX = sceneWidth / 2 - here[0], toEyeY = sceneHeight / 2 - here[1];
+                var rightX = dy * ROPE_EYE, rightY = -dx * ROPE_EYE, rightZ = dx * toEyeY - dy * toEyeX;
+                var reach = Math.sqrt(rightX * rightX + rightY * rightY + rightZ * rightZ);
+                var half = reach > 1e-6 ? point.size * system.sizeBy / 2 / reach : 0;
                 for (var side = 0; side < 2; side++) {
                   var at = (i * 2 + side) * 8, turn = side ? 1 : -1;
-                  var edgeX = point.spot[0] - dy * half * turn, edgeY = point.spot[1] + dx * half * turn;
-                  band[at] = matrix[12] - surface.left + matrix[0] * edgeX + matrix[4] * edgeY;
-                  band[at + 1] = matrix[13] - surface.bottom + matrix[1] * edgeX + matrix[5] * edgeY;
+                  band[at] = here[0] - surface.left - rightX * half * turn;
+                  band[at + 1] = here[1] - surface.bottom - rightY * half * turn;
                   band[at + 2] = side;
                   // Along the band the picture runs once from end to end, so it fades at both
                   // ends where its picture does.
@@ -10613,7 +10738,7 @@ public enum WallpaperEngineRuntime {
                   return [matrix[12] - surface.left + matrix[0] * spot[0] + matrix[4] * spot[1],
                           matrix[13] - surface.bottom + matrix[1] * spot[0] + matrix[5] * spot[1], spot[3]];
                 });
-                var tint = system.colorOf(particle, state).concat([Math.max(0, Math.min(1, particle.alpha * particle.alphaNow * see))]);
+                var tint = system.colorOf(particle, state).concat([Math.max(0, particle.alpha * particle.alphaNow * see)]);
                 var half = particle.size * particle.sizeNow * wide / 2;
                 var first = corners.length;
                 spots.forEach(function (spot, index) {
