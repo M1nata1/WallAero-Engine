@@ -20,5 +20,6 @@ scene-scripts.js
 pictures.js
 textures.js
 effects.js
+glow.js
 play.js
 api.js
