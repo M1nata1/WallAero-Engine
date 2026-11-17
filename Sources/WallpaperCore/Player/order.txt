@@ -17,5 +17,6 @@ puppets.js
 models.js
 editor.js
 scene-scripts.js
+pictures.js
 play.js
 api.js
