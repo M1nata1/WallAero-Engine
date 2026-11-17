@@ -38,7 +38,7 @@
       // after it (3796846129's ToeJam and Earl).
       var drawn = objects.slice();
       var firstModel = drawn.findIndex(function (object) { return object.isModel; });
-      ctx.before = inDepth && firstModel > 0 ? drawn.slice(0, firstModel) : [];
+      var before = inDepth && firstModel > 0 ? drawn.slice(0, firstModel) : [];
       if (before.length) passes = ['under'].concat(passes);
       passes.forEach(function (pass) {
         (pass === 'under' ? before : drawn).forEach(function (object) {
