@@ -16,9 +16,10 @@
       get all() { return all; }, set all(value) { all = value; },
       get also() { return also; },
       get asked() { return asked; }, set asked(value) { asked = value; },
-      get audioBuffers() { return audioBuffers; },
+      get audioBuffers() { return audioBuffers; }, set audioBuffers(value) { audioBuffers = value; },
       get bands() { return bands; },
       get before() { return before; }, set before(value) { before = value; },
+      get blendProgram() { return blendProgram; }, set blendProgram(value) { blendProgram = value; },
       get bound() { return bound; },
       get buildEffects() { return buildEffects; },
       get buildImage() { return buildImage; },
@@ -38,6 +39,8 @@
       get changes() { return changes; }, set changes(value) { changes = value; },
       get chosenTexture() { return chosenTexture; },
       get clear() { return clear; }, set clear(value) { clear = value; },
+      get clipMaskProgram() { return clipMaskProgram; }, set clipMaskProgram(value) { clipMaskProgram = value; },
+      get clippedProgram() { return clippedProgram; }, set clippedProgram(value) { clippedProgram = value; },
       get complaint() { return complaint; }, set complaint(value) { complaint = value; },
       get compositeNamed() { return compositeNamed; },
       get composites() { return composites; }, set composites(value) { composites = value; },
@@ -63,7 +66,7 @@
       get general() { return general; },
       get gl() { return gl; },
       get glow() { return glow; },
-      get grabProgram() { return grabProgram; },
+      get grabProgram() { return grabProgram; }, set grabProgram(value) { grabProgram = value; },
       get hearing() { return hearing; },
       get inDepth() { return inDepth; },
       get isLively() { return isLively; },
@@ -73,6 +76,7 @@
       get json() { return json; },
       get link() { return link; },
       get listen() { return listen; },
+      get listening() { return listening; }, set listening(value) { listening = value; },
       get live() { return live; },
       get liveOfAnyKind() { return liveOfAnyKind; },
       get loading() { return loading; }, set loading(value) { loading = value; },
@@ -83,9 +87,11 @@
       get matrixOf() { return matrixOf; },
       get mediaTold() { return mediaTold; }, set mediaTold(value) { mediaTold = value; },
       get merged() { return merged; },
+      get meshBlendProgram() { return meshBlendProgram; }, set meshBlendProgram(value) { meshBlendProgram = value; },
+      get meshProgram() { return meshProgram; }, set meshProgram(value) { meshProgram = value; },
       get mice() { return mice; }, set mice(value) { mice = value; },
       get mix() { return mix; },
-      get motions() { return motions; },
+      get motions() { return motions; }, set motions(value) { motions = value; },
       get newTexture() { return newTexture; },
       get nextPath() { return nextPath; },
       get nudged() { return nudged; },
@@ -97,6 +103,7 @@
       get pathLuck() { return pathLuck; }, set pathLuck(value) { pathLuck = value; },
       get pictures() { return pictures; },
       get placeOf() { return placeOf; },
+      get placeProgram() { return placeProgram; }, set placeProgram(value) { placeProgram = value; },
       get placed() { return placed; },
       get players() { return players; }, set players(value) { players = value; },
       get pointer() { return pointer; }, set pointer(value) { pointer = value; },
@@ -110,6 +117,7 @@
       get refresh() { return refresh; },
       get release() { return release; },
       get resize() { return resize; },
+      get runScript() { return runScript; },
       get same() { return same; },
       get scale() { return scale; }, set scale(value) { scale = value; },
       get scene() { return scene; },
@@ -124,7 +132,7 @@
       get screenLayer() { return screenLayer; },
       get scriptErrors() { return scriptErrors; }, set scriptErrors(value) { scriptErrors = value; },
       get scriptLog() { return scriptLog; }, set scriptLog(value) { scriptLog = value; },
-      get scripted() { return scripted; },
+      get scripted() { return scripted; }, set scripted(value) { scripted = value; },
       get scriptedLook() { return scriptedLook; }, set scriptedLook(value) { scriptedLook = value; },
       get scripts() { return scripts; }, set scripts(value) { scripts = value; },
       get seenOnce() { return seenOnce; }, set seenOnce(value) { seenOnce = value; },
@@ -133,7 +141,7 @@
       get setUniform() { return setUniform; },
       get settleIn() { return settleIn; },
       get shake() { return shake; },
-      get shared() { return shared; },
+      get shared() { return shared; }, set shared(value) { shared = value; },
       get sheetFrames() { return sheetFrames; },
       get sheetTime() { return sheetTime; },
       get shifted() { return shifted; },
@@ -142,19 +150,20 @@
       get shows() { return shows; },
       get showsAll() { return showsAll; },
       get soundFiles() { return soundFiles; },
+      get spectrum() { return spectrum; }, set spectrum(value) { spectrum = value; },
       get spot() { return spot; },
       get stale() { return stale; },
       get standing() { return standing; },
       get startingChanges() { return startingChanges; },
       get stopped() { return stopped; }, set stopped(value) { stopped = value; },
       get stored() { return stored; }, set stored(value) { stored = value; },
-      get straightProgram() { return straightProgram; },
+      get straightProgram() { return straightProgram; }, set straightProgram(value) { straightProgram = value; },
       get surface() { return surface; }, set surface(value) { surface = value; },
       get tellAnimationEvents() { return tellAnimationEvents; },
       get tellNoMedia() { return tellNoMedia; },
       get tellPointer() { return tellPointer; },
       get texture() { return texture; },
-      get things() { return things; },
+      get things() { return things; }, set things(value) { things = value; },
       get time() { return time; }, set time(value) { time = value; },
       get timelineAt() { return timelineAt; }, set timelineAt(value) { timelineAt = value; },
       get timers() { return timers; }, set timers(value) { timers = value; },
@@ -528,33 +537,6 @@
     // A pass of an effect: effects.js.
     var effectsPart = makeEffects(ctx);
     var buildPass = effectsPart.buildPass, withLooks = effectsPart.withLooks, drawPass = effectsPart.drawPass;
-    // --- Values that change -----------------------------------------------
-    //
-    // Where an object is, how large, how see-through, what it says: each is read through a
-    // `live` value, which knows what stands behind it. One with an animation or a script is
-    // read every frame, one with a setting of the wallpaper when the settings change, and
-    // one with nothing behind it never again: what a script has made of it meanwhile stays.
-
-    var things = [];         // everything of the scene that has a place: pictures, texts, particles
-    var motions = [];        // the animations of values, each with how far it has played
-    var timelineAt = null;   // the moment the editor's timeline shows, in seconds, while it does
-    var scripts = [];        // the scripts that are running
-    var timers = [];         // what the scripts asked to be called later
-    var shared = {};         // what the scripts keep for one another
-    var stored = {};         // what they keep for themselves
-    var dirty = true;        // something that shows has changed since the last frame drawn
-    var pressed = false;     // the mouse button
-    var audioBuffers = [];   // the sound, as the scripts asked for it
-
-    function same(first, second) {
-      if (!Array.isArray(first) || !Array.isArray(second)) return first === second;
-      if (first.length !== second.length) return false;
-      for (var i = 0; i < first.length; i++) {
-        if (first[i] !== second[i]) return false;
-      }
-      return true;
-    }
-
     // `count` numbers, or with `kind` 'flag' a yes or no, or with 'text' a text. `unit`
     // 'degrees' is for angles: the scene writes them in radians, scripts count in degrees.
     function live(raw, count, fallback, owner, kind, unit) {
@@ -614,159 +596,17 @@
       };
       return value;
     }
-
-    // A value of a kind this does not know, kept for the script behind it: the script runs,
-    // and what it does to the scene by itself shows.
-    function liveOfAnyKind(raw, owner) {
-      var value = raw.value;
-      if (typeof value === 'boolean') return live(raw, 0, value, owner, 'flag');
-      if (typeof value === 'number') return live(raw, 1, 0, owner);
-      var parts = typeof value === 'string' ? value.trim().split(/\s+/) : [];
-      if (!parts.length || !parts.every(function (part) { return part !== '' && isFinite(Number(part)); })) return live(raw, 0, '', owner, 'text');
-      return live(raw, Math.min(4, parts.length), 0, owner);
-    }
-
+    // Values that change: changing-values.js.
+    var things, motions, timelineAt, scripts, timers, shared, stored, dirty, pressed, audioBuffers;
+    var changingValuesPart = makeChangingValues(ctx);
+    var same = changingValuesPart.same, liveOfAnyKind = changingValuesPart.liveOfAnyKind;
     // Scripts: scene-scripts.js.
     var scriptErrors, scriptLog, mediaTold;
     var sceneScriptsPart = makeSceneScripts(ctx);
     var readyScript = sceneScriptsPart.readyScript, runScript = sceneScriptsPart.runScript, forScripts = sceneScriptsPart.forScripts, sheetTime = sceneScriptsPart.sheetTime, tellAnimationEvents = sceneScriptsPart.tellAnimationEvents, serveScripts = sceneScriptsPart.serveScripts, tellScripts = sceneScriptsPart.tellScripts, tellNoMedia = sceneScriptsPart.tellNoMedia, hearOfMedia = sceneScriptsPart.hearOfMedia, tellPointer = sceneScriptsPart.tellPointer;
-    // --- Putting a picture on the scene -----------------------------------
-
-    var placeVertex = [
-      '#version 300 es',
-      'in vec3 a_Position;',
-      'in vec2 a_TexCoord;',
-      'uniform mat3 u_Place;',
-      // In a scene in three dimensions a picture stands in the world, seen through the camera.
-      'uniform mat4 u_World;',
-      'uniform int u_InWorld;',
-      'out vec2 v_Uv;',
-      'void main() {',
-      '  v_Uv = a_TexCoord;',
-      '  vec3 at = u_Place * vec3(a_TexCoord.x - 0.5, 0.5 - a_TexCoord.y, 1.0);',
-      '  gl_Position = u_InWorld == 1 ? u_World * vec4(a_TexCoord.x - 0.5, 0.5 - a_TexCoord.y, 0.0, 1.0) : vec4(at.xy, 0.0, 1.0);',
-      '}'
-    ].join('\n');
-    var sampleLines = [
-      '#version 300 es',
-      'precision highp float;',
-      'in vec2 v_Uv;',
-      'uniform sampler2D u_Texture;',
-      'uniform vec4 u_Tint;',
-      'uniform vec4 u_Frame;',
-      'uniform int u_Channels;',
-      'out vec4 color;',
-      'vec4 picture() {',
-      '  vec4 c = texture(u_Texture, u_Frame.xy + v_Uv * u_Frame.zw);',
-      // A texture of one value a pixel is a shade of grey; of two, a shade and its opacity.
-      '  if (u_Channels == 1) c = vec4(c.rrr, 1.0);',
-      '  if (u_Channels == 2) c = vec4(c.rrr, c.g);',
-      '  return c * u_Tint;',
-      '}'
-    ];
-    // A picture that bends is drawn as its triangles, each corner where its bones have put it.
-    var meshVertex = [
-      '#version 300 es',
-      'in vec2 a_Spot;',
-      'in vec2 a_Uv;',
-      'uniform mat3 u_Place;',
-      'uniform mat4 u_World;',
-      'uniform int u_InWorld;',
-      'out vec2 v_Uv;',
-      'void main() {',
-      '  v_Uv = a_Uv;',
-      '  vec3 at = u_Place * vec3(a_Spot, 1.0);',
-      '  gl_Position = u_InWorld == 1 ? u_World * vec4(a_Spot, 0.0, 1.0) : vec4(at.xy, 0.0, 1.0);',
-      '}'
-    ].join('\n');
-    // The part of the scene that lies under a rectangle of it, to fill a picture of its own.
-    var grabProgram = link([
-      '#version 300 es',
-      'in vec3 a_Position;',
-      'in vec2 a_TexCoord;',
-      'uniform mat3 u_Place;',
-      'out vec2 v_Uv;',
-      'void main() {',
-      '  v_Uv = (u_Place * vec3(a_TexCoord.x - 0.5, 0.5 - a_TexCoord.y, 1.0)).xy * 0.5 + 0.5;',
-      '  gl_Position = vec4(a_TexCoord * 2.0 - 1.0, 0.0, 1.0);',
-      '}'
-    ].join('\n'), [
-      '#version 300 es',
-      'precision highp float;',
-      'in vec2 v_Uv;',
-      'uniform sampler2D u_Texture;',
-      'out vec4 color;',
-      'void main() { color = texture(u_Texture, v_Uv); }'
-    ].join('\n'), 'the player\'s own shader');
-    var placeProgram = link(placeVertex, sampleLines.concat(['void main() { color = picture(); }']).join('\n'), 'the player\'s own shader');
-    // Layers drawn one over another onto nothing leave their colors multiplied by how solid
-    // the result is. Effects, and the scene, take colors that are not: this divides them back.
-    var straightProgram = link([
-      '#version 300 es',
-      'in vec3 a_Position;',
-      'in vec2 a_TexCoord;',
-      'out vec2 v_Uv;',
-      'void main() {',
-      '  v_Uv = a_TexCoord;',
-      '  gl_Position = vec4(a_TexCoord * 2.0 - 1.0, 0.0, 1.0);',
-      '}'
-    ].join('\n'), [
-      '#version 300 es',
-      'precision highp float;',
-      'in vec2 v_Uv;',
-      'uniform sampler2D u_Texture;',
-      'out vec4 color;',
-      'void main() {',
-      '  vec4 c = texture(u_Texture, v_Uv);',
-      '  color = c.a > 0.0 ? vec4(c.rgb / c.a, c.a) : vec4(0.0);',
-      '}'
-    ].join('\n'), 'the player\'s own shader');
-    var meshProgram = link(meshVertex, sampleLines.concat(['void main() { color = picture(); }']).join('\n'), 'the player\'s own shader');
-    // A part of a puppet that shows only within others — an iris within the white of its eye —
-    // is drawn through a mask of those others: where a picture says they count, or where they
-    // are not see-through.
-    var clipMaskProgram = link(meshVertex, [
-      '#version 300 es',
-      'precision highp float;',
-      'in vec2 v_Uv;',
-      'uniform sampler2D u_Texture;',
-      'uniform int u_Alpha;',
-      'out vec4 color;',
-      'void main() {',
-      '  vec4 c = texture(u_Texture, v_Uv);',
-      '  color = vec4(u_Alpha == 1 ? c.a : c.r);',
-      '}'
-    ].join('\n'), 'the player\'s own shader');
-    var clippedProgram = link(meshVertex, sampleLines.concat([
-      'uniform sampler2D u_Mask;',
-      'uniform vec2 u_MaskSize;',
-      'void main() {',
-      '  vec4 c = picture();',
-      '  color = vec4(c.rgb, c.a * texture(u_Mask, gl_FragCoord.xy / u_MaskSize).r);',
-      '}'
-    ]).join('\n'), 'the player\'s own shader');
-    // Blended with what lies under it in one of the ways image editors have; the scene so far
-    // is read from a copy.
-    var blendFragment = sampleLines.concat([
-      'uniform sampler2D u_Scene;',
-      'uniform vec2 u_SceneSize;',
-      'uniform int u_Mode;'
-    ], BLEND_HELPERS, [
-      'vec3 blend(vec3 A, vec3 B) {'
-    ], BLENDS.map(function (formula, index) {
-      return '  if (u_Mode == ' + (index + 1) + ') return ' + formula + ';';
-    }), [
-      '  return B;',
-      '}',
-      'void main() {',
-      '  vec4 c = picture();',
-      '  vec3 under = texture(u_Scene, gl_FragCoord.xy / u_SceneSize).rgb;',
-      '  color = vec4(mix(under, clamp(blend(under, c.rgb), 0.0, 1.0), clamp(c.a, 0.0, 1.0)), 1.0);',
-      '}'
-    ]).join('\n');
-    var blendProgram = link(placeVertex, blendFragment, 'the player\'s own shader');
-    var meshBlendProgram = link(meshVertex, blendFragment, 'the player\'s own shader');
-
+    // Putting a picture on the scene: putting.js.
+    var grabProgram, placeProgram, straightProgram, meshProgram, clipMaskProgram, clippedProgram, blendProgram, meshBlendProgram;
+    makePutting(ctx);
     // --- Where things stand -------------------------------------------------------
     //
     // An object has a place, a size and a turn about each of the three axes, all counted from
@@ -1262,10 +1102,6 @@
     var players;
     var soundsPart = makeSounds(ctx);
     var buildSound = soundsPart.buildSound;
-    // --- Building ---------------------------------------------------------
-
-    var listening = false;
-
     // How much an emitter that answers the sound makes, from nought to all its rate: Wallpaper
     // Engine's audio response, worked out as its own pulse effect does it, which makes nothing
     // while nothing plays. Its mode is none, the left channel, the right one or both; it hears
@@ -1292,7 +1128,6 @@
         return Math.max(0, Math.min(1, Math.pow(eased, exponent)));
       };
     }
-
     // The sound the Mac plays, for the shaders and scripts that draw by it; asked for once one
     // of them wants it, and heard for as long as the canvas is on the page.
     function listen() {
@@ -1303,39 +1138,12 @@
       window.wallpaperRegisterAudioListener(function (levels) { spectrum = levels; });
       if (host) host.owner = null;
     }
-
-    var all = (description.objects || []).filter(function (object) { return object && typeof object === 'object'; });
-    if (!(sceneWidth > 0 && sceneHeight > 0) && inDepth && window.innerWidth > 0 && window.innerHeight > 0) {
-      // A scene in three dimensions is seen through the screen, whatever its pictures: a
-      // first one of 32 by 32 made 3509243656 a blur.
-      sceneWidth = 1920;
-      sceneHeight = Math.round(1920 * window.innerHeight / window.innerWidth);
-    }
-    if (!(sceneWidth > 0 && sceneHeight > 0)) {
-      // A scene may leave its size to its first picture.
-      var first = all.filter(function (object) { return object.image; })[0];
-      var firstSize = first ? numbers(first.size, 2, 0) : [0, 0];
-      if (first && !(firstSize[0] > 0 && firstSize[1] > 0)) {
-        // One that is as large as its picture says so only in its picture: a frame of the GIF
-        // of Wallpaper Engine's template (843532366, 480 by 300, its middle at 240, 150), or,
-        // without a picture to tell, twice as far as the middle it is placed at.
-        var firstModel = json(String(plain(first.image) || '')) || {};
-        var firstPass = ((json(String(firstModel.material || '')) || {}).passes || [])[0] || {};
-        var firstPicture = (firstPass.textures || [])[0] ? texture('materials/' + firstPass.textures[0]) : null;
-        var firstFrame = firstPicture && firstPicture.frames && firstPicture.frames[0];
-        firstSize = firstFrame ? [firstFrame[4], firstFrame[7]] : firstPicture && firstPicture.width > 1 ? [firstPicture.width, firstPicture.height]
-                  : numbers(first.origin, 2, 0).map(function (part) { return part * 2; });
-      }
-      sceneWidth = firstSize[0] > 0 ? firstSize[0] : 1920;
-      sceneHeight = firstSize[1] > 0 ? firstSize[1] : 1080;
-    }
-    // A scene with scripts may show what it has hidden; in any other, what is hidden for good
-    // is left out.
-    var scripted = /"script"\s*:/.test(files['scene.json'] || '');
-
     function isSet(value) {
       return value !== undefined && value !== null;
     }
+    // Building: building.js.
+    var all, scripted, listening;
+    makeBuilding(ctx);
     // Changes made in the editor: editor.js.
     var changes, pristine, FOLLOWED;
     var editorPart = makeEditor(ctx);

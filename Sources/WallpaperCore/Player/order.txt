@@ -23,5 +23,8 @@ effects.js
 glow.js
 drawing.js
 mouse.js
+building.js
+putting.js
+changing-values.js
 play.js
 api.js
