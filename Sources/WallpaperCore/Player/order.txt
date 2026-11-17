@@ -13,5 +13,6 @@ builtin-pictures.js
 sounds.js
 particles.js
 texts.js
+puppets.js
 play.js
 api.js
