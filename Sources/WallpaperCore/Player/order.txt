@@ -31,5 +31,6 @@ pointer-moves.js
 targets.js
 programs.js
 shapes.js
+player-api.js
 play.js
 api.js
