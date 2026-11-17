@@ -96,14 +96,13 @@ final class EngineEditorOverlay: NSView {
 
     /// The scene was played anew: what it has is read again, and given to `onDescribe`.
     func describe() -> String? {
-        guard let scene = player?.ask("describe") as? [String: Any] else { return nil }
+        guard let scene = player?.ask(.describe), scene.objectValue != nil else { return nil }
         described = [:]
-        for each in scene["objects"] as? [[String: Any]] ?? [] {
-            if let id = (each["id"] as? NSNumber)?.intValue { described[id] = each }
+        for each in scene["objects"]?.arrayValue ?? [] {
+            if let id = each["id"]?.numberValue, let object = each.any as? [String: Any] { described[Int(id)] = object }
         }
         placeFrame()
-        guard let data = try? JSONSerialization.data(withJSONObject: scene) else { return nil }
-        return String(decoding: data, as: UTF8.self)
+        return scene.text
     }
 
     /// What the editor changed and showed is in the scene's files now.
@@ -139,15 +138,13 @@ final class EngineEditorOverlay: NSView {
 
     private func placeFrame() {
         defer { needsDisplay = true }
-        guard let object, let found = player?.ask("outline", [object]) as? [String: Any],
-              let middle = found["middle"] as? [NSNumber], middle.count >= 2 else {
+        guard let object, let found = player?.ask(.outline(object)), let middle = found.middle, middle.count >= 2 else {
             outline = nil
             return
         }
-        objectSize = (found["size"] as? [NSNumber]).flatMap { $0.count >= 2 ? CGSize(width: $0[0].doubleValue, height: $0[1].doubleValue) : nil }
-        let corners = (found["corners"] as? [[NSNumber]])?.compactMap { $0.count >= 2 ? CGPoint(x: $0[0].doubleValue, y: $0[1].doubleValue) : nil }
-        outline = (CGPoint(x: middle[0].doubleValue, y: middle[1].doubleValue), corners?.count == 4 ? corners : nil,
-                   (found["visible"] as? NSNumber)?.boolValue ?? true)
+        objectSize = found.size.flatMap { $0.count >= 2 ? CGSize(width: $0[0], height: $0[1]) : nil }
+        let corners = found.corners?.compactMap { $0.count >= 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }
+        outline = (CGPoint(x: middle[0], y: middle[1]), corners?.count == 4 ? corners : nil, found.visible ?? true)
     }
 
     /// The frame's size and turn: from the corners the player gives, or a small mark.
@@ -300,7 +297,7 @@ final class EngineEditorOverlay: NSView {
                 return
             }
         }
-        guard let hit = (player?.ask("hit", [at.x, at.y]) as? NSNumber)?.intValue else {
+        guard let hit = player?.ask(.hit(x: at.x, y: at.y)) else {
             selectObject(nil)
             return
         }
@@ -310,7 +307,7 @@ final class EngineEditorOverlay: NSView {
 
     private func startDrag(_ at: CGPoint, mode: String) {
         guard let object, let outline else { return }
-        let place = (player?.ask("placeAt", [object, at.x, at.y]) as? [NSNumber]).map { CGPoint(x: $0[0].doubleValue, y: $0[1].doubleValue) } ?? .zero
+        let place = player?.ask(.placeAt(object, x: at.x, y: at.y)).flatMap { $0.count >= 2 ? CGPoint(x: $0[0], y: $0[1]) : nil } ?? .zero
         drag = Drag(mode: mode, pointer: at, place: place, middle: outline.middle, x: value(object, "x"), y: value(object, "y"),
                     scaleX: value(object, "scaleX"), scaleY: value(object, "scaleY"), rotation: value(object, "rotation"))
     }
@@ -337,8 +334,8 @@ final class EngineEditorOverlay: NSView {
         var patch: [String: Double] = [:]
         switch drag.mode {
         case "move":
-            if let place = player?.ask("placeAt", [object, at.x, at.y]) as? [NSNumber], place.count >= 2 {
-                var by = CGPoint(x: place[0].doubleValue - drag.place.x, y: place[1].doubleValue - drag.place.y)
+            if let place = player?.ask(.placeAt(object, x: at.x, y: at.y)), place.count >= 2 {
+                var by = CGPoint(x: place[0] - drag.place.x, y: place[1] - drag.place.y)
                 if tool == .move, event.modifierFlags.contains(.shift) {
                     if abs(by.x) < abs(by.y) { by.x = 0 } else { by.y = 0 }
                 }
@@ -380,7 +377,7 @@ final class EngineEditorOverlay: NSView {
         guard let drag else { return }
         self.drag = nil
         if tool != .multi, drag.mode != "move", hypot(at.x - drag.pointer.x, at.y - drag.pointer.y) < 3 {
-            let hit = (player?.ask("hit", [at.x, at.y]) as? NSNumber)?.intValue
+            let hit = player?.ask(.hit(x: at.x, y: at.y))
             if hit != object { selectObject(hit, tellingTheApp: true) }
             return
         }

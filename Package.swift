@@ -41,7 +41,7 @@ let package = Package(
         // its WebGL calls carried out natively.
         .target(
             name: "MetalScene",
-            dependencies: ["ShaderTranslation"],
+            dependencies: ["ShaderTranslation", "WallpaperCore"],
             path: "Sources/MetalScene",
             linkerSettings: [
                 .linkedFramework("Metal"),

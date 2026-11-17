@@ -6,6 +6,7 @@ import JavaScriptCore
 import Metal
 import QuartzCore
 import ShaderTranslation
+import WallpaperCore
 
 /// A scene of Wallpaper Engine's drawn by the app itself: the scene player — the same script
 /// the scene's page runs in Chromium — runs in JavaScriptCore, and what it asks of WebGL is done
@@ -123,10 +124,10 @@ public final class MetalScenePlayer {
         self.position = position
         context.evaluateScript(MetalSceneScripts.environment, withSourceURL: URL(string: "wallaero://environment.js"))
         context.evaluateScript(MetalSceneScripts.metalGL, withSourceURL: URL(string: "wallaero://metalgl.js"))
-        call("__wallaeroHost.apply", [hostSettings])
-        if rendersStill { context.evaluateScript("window.wallaeroStill = true;") }
-        if followsEditorClock { context.evaluateScript("window.__wallaeroEditorClock = true;") }
-        if let testEpoch { context.evaluateScript("window.__wallaeroTestEpoch = \(testEpoch);") }
+        run(.host(hostSettings))
+        if rendersStill { run(.drawsStill) }
+        if followsEditorClock { run(.followsEditorClock) }
+        if let testEpoch { run(.testEpoch(testEpoch)) }
         applySize()
         let table = folder.appendingPathComponent("engine/files.js")
         guard let files = try? String(contentsOf: table, encoding: .utf8) else {
@@ -135,7 +136,14 @@ public final class MetalScenePlayer {
         }
         context.evaluateScript(files, withSourceURL: table)
         context.evaluateScript(engineScript, withSourceURL: URL(string: "wallaero://engine.js"))
-        call("__start", [settings, changes, fit, position])
+        #if DEBUG
+        // The player's table and the app's list of what it asks must be the same.
+        if let mismatch = PlayerQueries.mismatch(context.evaluateScript(PlayerQueries.namesScript)?.toString()) {
+            note(mismatch)
+            assertionFailure(mismatch)
+        }
+        #endif
+        run(.start(settings: JSONValue(any: settings), changes: JSONValue(any: changes), fit: fit, position: position))
         restartClock()
     }
 
@@ -145,31 +153,34 @@ public final class MetalScenePlayer {
         timers.values.forEach { $0.invalidate() }
         timers.removeAll()
         media.values.forEach { $0.call("remove") }
-        call("__player.stop")
+        run(.stop)
     }
 
     /// Pauses and resumes: a paused scene draws nothing and asks for nothing.
     public func setPlaying(_ playing: Bool, rate: Double = 1) {
         self.playing = playing
-        host(["playing": playing, "rate": rate])
+        host(PlayerHostSettings(rate: rate, playing: playing))
         media.values.forEach { if $0.kind != .image { $0.call(playing ? "resume" : "suspend") } }
         restartClock()
     }
 
     /// The wallpaper's sound: every sound of the scene plays at its share of `volume`.
     public func setAudio(muted: Bool, volume: Float) {
-        host(["muted": muted, "volume": Double(max(0, min(1, volume)))])
+        host(PlayerHostSettings(muted: muted, volume: Double(max(0, min(1, volume)))))
     }
 
     /// What the app says of the wallpaper's media, kept for a scene not started yet.
-    private var hostSettings: [String: Any] = ["playing": true, "rate": 1.0, "muted": true, "volume": 1.0]
-    private func host(_ settings: [String: Any]) {
-        hostSettings.merge(settings) { $1 }
-        call("__wallaeroHost.apply", [settings])
+    private var hostSettings = PlayerHostSettings(rate: 1, muted: true, volume: 1, playing: true)
+    private func host(_ settings: PlayerHostSettings) {
+        hostSettings.rate = settings.rate ?? hostSettings.rate
+        hostSettings.muted = settings.muted ?? hostSettings.muted
+        hostSettings.volume = settings.volume ?? hostSettings.volume
+        hostSettings.playing = settings.playing ?? hostSettings.playing
+        run(.host(settings))
     }
 
     public func setSettings(_ settings: [String: Any]) {
-        call("__player.setProperties", [settings])
+        run(.setProperties(JSONValue(any: settings)))
         flush()
     }
 
@@ -179,7 +190,7 @@ public final class MetalScenePlayer {
         self.scale = scale
         applySize()
         placeCanvas()
-        call("__dispatchWindow", ["resize", [:] as [String: Any]])
+        run(.windowEvent("resize", .object([:])))
     }
 
     /// Where a point of the view, in points from the top left, is shown now that the layer may
@@ -267,65 +278,66 @@ public final class MetalScenePlayer {
 
     /// Tells the scene its settings and what the editor changed of it.
     public func editorUpdate(settings: [String: Any]?, changes: [String: Any]) {
-        call("__editor.update", [settings.map { $0 as Any } ?? NSNull(), changes])
+        run(.editorUpdate(settings: settings.map { JSONValue(any: $0) }, changes: JSONValue(any: changes)))
     }
 
     /// The scene file as the editor has just written it.
-    public func setSceneFile(_ text: String) { call("__editor.setScene", [text]) }
+    public func setSceneFile(_ text: String) { run(.setSceneFile(text)) }
 
     /// Other files as the editor has just written them, by the names the player knows them by.
-    public func setFiles(_ files: [String: String]) { call("__editor.setFiles", [files]) }
+    public func setFiles(_ files: [String: String]) { run(.setFiles(files)) }
 
     /// The scene's files laid out anew: read again, and the scene played anew.
     public func reloadFiles() {
         let table = folder.appendingPathComponent("engine/files.js")
         guard let files = try? String(contentsOf: table, encoding: .utf8) else { return }
         context.evaluateScript(files, withSourceURL: table)
-        call("__replay")
+        run(.replay)
     }
 
-    /// One of the player's questions for the editor — `describe`, `hit`, `outline`, `placeAt` —
-    /// and its answer as JSON.
-    public func ask(_ name: String, _ arguments: [Any] = []) -> Any? {
-        guard let text = call("__editor.call", [name] + arguments)?.toString(), text != "null", text != "undefined",
-              let data = text.data(using: .utf8) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+    /// One of the player's questions (`PlayerQuery`), and its answer; nil for none.
+    public func ask<Answer>(_ query: PlayerQuery<Answer>) -> Answer? {
+        query.answer(run(query.call)?.toString())
     }
 
     /// Has the scene's animations show a moment, in seconds, also while the scene is paused; with
     /// nil they go on as they were.
     public func showAnimations(at seconds: Double?) {
-        _ = ask("seek", [seconds ?? NSNull()])
-        call("__frame", [(CACurrentMediaTime() - started) * 1000])
+        _ = ask(.seek(seconds))
+        showNow()
         gl.present()
     }
 
     /// The scene's moment, in seconds.
     public var sceneTime: Double {
-        (call("__editor.call", ["time"])?.toString()).flatMap(Double.init) ?? 0
+        ask(.time) ?? 0
     }
 
     /// Holds the scene's time where it is, or lets it play on.
     public func holdClock(_ held: Bool) {
-        _ = ask("holdClock", [held])
+        _ = ask(.holdClock(held))
     }
 
     /// Takes the scene on to a moment and shows it; false for one gone by, which only playing
     /// the scene anew from its start comes back to.
     public func goTo(seconds: Double) -> Bool {
-        let went = ask("goTo", [seconds]) as? Bool == true
-        call("__frame", [(CACurrentMediaTime() - started) * 1000])
-        gl.present()
+        let went = ask(.goTo(seconds)) == true
+        showNow()
         return went
     }
 
     /// One of the player's questions, with the scene drawn anew at once, also while it is paused.
     @discardableResult
-    public func askAndShow(_ name: String, _ arguments: [Any] = []) -> Any? {
-        let answer = ask(name, arguments)
-        call("__frame", [(CACurrentMediaTime() - started) * 1000])
-        gl.present()
+    public func askAndShow<Answer>(_ query: PlayerQuery<Answer>) -> Answer? {
+        let answer = ask(query)
+        showNow()
         return answer
+    }
+
+    /// A frame drawn and shown at once, whether the scene plays or not.
+    private func showNow() {
+        run(.frame((CACurrentMediaTime() - started) * 1000))
+        gl.present()
     }
 
     /// Gives a texture of the scene new pixels, four bytes each, and shows them at once, also
@@ -341,9 +353,10 @@ public final class MetalScenePlayer {
         }
         guard let memory = paintPixels.memory?.assumingMemoryBound(to: UInt8.self), let array = paintPixels.array else { return false }
         write(memory)
-        guard ask("paintTexture", [name, width, array]) as? Bool == true else { return false }
-        call("__frame", [(CACurrentMediaTime() - started) * 1000])
-        gl.present()
+        let query = PlayerQuery<Bool>.paintTexture(name, width: width)
+        let call = query.call
+        guard query.answer(self.call(call.path, call.arguments.map(\.any) + [array])?.toString()) == true else { return false }
+        showNow()
         return true
     }
 
@@ -366,47 +379,57 @@ public final class MetalScenePlayer {
 
     private func applySize() {
         let object = JSValue(object: ["width": Double(size.width), "height": Double(size.height), "ratio": Double(scale)], in: context)
-        context.setObject(object, forKeyedSubscript: "__size" as NSString)
+        context.setObject(object, forKeyedSubscript: PlayerEnvironment.size as NSString)
     }
 
     /// The pointer over the scene, in points from the top left: `kind` is move, down, up or leave.
     public func pointer(_ kind: String, x: Double, y: Double) {
         let name = kind == "leave" ? "pointerleave" : "pointer" + kind
-        call("__dispatchWindow", [name, ["clientX": x, "clientY": y, "button": 0, "buttons": kind == "down" ? 1 : 0]])
+        run(.windowEvent(name, .object(["clientX": .number(x), "clientY": .number(y), "button": .number(0),
+                                        "buttons": .number(kind == "down" ? 1 : 0)])))
     }
 
-    /// The spectrum of what the Mac plays, as Wallpaper Engine hands it to scenes.
-    public func sound(_ levels: [Float]) {
-        call("__wallaeroHost.sound", [levels.map(Double.init)])
+    /// Tells the scene's scripts something the app has for them: the sound's levels, what music
+    /// plays, and the rest of `PlayerCommand`.
+    public func send(_ command: PlayerCommand) {
+        run(command)
     }
 
-    /// Runs a script the app has for pages — the sound's levels, what music plays — in the
-    /// scene, as it would run in the scene's page; what it changes is drawn.
-    public func perform(_ script: String) {
-        context.evaluateScript(script)
-    }
-
+    /// What the player says of itself, as JSON.
     public var report: String {
-        context.evaluateScript("window.WallaeroEngine && window.WallaeroEngine.report ? window.WallaeroEngine.report() : ''")?.toString() ?? ""
+        ask(.report) ?? ""
     }
 
+    /// Runs a script in the scene's context: for the test host only.
+    @_spi(Testing)
     public func evaluate(_ script: String) -> String? {
         context.evaluateScript(script)?.toString()
     }
 
+    /// A command, as a call of the function it names, or else as its script.
+    @discardableResult
+    private func run(_ command: PlayerCommand) -> JSValue? {
+        guard let call = command.call else { return context.evaluateScript(command.script) }
+        return run(call)
+    }
+
+    @discardableResult
+    private func run(_ call: PlayerCall) -> JSValue? {
+        self.call(call.path, call.arguments.map(\.any))
+    }
 
     /// Calls a function of the page's, if there is one by that name — a path of names.
     @discardableResult
-    private func call(_ path: String, _ arguments: [Any] = []) -> JSValue? {
+    private func call(_ path: [String], _ arguments: [Any] = []) -> JSValue? {
         var target: JSValue? = context.globalObject
         var owner: JSValue? = nil
-        for name in path.split(separator: ".") {
+        for name in path {
             owner = target
-            target = target?.objectForKeyedSubscript(String(name))
+            target = target?.objectForKeyedSubscript(name)
             if target == nil || target!.isUndefined || target!.isNull { return nil }
         }
         guard let function = target, function.isObject else { return nil }
-        if let owner, path.contains(".") { return function.invokeMethod("call", withArguments: [owner] + arguments) }
+        if let owner, path.count > 1 { return function.invokeMethod("call", withArguments: [owner] + arguments) }
         return function.call(withArguments: arguments)
     }
 
@@ -433,12 +456,12 @@ public final class MetalScenePlayer {
         guard frameWanted else { return }
         frameWanted = false
         let now = (CACurrentMediaTime() - started) * 1000
-        call("__frame", [now])
+        run(.frame(now))
         gl.present()
         if measuresFrames { frameTimes.append((CACurrentMediaTime() - started) * 1000 - now) }
         // Shown once its pictures are all there, or after a few seconds whatever came: a scene
         // drawn while they arrive shows black, and its water ripples on what was not yet there.
-        if !toldFirstFrame, CACurrentMediaTime() - started > 4 || (context.evaluateScript("WallaeroEngine.loading()")?.toInt32() ?? 0) == 0 {
+        if !toldFirstFrame, CACurrentMediaTime() - started > 4 || (ask(.loading) ?? 0) == 0 {
             toldFirstFrame = true
             onFirstFrame?()
         }
@@ -450,7 +473,7 @@ public final class MetalScenePlayer {
     }
 
     private func flush() {
-        call("__flushAll")
+        run(.flush)
     }
 
     /// A picture of what the view shows now. A scene in which nothing moves is not drawn again
@@ -537,7 +560,7 @@ public final class MetalScenePlayer {
         }
         define("atob", atob)
         let capture: @convention(block) (JSValue) -> Int = { [weak self] element in
-            guard let self, let handle = element.objectForKeyedSubscript("__handle")?.toNumber()?.intValue else { return 0 }
+            guard let self, let handle = element.objectForKeyedSubscript(PlayerEnvironment.handle)?.toNumber()?.intValue else { return 0 }
             let source: GLSource?
             if let canvas = self.canvases[handle] {
                 source = .pixels(canvas.pixels(), width: canvas.width, height: canvas.height)
@@ -617,7 +640,7 @@ public final class MetalScenePlayer {
             element.videoFiles = self.videoFiles
             if !self.playing { element.call("suspend") }
             element.event = { [weak self] type in
-                self?.call("__mediaEvent", [id, type])
+                self?.run(.mediaEvent(id, type))
             }
             self.media[id] = element
             return id
@@ -652,7 +675,7 @@ public final class MetalScenePlayer {
             let made = Timer(timeInterval: max(0.001, delay / 1000), repeats: repeats) { [weak self] fired in
                 guard let self else { return }
                 if !repeats { self.timers[id] = nil }
-                self.call("__timer", [id])
+                self.run(.timer(id))
                 if !repeats { fired.invalidate() }
             }
             RunLoop.main.add(made, forMode: .common)
@@ -664,7 +687,7 @@ public final class MetalScenePlayer {
         }
         define("cancelTimer", cancelTimer)
         let wantFrame: @convention(block) () -> Void = { [weak self] in self?.frameWanted = true }
-        define("wantFrame", wantFrame)
+        define(PlayerEvent.wantFrame.rawValue, wantFrame)
         let now: @convention(block) () -> Double = { [weak self] in ((CACurrentMediaTime() - (self?.started ?? 0)) * 1000) }
         define("now", now)
         let log: @convention(block) (String, String) -> Void = { [weak self] level, text in
@@ -676,18 +699,18 @@ public final class MetalScenePlayer {
             self.listensToSound = on
             self.onListensToSound?(on)
         }
-        define("listensToSound", listens)
+        define(PlayerEvent.listensToSound.rawValue, listens)
         let listensToMedia: @convention(block) (Bool) -> Void = { [weak self] on in
             guard let self, self.listensToMedia != on else { return }
             self.listensToMedia = on
             self.onListensToMedia?(on)
         }
-        define("listensToMedia", listensToMedia)
+        define(PlayerEvent.listensToMedia.rawValue, listensToMedia)
         let engineStarted: @convention(block) () -> Void = { [weak self] in
             DispatchQueue.main.async { self?.onEngineStarted?() }
         }
-        define("engineStarted", engineStarted)
-        context.setObject(native, forKeyedSubscript: "__native" as NSString)
+        define(PlayerEvent.engineStarted.rawValue, engineStarted)
+        context.setObject(native, forKeyedSubscript: PlayerEnvironment.native as NSString)
     }
 
     // MARK: What the compiler says

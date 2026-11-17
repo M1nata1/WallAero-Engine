@@ -50,9 +50,7 @@ final class SceneEditorPreviewController {
     /// The editor script, ending with the accent color as it is now. It keeps the real clock
     /// while the page's is the timeline's.
     private static var editorScript: String {
-        "(function (requestAnimationFrame, setTimeout, setInterval) {\n" + SceneEditorScript.source
-            + "\n})((window.__wallaeroReal || window).requestAnimationFrame, (window.__wallaeroReal || window).setTimeout, (window.__wallaeroReal || window).setInterval);"
-            + "\nwindow.wallaeroEditor.setAccent('\(NSColor.controlAccentColor.cssHex)');"
+        SceneEditorScript.onRealClock + "\n" + PlayerCommand.editorAccent(NSColor.controlAccentColor.cssHex).script + ";"
     }
 
     // MARK: - Time
@@ -65,7 +63,7 @@ final class SceneEditorPreviewController {
 
     /// Holds the page's time, or lets it play on.
     func setClockHeld(_ held: Bool) {
-        view.evaluate("window.__wallaeroClock && window.__wallaeroClock.hold(\(held))")
+        view.send(.holdPageClock(held))
     }
 
     /// Has the page stand at a moment, as it would have played up to it: on from where it is,
@@ -76,7 +74,7 @@ final class SceneEditorPreviewController {
         rewind = nil
         if seconds >= pageSeconds - 0.0005 {
             pageSeconds = seconds
-            view.evaluate("window.__wallaeroClock && window.__wallaeroClock.goTo(\(seconds))")
+            view.send(.pageClockGoTo(seconds))
             return
         }
         let work = DispatchWorkItem { [weak self] in
@@ -175,22 +173,22 @@ final class SceneEditorPreviewController {
     private func showAccentColor() {
         // For the page as it is, and for when it loads anew.
         view.editorScript = Self.editorScript
-        view.evaluate("window.wallaeroEditor && window.wallaeroEditor.setAccent('\(NSColor.controlAccentColor.cssHex)')")
+        view.send(.editorAccent(NSColor.controlAccentColor.cssHex))
     }
 
     func show(_ scene: WallpaperScene) {
-        guard let data = try? SceneProject.encoded(scene, readable: false) else { return }
-        view.evaluate("window.wallaero && window.wallaero.setScene(\(String(decoding: data, as: UTF8.self)))")
+        guard let data = try? SceneProject.encoded(scene, readable: false), let json = JSONValue(data: data) else { return }
+        view.send(.showScene(json))
     }
 
     func select(_ item: SceneEditorItem?) {
         switch item {
         case .layer(let id):
-            view.evaluate("window.wallaeroEditor && window.wallaeroEditor.select('\(id.uuidString)')")
+            view.send(.editorSelect(id.uuidString))
         case .object(let number):
-            view.evaluate("window.wallaeroEditor && window.wallaeroEditor.selectObject(\(number))")
+            view.send(.editorSelectObject(number))
         case .variable, nil:
-            view.evaluate("window.wallaeroEditor && window.wallaeroEditor.select(null)")
+            view.send(.editorSelect(nil))
         }
     }
 

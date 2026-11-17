@@ -30,25 +30,11 @@
       return current && current[name] ? current[name].apply(current, arguments) : null;
     };
   }
-  window.WallaeroEngine = {
-    // Wallpaper Engine's own pictures as the player draws them, by name: for looking at them.
-    builtinPicture: function (name) { return builtinPicture(name); },
-    // Draws a scene on a canvas until told to stop. One scene plays at a time. `settings` are
-    // the wallpaper's own, by the names the scene has for them, and `changes` what the app's
-    // editor has changed of the scene.
-    play: function (canvas, scene, settings, changes) {
-      if (current) current.stop(current.canvas === canvas);
-      notes = [];
-      current = play(canvas, scene, settings, changes);
-      current.canvas = canvas;
-      if (showsMedia(scene)) {
-        hearMedia();
-        Object.keys(mediaHeard || {}).forEach(function (kind) { current.media(kind, mediaHeard[kind]); });
-      }
-      // For the editor, which then shows the scene's objects.
-      document.dispatchEvent(new CustomEvent('wallaero:engine'));
-      return current;
-    },
+  // Everything the app asks of the player, by name: the native player asks through its
+  // environment's `__editor.call`, the editor's script in a page calls these itself. The app's
+  // own list of them is in PlayerBridge.swift (PlayerQueries.names), which a debug build checks
+  // against this one.
+  var api = {
     report: function () { return current && current.report ? current.report() : JSON.stringify({ notes: notes }); },
     loading: function () { return current && current.loading ? current.loading() : 0; },
     describe: ofCurrent('describe'),
@@ -80,16 +66,39 @@
       if (current && current.wake) current.wake();
       return editorClock.held;
     },
+    // What an animation comes to at a moment, from a value.
+    curveValue: function (animation, seconds, base) {
+      var curve = curveOf(animation);
+      return curve ? curve(seconds, base) : null;
+    }
+  };
+
+  window.WallaeroEngine = {
+    // Wallpaper Engine's own pictures as the player draws them, by name: for looking at them.
+    builtinPicture: function (name) { return builtinPicture(name); },
+    // Draws a scene on a canvas until told to stop. One scene plays at a time. `settings` are
+    // the wallpaper's own, by the names the scene has for them, and `changes` what the app's
+    // editor has changed of the scene.
+    play: function (canvas, scene, settings, changes) {
+      if (current) current.stop(current.canvas === canvas);
+      notes = [];
+      current = play(canvas, scene, settings, changes);
+      current.canvas = canvas;
+      if (showsMedia(scene)) {
+        hearMedia();
+        Object.keys(mediaHeard || {}).forEach(function (kind) { current.media(kind, mediaHeard[kind]); });
+      }
+      // For the editor, which then shows the scene's objects.
+      document.dispatchEvent(new CustomEvent('wallaero:engine'));
+      return current;
+    },
+    api: api,
     // The translation of a shader alone, for whoever wants to see or check it.
     translate: translate,
     annotations: annotations,
     // The way a value changes over time, a script made ready and the settings it declares, a
     // refused shader mended and numbers read from a text: also for checking.
     curve: curveOf,
-    curveValue: function (animation, seconds, base) {
-      var curve = curveOf(animation);
-      return curve ? curve(seconds, base) : null;
-    },
     script: compileScript,
     mend: mend,
     mendPair: mendPair,

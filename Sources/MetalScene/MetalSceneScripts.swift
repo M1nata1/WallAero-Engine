@@ -615,9 +615,10 @@ enum MetalSceneScripts {
           Object.keys(changed || {}).forEach(function (name) { global.wallaeroEngineScene.files[name] = changed[name]; });
           global.__replay();
         },
+        // A question of the app's (PlayerQuery in PlayerBridge.swift), answered as JSON.
         call: function (name, a, b, c) {
-          var player = global.WallaeroEngine;
-          var value = player && player[name] ? player[name](a, b, c) : null;
+          var api = global.WallaeroEngine && global.WallaeroEngine.api;
+          var value = api && api[name] ? api[name](a, b, c) : null;
           return value === undefined ? null : JSON.stringify(value);
         }
       };
