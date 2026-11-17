@@ -14,5 +14,6 @@ sounds.js
 particles.js
 texts.js
 puppets.js
+models.js
 play.js
 api.js
