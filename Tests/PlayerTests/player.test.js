@@ -1,0 +1,67 @@
+'use strict';
+// Tests of the scene player's parts that do not draw: run with `node --test Tests/PlayerTests`
+// (also from `swift test`, by PlayerScriptTests, where node is installed).
+const test = require('node:test');
+const assert = require('node:assert');
+const { load, shaderFiles } = require('./player.js');
+
+const engine = load();
+
+test('the player loads and offers what the app calls', () => {
+  for (const name of ['play', 'report', 'loading', 'goTo', 'holdClock', 'translate', 'curveValue', 'checkScript']) {
+    assert.strictEqual(typeof engine[name], 'function', name);
+  }
+});
+
+test('an animation without handles goes straight from moment to moment', () => {
+  const loop = { c0: [{ frame: 0, value: 0 }, { frame: 30, value: 10 }], options: { fps: 30, length: 30, mode: 'loop' } };
+  assert.deepStrictEqual([0, 0.25, 0.5, 0.75].map((t) => engine.curveValue(loop, t, [0])[0]), [0, 2.5, 5, 7.5]);
+  // A loop starts over at its length.
+  assert.strictEqual(engine.curveValue(loop, 1, [0])[0], 0);
+  assert.strictEqual(engine.curveValue(loop, 1.5, [0])[0], 5);
+});
+
+test('an animation played once stays at its end', () => {
+  const once = { c0: [{ frame: 0, value: 0 }, { frame: 30, value: 10 }], options: { fps: 30, length: 30, mode: 'single' } };
+  assert.deepStrictEqual([0, 0.5, 1, 2].map((t) => engine.curveValue(once, t, [0])[0]), [0, 5, 10, 10]);
+});
+
+test('a relative animation adds to the value it is given', () => {
+  const relative = { c0: [{ frame: 0, value: 0 }, { frame: 30, value: 10 }], options: { fps: 30, length: 30, mode: 'loop' }, relative: true };
+  assert.deepStrictEqual([0, 0.5].map((t) => engine.curveValue(relative, t, [5])[0]), [5, 10]);
+});
+
+test('numbers are read from text, one number or none', () => {
+  assert.deepStrictEqual(Array.from(engine.numbers('1 2', 3, 7)), [1, 2, 7]);
+  assert.deepStrictEqual(Array.from(engine.numbers(4, 3, 0)), [4, 4, 4]);
+  assert.deepStrictEqual(Array.from(engine.numbers(undefined, 2, 9)), [9, 9]);
+});
+
+test('a script is checked without being run', () => {
+  assert.strictEqual(engine.checkScript('export function update(value) { return value + 1; }'), null);
+  const refused = engine.checkScript('export function update( {');
+  assert.ok(refused && typeof refused.message === 'string');
+});
+
+test('the settings a script declares are read', () => {
+  const declared = engine.scriptDeclares('export var scriptProperties = createScriptProperties()' +
+    '.addSlider({ name: "speed", label: "Speed", value: 2, min: 0, max: 5 }).finish();' +
+    'export function update(v) { return v; }');
+  // (made in the player's own context, so compared as JSON)
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(declared)), [{ name: 'speed', label: 'Speed', value: 2, min: 0, max: 5, kind: 'slider' }]);
+});
+
+test('Wallpaper Engine\'s own shaders are translated to GLSL ES 3.00', (t) => {
+  const files = shaderFiles();
+  if (!files) return t.skip('Wallpaper Engine is not installed in ~/Documents/Personalization/WallPaperEngine');
+  let count = 0;
+  for (const name of Object.keys(files)) {
+    // The HLSL folder holds Direct3D's own, not shaders of scenes.
+    if (!/\.(frag|vert)$/.test(name) || name.startsWith('shaders/HLSL/')) continue;
+    const text = engine.translate(files[name], name.endsWith('.vert') ? 'vertex' : 'fragment', {}, files);
+    assert.match(text, /^#version 300 es\n/, name);
+    assert.match(text, /void main\s*\(/, name);
+    count++;
+  }
+  assert.ok(count > 50, `only ${count} shaders found`);
+});

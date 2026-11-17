@@ -1,0 +1,42 @@
+# The files of the scene player, in the order they are joined into one script.
+# Each is taken as it is, one after another, with nothing between them: together they are one
+# function run at once (start.js opens it, api.js closes it), so a file alone is not a script.
+start.js
+values.js
+shader-headers.js
+glsl.js
+curves.js
+script-math.js
+scripts.js
+noise.js
+builtin-pictures.js
+sounds.js
+particles.js
+texts.js
+puppets.js
+models.js
+editor.js
+scene-scripts.js
+pictures.js
+textures.js
+effects.js
+glow.js
+drawing.js
+mouse.js
+building.js
+putting.js
+changing-values.js
+size.js
+pointer-moves.js
+targets.js
+programs.js
+shapes.js
+player-api.js
+placing.js
+camera.js
+shader-values.js
+live-values.js
+hearing.js
+page-places.js
+play.js
+api.js

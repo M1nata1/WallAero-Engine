@@ -63,6 +63,16 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp -R Resources/*.lproj "$APP/Contents/Resources/"
 # Fonts Wallpaper Engine's scenes may name without bringing them, those under an open license.
 cp -R Resources/Fonts "$APP/Contents/Resources/"
+# The scene player of Wallpaper Engine's scenes: its files and the order they are joined in.
+mkdir -p "$APP/Contents/Resources/Player"
+cp Sources/WallpaperCore/Player/order.txt Sources/WallpaperCore/Player/*.js "$APP/Contents/Resources/Player/"
+# Its files are parts of one script, joined in order.txt's order: checked joined, where node is.
+if command -v node >/dev/null 2>&1; then
+    (cd Sources/WallpaperCore/Player && grep -v '^#' order.txt | grep -v '^$' | xargs cat) > build/player-check.js
+    node --check build/player-check.js || { echo "✗ the scene player has a syntax error (see above)"; exit 1; }
+else
+    echo "warning: node is not installed; the scene player's syntax is not checked"
+fi
 mkdir -p "$APP/Contents/Frameworks"
 cp -R build/cef/. "$APP/Contents/Frameworks/"
 cp build/codecs/libWallAeroCodecs.dylib "$APP/Contents/Frameworks/"
