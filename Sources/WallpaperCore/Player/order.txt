@@ -12,5 +12,6 @@ noise.js
 builtin-pictures.js
 sounds.js
 particles.js
+texts.js
 play.js
 api.js
