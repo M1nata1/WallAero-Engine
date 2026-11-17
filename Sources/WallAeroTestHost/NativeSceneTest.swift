@@ -1,3 +1,4 @@
+@testable import WallAeroApp
 import AppKit
 import MetalScene
 import WallpaperCore

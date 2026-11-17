@@ -54,7 +54,7 @@ enum Chromium {
     /// get one of their own, gone when they quit.
     private static var cacheFolder: URL {
         let files = FileManager.default
-        if CommandLine.arguments.dropFirst().contains(where: { $0.hasPrefix("--") }) {
+        if Launch.isHelper {
             let folder = files.temporaryDirectory.appendingPathComponent("WallAeroEngine-\(ProcessInfo.processInfo.processIdentifier)",
                                                                        isDirectory: true)
             temporaryCache = folder

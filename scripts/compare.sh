@@ -72,7 +72,9 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-BIN="${APP}/Contents/MacOS/WallAeroEngine"
+BIN="${APP}/Contents/MacOS/WallAeroTestHost"
+# Apps built before the test host (v3.8) took the tests themselves.
+[ -x "${BIN}" ] || BIN="${APP}/Contents/MacOS/WallAeroEngine"
 [ -x "${BIN}" ] || { echo "no app at ${APP}: run scripts/build.sh --native first" >&2; exit 1; }
 
 # The Mac must keep 20 GB free; a run writes a few hundred megabytes, a library several gigabytes.
