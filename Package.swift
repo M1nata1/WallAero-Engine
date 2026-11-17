@@ -44,10 +44,13 @@ let package = Package(
             ]
         ),
         // Media import, conversion and the wallpaper library. No UI code.
+        // The scene player's own files (Player/) are not SwiftPM resources: scripts/build.sh puts
+        // them in the app's Resources, where WallpaperEngineRuntime reads them.
         .target(
             name: "WallpaperCore",
             dependencies: ["CCodecs"],
-            path: "Sources/WallpaperCore"
+            path: "Sources/WallpaperCore",
+            exclude: ["Player"]
         ),
         // Thin C wrapper over the private CoreGraphics cursor API (CGS).
         .target(

@@ -63,6 +63,9 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp -R Resources/*.lproj "$APP/Contents/Resources/"
 # Fonts Wallpaper Engine's scenes may name without bringing them, those under an open license.
 cp -R Resources/Fonts "$APP/Contents/Resources/"
+# The scene player of Wallpaper Engine's scenes: its files and the order they are joined in.
+mkdir -p "$APP/Contents/Resources/Player"
+cp Sources/WallpaperCore/Player/order.txt Sources/WallpaperCore/Player/*.js "$APP/Contents/Resources/Player/"
 mkdir -p "$APP/Contents/Frameworks"
 cp -R build/cef/. "$APP/Contents/Frameworks/"
 cp build/codecs/libWallAeroCodecs.dylib "$APP/Contents/Frameworks/"

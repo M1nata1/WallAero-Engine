@@ -1,0 +1,3 @@
+# The files of the scene player, in the order they are joined into one script.
+# Each is taken as it is, one after another, with nothing between them.
+engine.js

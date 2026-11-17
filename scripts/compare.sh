@@ -17,6 +17,10 @@
 #   --tolerance <n>             how far a channel may be off and still count as the same (3)
 #   --app <path>                the app to run (build/WallAero Engine.app)
 #   --against <folder>          compare with these shots instead of the baseline's
+#   --fps <n>                   the scenes' frame rate while they play (30)
+#   --full-speed                run the scenes at the Mac's normal priority; by default they run
+#                               with the utility QoS clamp, so that the wallpaper on the desktop
+#                               keeps its frames while a run goes on
 #
 # The scenes are played with the editor's clock (`--freeze`): chance and the date are the same
 # each run, so two runs of one commit come out the same. What cannot (videos, sound) is listed
@@ -42,6 +46,8 @@ HEIGHT=360
 SCREEN=1
 TOLERANCE=3
 LONGEST=240   # seconds one scene may take before it is given up
+FPS=30
+POLITE=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -58,7 +64,9 @@ while [ $# -gt 0 ]; do
         --tolerance) TOLERANCE="$2"; shift ;;
         --app) APP="$2"; shift ;;
         --against) AGAINST="$2"; shift ;;
-        -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --fps) FPS="$2"; shift ;;
+        --full-speed) POLITE=0 ;;
+        -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -128,7 +136,8 @@ else
     OUT="${ROOT}/notes/runs/${NAME}"
 fi
 mkdir -p "${OUT}"
-printf 'commit\t%s\ndate\t%s\nmoments\t%s\nsize\t%sx%s\n' "${COMMIT}" "$(date)" "${MOMENTS}" "${WIDTH}" "${HEIGHT}" > "${OUT}/run.tsv"
+printf 'commit\t%s\ndate\t%s\nmoments\t%s\nsize\t%sx%s\nfps\t%s\npolite\t%s\n' "${COMMIT}" "$(date)" "${MOMENTS}" "${WIDTH}" "${HEIGHT}" \
+    "${FPS}" "${POLITE}" > "${OUT}/run.tsv"
 
 # --- The pictures.
 total=$(grep -cE "${ONLY:-.}" "${MANIFEST}" || true)
@@ -146,8 +155,10 @@ while IFS=$'\t' read -r name folder; do
             chromium) mode=--engine-test ;;
             *) echo "unknown engine ${engine}" >&2; exit 2 ;;
         esac
-        perl -e 'alarm shift; exec @ARGV' "${LONGEST}" "${BIN}" "${mode}" "${LIBRARY}/${folder}" "${dir}/shot.png" \
-            --freeze "${MOMENTS}" --timing "${TIMING}" --size "${WIDTH}" "${HEIGHT}" --screen "${SCREEN}" > "${dir}/shot.log" 2>&1
+        polite=""
+        [ "${POLITE}" = 1 ] && polite="taskpolicy -c utility"
+        ${polite} perl -e 'alarm shift; exec @ARGV' "${LONGEST}" "${BIN}" "${mode}" "${LIBRARY}/${folder}" "${dir}/shot.png" \
+            --freeze "${MOMENTS}" --timing "${TIMING}" --fps "${FPS}" --size "${WIDTH}" "${HEIGHT}" --screen "${SCREEN}" > "${dir}/shot.log" 2>&1
         status=$?
         [ "${status}" = 0 ] || echo "exit ${status}" >> "${dir}/shot.log"
     done
