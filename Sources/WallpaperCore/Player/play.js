@@ -31,7 +31,7 @@
       get buildSound() { return buildSound; },
       get buildText() { return buildText; },
       get byId() { return byId; }, set byId(value) { byId = value; },
-      get camera() { return camera; },
+      get camera() { return camera; }, set camera(value) { camera = value; },
       get cameraLook() { return cameraLook; },
       get cameraMatrix() { return cameraMatrix; },
       get canvas() { return canvas; },
@@ -53,12 +53,13 @@
       get drawPass() { return drawPass; },
       get editions() { return editions; }, set editions(value) { editions = value; },
       get engineValue() { return engineValue; },
-      get eye() { return eye; },
+      get eye() { return eye; }, set eye(value) { eye = value; },
       get eyePlace() { return eyePlace; },
       get files() { return files; },
       get fillVertex() { return fillVertex; }, set fillVertex(value) { fillVertex = value; },
       get films() { return films; }, set films(value) { films = value; },
       get flat() { return flat; },
+      get forgetTargets() { return forgetTargets; },
       get frameAt() { return frameAt; },
       get frameTime() { return frameTime; }, set frameTime(value) { frameTime = value; },
       get frames() { return frames; }, set frames(value) { frames = value; },
@@ -97,8 +98,8 @@
       get nudged() { return nudged; },
       get numbersOf() { return numbersOf; },
       get objects() { return objects; },
-      get passBuffer() { return passBuffer; },
-      get passShape() { return passShape; },
+      get passBuffer() { return passBuffer; }, set passBuffer(value) { passBuffer = value; },
+      get passShape() { return passShape; }, set passShape(value) { passShape = value; },
       get pathLook() { return pathLook; },
       get pathLuck() { return pathLuck; }, set pathLuck(value) { pathLuck = value; },
       get pictures() { return pictures; },
@@ -116,6 +117,7 @@
       get redraw() { return redraw; }, set redraw(value) { redraw = value; },
       get refresh() { return refresh; },
       get release() { return release; },
+      get releaseRepeated() { return releaseRepeated; },
       get resize() { return resize; },
       get runScript() { return runScript; },
       get same() { return same; },
@@ -140,7 +142,7 @@
       get serveScripts() { return serveScripts; },
       get setUniform() { return setUniform; },
       get settleIn() { return settleIn; },
-      get shake() { return shake; },
+      get shake() { return shake; }, set shake(value) { shake = value; },
       get shared() { return shared; }, set shared(value) { shared = value; },
       get sheetFrames() { return sheetFrames; },
       get sheetTime() { return sheetTime; },
@@ -162,6 +164,7 @@
       get tellAnimationEvents() { return tellAnimationEvents; },
       get tellNoMedia() { return tellNoMedia; },
       get tellPointer() { return tellPointer; },
+      get tellScripts() { return tellScripts; },
       get texture() { return texture; },
       get things() { return things; }, set things(value) { things = value; },
       get time() { return time; }, set time(value) { time = value; },
@@ -284,152 +287,20 @@
       }
     }
 
-    // --- Programs ---------------------------------------------------------
-
-    // What the compiler last complained of, when it was asked not to say so itself.
-    var complaint = null;
-
-    function compile(type, source, what, quietly) {
-      var shader = gl.createShader(type);
-      gl.shaderSource(shader, source);
-      gl.compileShader(shader);
-      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        var problem = (gl.getShaderInfoLog(shader) || '').split('\n')[0];
-        // The line the compiler names, to make the reason readable.
-        var line = /ERROR: \d+:(\d+)/.exec(problem);
-        var text = line ? (source.split('\n')[Number(line[1]) - 1] || '').trim() : '';
-        var said = what + ' does not compile: ' + problem.replace(/^ERROR: \d+:\d+: /, '') + (text ? ' — in “' + text.slice(0, 80) + '”' : '');
-        // Everything it says of that line: the first complaint is not always the telling one.
-        var ofLine = (gl.getShaderInfoLog(shader) || '').split('\n').filter(function (each) {
-          var named = /ERROR: \d+:(\d+)/.exec(each);
-          return named && line && named[1] === line[1];
-        });
-        complaint = { stage: type === gl.VERTEX_SHADER ? 'vertex' : 'fragment', messages: ofLine, line: line ? Number(line[1]) : 0, said: said };
-        if (!quietly) note(said);
-        gl.deleteShader(shader);
-        return null;
-      }
-      return shader;
-    }
-
-    // A program with what it takes: its uniforms by name, with their kinds.
-    function link(vertexSource, fragmentSource, what, quietly) {
-      complaint = null;
-      var vertex = compile(gl.VERTEX_SHADER, vertexSource, what + ' (vertex)', quietly);
-      var fragment = vertex && compile(gl.FRAGMENT_SHADER, fragmentSource, what + ' (fragment)', quietly);
-      if (!vertex || !fragment) return null;
-      var program = gl.createProgram();
-      gl.attachShader(program, vertex);
-      gl.attachShader(program, fragment);
-      // The same places in every program, so that one shape serves them all.
-      ['a_Position', 'a_TexCoord', 'a_Place', 'a_Color', 'a_Frame', 'a_Spot', 'a_Uv', 'a_More', 'a_Normal', 'a_Bones', 'a_Weights'].forEach(function (name, index) {
-        gl.bindAttribLocation(program, index, name);
-      });
-      gl.linkProgram(program);
-      gl.deleteShader(vertex);
-      gl.deleteShader(fragment);
-      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        var refused = (gl.getProgramInfoLog(program) || '').split('\n').filter(Boolean);
-        complaint = { stage: 'both', messages: refused, line: 0, said: what + ' does not link: ' + (refused[0] || '') };
-        if (!quietly) note(complaint.said);
-        gl.deleteProgram(program);
-        return null;
-      }
-      var uniforms = {};
-      var count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
-      for (var i = 0; i < count; i++) {
-        var info = gl.getActiveUniform(program, i);
-        var name = info.name.replace(/\[0\]$/, '');
-        uniforms[name] = { location: gl.getUniformLocation(program, info.name), type: info.type, size: info.size };
-      }
-      return { program: program, uniforms: uniforms };
-    }
-
-    // --- Shapes -----------------------------------------------------------
-
-    // The rectangle every pass of an effect is drawn as: the corners of the screen, each with
-    // the corner of the picture that belongs there, the top left one first.
-    var passShape = gl.createVertexArray();
-    gl.bindVertexArray(passShape);
-    var passBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, passBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      -1, 1, 0, 0, 0,
-      1, 1, 0, 1, 0,
-      -1, -1, 0, 0, 1,
-      1, -1, 0, 1, 1
-    ]), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 12);
-    gl.bindVertexArray(null);
-
+    // Programs: programs.js.
+    var complaint;
+    var programsPart = makePrograms(ctx);
+    var link = programsPart.link;
+    // Shapes: shapes.js.
+    var passShape, passBuffer;
+    makeShapes(ctx);
     // Textures: textures.js.
     var loading, composites, covers, films;
     var texturesPart = makeTextures(ctx);
     var compositeNamed = texturesPart.compositeNamed, newTexture = texturesPart.newTexture, looksOf = texturesPart.looksOf, sheetFrames = texturesPart.sheetFrames, flat = texturesPart.flat, shows = texturesPart.shows, showFilms = texturesPart.showFilms, chosenTexture = texturesPart.chosenTexture, texture = texturesPart.texture;
-    // --- Pictures to draw into --------------------------------------------
-
-    var targets = {};   // those not in use, by size
-
-    function acquire(width, height) {
-      width = Math.max(1, Math.round(width));
-      height = Math.max(1, Math.round(height));
-      var id = width + 'x' + height;
-      var free = targets[id];
-      if (free && free.length) return free.pop();
-      var texture = newTexture(true, true);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      var framebuffer = gl.createFramebuffer();
-      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
-      return { id: id, framebuffer: framebuffer, texture: texture, width: width, height: height };
-    }
-
-    function release(target) {
-      if (!target) return;
-      // One made to repeat goes back as the others are, ending at its edges.
-      if (target.repeats) {
-        target.repeats = false;
-        gl.bindTexture(gl.TEXTURE_2D, target.texture);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        target.texture.looks = { wrapS: gl.CLAMP_TO_EDGE, wrapT: gl.CLAMP_TO_EDGE, smooth: looksOf(target.texture).smooth };
-      }
-      (targets[target.id] = targets[target.id] || []).push(target);
-    }
-
-    // What a target needs for objects in three dimensions: how near what was drawn on each of
-    // its pixels is, so that what is behind is hidden. Made when first needed, and cleared
-    // once a frame, before the first such object is drawn on it.
-    function depthOf(target) {
-      if (!target.depth) {
-        target.depth = gl.createRenderbuffer();
-        gl.bindRenderbuffer(gl.RENDERBUFFER, target.depth);
-        gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, target.width, target.height);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, target.depth);
-      }
-      if (target.depthCleared !== frames) {
-        target.depthCleared = frames;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-        gl.depthMask(true);
-        gl.clear(gl.DEPTH_BUFFER_BIT);
-      }
-    }
-
-    function forgetTargets() {
-      Object.keys(targets).forEach(function (id) {
-        targets[id].forEach(function (target) {
-          if (target.depth) gl.deleteRenderbuffer(target.depth);
-          gl.deleteFramebuffer(target.framebuffer);
-          gl.deleteTexture(target.texture);
-        });
-      });
-      targets = {};
-    }
-
+    // Pictures to draw into: targets.js.
+    var targetsPart = makeTargets(ctx);
+    var acquire = targetsPart.acquire, release = targetsPart.release, depthOf = targetsPart.depthOf, forgetTargets = targetsPart.forgetTargets;
     // --- The scene --------------------------------------------------------
 
     var description = json('scene.json') || {};
@@ -1148,104 +1019,17 @@
     var changes, pristine, FOLLOWED;
     var editorPart = makeEditor(ctx);
     var hexOf = editorPart.hexOf, changeOf = editorPart.changeOf, amended = editorPart.amended, amendGeneral = editorPart.amendGeneral, skeleton = editorPart.skeleton, canonical = editorPart.canonical, follow = editorPart.follow, add = editorPart.add, settleIn = editorPart.settleIn, isMoving = editorPart.isMoving, isLively = editorPart.isLively;
-    // --- Moving with the pointer ---------------------------------------------------------
-    //
-    // A scene may be looked at as through a window: as the pointer moves, what is said to be
-    // near moves more than what is far. `eye` is where the scene is looked at from, from the
-    // middle, and follows the pointer with a delay.
-
-    var eye = { on: false, amount: 0, x: 0, y: 0, settling: false };
-    // The camera may shake: the whole scene is moved a little, smoothly and without end, as
-    // far as the amplitude says (a share of the scene's height), as fast as the speed says,
-    // and the rougher, the more of a quicker trembling there is in it.
-    var shake = { on: false, x: 0, y: 0 };
-    // Where a script has moved the camera from the scene's middle, and how near it is.
-    var camera = { x: 0, y: 0, zoom: 1 };
-
-    function tremble() {
-      shake.on = flag(general.camerashake, false);
-      if (!shake.on) {
-        if (shake.x || shake.y) {
-          shake.x = shake.y = 0;
-          dirty = true;
-        }
-        return;
-      }
-      var reach = number(general.camerashakeamplitude, 0.5) / 100 * sceneHeight;
-      var at = time * number(general.camerashakespeed, 3), rough = Math.max(0, number(general.camerashakeroughness, 1));
-      function wobble(seed) {
-        return (smoothNoise(at, seed * 13.7, 4096, seed) - 0.5) * 2 + rough * 0.5 * (smoothNoise(at * 4, seed * 29.1, 4096, seed + 1) - 0.5) * 2;
-      }
-      shake.x = reach * wobble(3);
-      shake.y = reach * wobble(9);
-      dirty = true;
-    }
-
-    function look(seconds) {
-      tremble();
-      eye.on = flag(general.cameraparallax, false);
-      if (!eye.on) {
-        eye.settling = false;
-        return;
-      }
-      eye.amount = number(general.cameraparallaxamount, 0.5);
-      var reach = number(general.cameraparallaxmouseinfluence, 0.5);
-      var delay = Math.max(0, number(general.cameraparallaxdelay, 0.1));
-      var toX = (Math.max(0, Math.min(1, pointer[0])) - 0.5) * reach, toY = (Math.max(0, Math.min(1, pointer[1])) - 0.5) * reach;
-      var share = delay > 0 ? 1 - Math.exp(-seconds / delay) : 1;
-      var x = eye.x + (toX - eye.x) * share, y = eye.y + (toY - eye.y) * share;
-      eye.settling = Math.abs(toX - x) + Math.abs(toY - y) > 0.0002;
-      if (!eye.settling) {
-        x = toX;
-        y = toY;
-      }
-      if (x !== eye.x || y !== eye.y) {
-        eye.x = x;
-        eye.y = y;
-        dirty = true;
-      }
-    }
-
+    // Moving with the pointer: pointer-moves.js.
+    var eye, shake, camera;
+    var pointerMovesPart = makePointerMoves(ctx);
+    var look = pointerMovesPart.look;
     // Glow: glow.js.
     var fillVertex;
     var glowPart = makeGlow(ctx);
     var glow = glowPart.glow;
-    // --- Size -------------------------------------------------------------
-
-    // The scene is drawn as large as it shows on the screen, and no larger than it is.
-    function resize() {
-      var density = window.devicePixelRatio || 1;
-      var shown = Math.max(window.innerWidth * density / sceneWidth, window.innerHeight * density / sceneHeight);
-      var wanted = Math.max(0.05, Math.min(1, shown || 1));
-      var width = Math.max(1, Math.round(sceneWidth * wanted)), height = Math.max(1, Math.round(sceneHeight * wanted));
-      if (sceneTarget && canvas.width === width && canvas.height === height) return;
-      var again = !!sceneTarget;
-      scale = wanted;
-      canvas.width = width;
-      canvas.height = height;
-      // Everything drawn at the old size goes.
-      objects.forEach(function (object) {
-        if (object.kept) {
-          gl.deleteFramebuffer(object.kept.framebuffer);
-          gl.deleteTexture(object.kept.texture);
-          object.kept = null;
-        }
-      });
-      [sceneTarget, copyTarget].forEach(release);
-      // So do the finished pictures kept for others; they show nothing until made again.
-      Object.keys(composites).forEach(function (id) {
-        var kept = composites[id];
-        if (kept.target) releaseRepeated(kept.target);
-        kept.target = null;
-        kept.layers[0] = flat(0, 0, 0, 0).layers[0];
-      });
-      forgetTargets();
-      sceneTarget = acquire(width, height);
-      copyTarget = acquire(width, height);
-      redraw = true;
-      if (again) tellScripts('resizeScreen', new Vec2(width, height));
-    }
-
+    // Size: size.js.
+    var sizePart = makeSize(ctx);
+    var resize = sizePart.resize;
     // Drawing: drawing.js.
     var frames, asked, before, editions;
     var drawingPart = makeDrawing(ctx);

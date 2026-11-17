@@ -26,5 +26,10 @@ mouse.js
 building.js
 putting.js
 changing-values.js
+size.js
+pointer-moves.js
+targets.js
+programs.js
+shapes.js
 play.js
 api.js
