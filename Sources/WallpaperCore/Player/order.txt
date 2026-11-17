@@ -19,5 +19,6 @@ editor.js
 scene-scripts.js
 pictures.js
 textures.js
+effects.js
 play.js
 api.js
