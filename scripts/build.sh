@@ -6,6 +6,10 @@
 #   scripts/build.sh --install  also copy the app to /Applications
 #   scripts/build.sh --dist     also pack the app into dist/WallAeroEngine.zip, for a release on GitHub
 #
+# Next to the app's binary lies the test host, Contents/MacOS/WallAeroTestHost: the app with the
+# developer's helpers and tests, which the scripts run. --dist builds the app without it, and
+# without the app's code compiled for testing, in a build folder of its own (.build/dist).
+#
 # Chromium, which draws the web wallpapers, and the video encoders come from scripts/cef.sh and
 # scripts/codecs.sh, run from here; they download what they need once.
 set -euo pipefail
@@ -38,8 +42,18 @@ fi
 PREFIX_MAP="-fmacro-prefix-map=$PWD/="
 ARCH_FLAGS+=(-Xcc "$PREFIX_MAP" -Xcxx "$PREFIX_MAP")
 
+TEST_HOST="WallAeroTestHost"
 echo "→ Compiling…"
-swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+if [ "$DIST" -eq 1 ]; then
+    # The manifest reads WALLAERO_DIST; a build folder of its own keeps SwiftPM from taking the
+    # manifest it read without it.
+    export WALLAERO_DIST=1
+    ARCH_FLAGS+=(--scratch-path .build/dist)
+    swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product "$EXECUTABLE"
+    swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product WallAeroHelper
+else
+    swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+fi
 BIN_DIR="$(swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 
 NATIVE_FLAG=()
@@ -58,6 +72,7 @@ echo "→ Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/$EXECUTABLE" "$APP/Contents/MacOS/"
+if [ "$DIST" -eq 0 ]; then cp "$BIN_DIR/$TEST_HOST" "$APP/Contents/MacOS/"; fi
 cp Resources/Info.plist "$APP/Contents/"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cp -R Resources/*.lproj "$APP/Contents/Resources/"
@@ -93,19 +108,20 @@ cp Resources/Fonts/*.txt "$LICENSES/"
 # stamp the SDK they built with and leave the oldest macOS the app runs on in its place (seen
 # with Swift 6.4 and the macOS 27 SDK: "sdk 13.0"). The app was built against the SDK the tools
 # report, so that one is stamped in.
-BINARY="$APP/Contents/MacOS/$EXECUTABLE"
-stamp() { xcrun vtool -show-build "$BINARY" 2>/dev/null | awk -v key="$1" '$1 == key { print $2; exit }'; }
-STAMPED_SDK="$(stamp sdk)"
-OLDEST_OS="$(stamp minos)"
-BUILT_WITH_SDK="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || true)"
-if [ -n "$BUILT_WITH_SDK" ] && [ -n "$STAMPED_SDK" ] && [ "$STAMPED_SDK" = "$OLDEST_OS" ] && [ "$STAMPED_SDK" != "$BUILT_WITH_SDK" ]; then
-    echo "→ Stamping the macOS $BUILT_WITH_SDK SDK (the tools left $STAMPED_SDK there)…"
-    # The tool warns that the signature is no longer good; the app is signed right below.
-    xcrun vtool -set-build-version macos "$OLDEST_OS" "$BUILT_WITH_SDK" -replace -output "$BINARY.stamped" "$BINARY" \
-        2> >(grep -v "code signature will be invalid" >&2)
-    mv "$BINARY.stamped" "$BINARY"
-    chmod +x "$BINARY"
-fi
+for BINARY in "$APP/Contents/MacOS/"*; do
+    stamp() { xcrun vtool -show-build "$BINARY" 2>/dev/null | awk -v key="$1" '$1 == key { print $2; exit }'; }
+    STAMPED_SDK="$(stamp sdk)"
+    OLDEST_OS="$(stamp minos)"
+    BUILT_WITH_SDK="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || true)"
+    if [ -n "$BUILT_WITH_SDK" ] && [ -n "$STAMPED_SDK" ] && [ "$STAMPED_SDK" = "$OLDEST_OS" ] && [ "$STAMPED_SDK" != "$BUILT_WITH_SDK" ]; then
+        echo "→ Stamping the macOS $BUILT_WITH_SDK SDK (the tools left $STAMPED_SDK there)…"
+        # The tool warns that the signature is no longer good; the app is signed right below.
+        xcrun vtool -set-build-version macos "$OLDEST_OS" "$BUILT_WITH_SDK" -replace -output "$BINARY.stamped" "$BINARY" \
+            2> >(grep -v "code signature will be invalid" >&2)
+        mv "$BINARY.stamped" "$BINARY"
+        chmod +x "$BINARY"
+    fi
+done
 
 echo "→ Signing (ad hoc)…"
 sign() { codesign --force --sign - --timestamp=none "$1"; }
@@ -116,6 +132,10 @@ while IFS= read -r -d '' library; do sign "$library"; done \
 sign "$FRAMEWORKS/Chromium Embedded Framework.framework"
 sign "$FRAMEWORKS/libWallAeroCodecs.dylib"
 for helper in "$FRAMEWORKS/"*Helper*.app; do sign "$helper"; done
+# The test host plays scenes as the app does, so it may compile code as it runs too.
+if [ -f "$APP/Contents/MacOS/$TEST_HOST" ]; then
+    codesign --force --sign - --timestamp=none --entitlements scripts/WallAeroEngine.entitlements "$APP/Contents/MacOS/$TEST_HOST"
+fi
 # The app itself may compile code as it runs: JavaScriptCore does, for the scenes' scripts.
 codesign --force --sign - --timestamp=none --entitlements scripts/WallAeroEngine.entitlements "$APP"
 

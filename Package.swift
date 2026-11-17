@@ -1,5 +1,12 @@
 // swift-tools-version:5.9
+import Foundation
 import PackageDescription
+
+// The test host reaches into the app (`@testable import WallAeroApp`), which takes the app's
+// code compiled for testing. The app that is shipped is built without: scripts/build.sh --dist
+// sets WALLAERO_DIST and builds only the app.
+let forTests: [SwiftSetting] = ProcessInfo.processInfo.environment["WALLAERO_DIST"] == nil
+    ? [.unsafeFlags(["-enable-testing"])] : []
 
 let package = Package(
     name: "WallAeroEngine",
@@ -100,10 +107,25 @@ let package = Package(
             cxxSettings: [.headerSearchPath("../CEFWrapper"), .headerSearchPath("../CEFHost")]
         ),
         // The menu bar app: desktop windows, playback engine and SwiftUI screens.
+        // All of the app, but for its start.
+        .target(
+            name: "WallAeroApp",
+            dependencies: ["WallpaperCore", "CursorCore", "CEFHost", "MetalScene"],
+            path: "Sources/WallAeroApp",
+            swiftSettings: forTests
+        ),
+        // The app that is shipped: only its start.
         .executableTarget(
             name: "WallAeroEngine",
-            dependencies: ["WallpaperCore", "CursorCore", "CEFHost", "MetalScene"],
+            dependencies: ["WallAeroApp"],
             path: "Sources/WallAeroEngine"
+        ),
+        // The app with the developer's helpers and tests (scripts/build.sh puts it next to the
+        // app's binary; --dist leaves it out).
+        .executableTarget(
+            name: "WallAeroTestHost",
+            dependencies: ["WallAeroApp", "WallpaperCore", "MetalScene", "CEFHost"],
+            path: "Sources/WallAeroTestHost"
         ),
         // Command-line helper to apply or reset a cursor theme, reusing the app's engine.
         .executableTarget(

@@ -4,7 +4,6 @@ import Combine
 import SwiftUI
 import WallpaperCore
 
-@main
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let library: WallpaperLibrary
@@ -19,127 +18,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isLaunched = false
     private var urlsOpenedBeforeLaunch: [URL] = []
 
-    static func main() {
+    /// Starts the app: called by the app's own `main`, and by the test host after it has set `Launch`.
+    static func launch() {
         DevelopmentRun.prepare()
-        // The helpers a developer runs (all started with options) leave the music players
-        // alone: macOS would ask the user's leave for a program they did not start themselves.
-        NowPlaying.asksPlayers = !CommandLine.arguments.contains { $0.hasPrefix("--") } || CommandLine.arguments.contains("--ask-players")
+        NowPlaying.asksPlayers = Launch.asksPlayers
         // Chromium needs to know when the app hands on an event, so the app's object is its kind.
         let app = CEFApplication.shared
         Codecs.configure()
-        if let index = CommandLine.arguments.firstIndex(of: "--convert-media"), index + 2 < CommandLine.arguments.count {
-            // A developer's helper: turns one video or sound into WebM as the library would.
-            let source = URL(fileURLWithPath: CommandLine.arguments[index + 1])
-            let destination = URL(fileURLWithPath: CommandLine.arguments[index + 2])
-            Task {
-                let started = Date()
-                do {
-                    print("needs conversion: \(await WebMediaConverter.needsConversion(source))")
-                    try await WebMediaConverter.convert(source, to: destination)
-                    print(String(format: "converted in %.1f s", Date().timeIntervalSince(started)))
-                } catch {
-                    print("failed: \(error)")
-                }
-                exit(0)
-            }
-            app.run()
-            return
-        }
-        Codecs.configure()
-        if let index = CommandLine.arguments.firstIndex(of: "--convert-media"), index + 2 < CommandLine.arguments.count {
-            // A developer's helper: turns one video or sound into WebM as the library would.
-            let source = URL(fileURLWithPath: CommandLine.arguments[index + 1])
-            let destination = URL(fileURLWithPath: CommandLine.arguments[index + 2])
-            Task {
-                let started = Date()
-                do {
-                    print("needs conversion: \(await WebMediaConverter.needsConversion(source))")
-                    try await WebMediaConverter.convert(source, to: destination)
-                    print(String(format: "converted in %.1f s", Date().timeIntervalSince(started)))
-                } catch {
-                    print("failed: \(error)")
-                }
-                exit(0)
-            }
-            app.run()
-            return
-        }
-        if let request = ScreenshotMode.renderRequest {
-            // A developer's helper that needs neither the library nor the rest of the app.
-            ScreenshotMode.renderWeb(request)
-            app.run()
-            return
-        }
-        if let request = ScreenshotMode.editRequest {
-            ScreenshotMode.editScene(request)
-            app.run()
-            return
-        }
-        if let target = ScreenshotMode.energyTestTarget {
-            ScreenshotMode.energyTest(target)
-            app.run()
-            return
-        }
-        // A developer's helper: lays a scene's Wallpaper Engine project out anew, as the app
-        // does after an update, for a copy of a scene to be tested.
-        if let index = CommandLine.arguments.firstIndex(of: "--lay-out"), index + 1 < CommandLine.arguments.count {
-            let folder = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
-            do {
-                try WallpaperEngineProjectFolder.layOut(scene: folder)
-                print("laid out \(folder.path)")
-                exit(0)
-            } catch {
-                print("cannot lay out: \(error)")
-                exit(1)
-            }
-        }
-        if let request = NativeSceneTest.request {
-            NativeSceneTest.run(request)
-            app.run()
-            return
-        }
-        if let request = ScreenshotMode.engineTest {
-            ScreenshotMode.runEngineTest(request)
-            app.run()
-            return
-        }
-        if let seconds = ScreenshotMode.coverTestSeconds {
-            ScreenshotMode.coverTest(seconds)
-            app.run()
-            return
-        }
-        if let folder = ScreenshotMode.settingsTestFolder {
-            ScreenshotMode.settingsTest(folder)
-            app.run()
-            return
-        }
-        if let target = ScreenshotMode.readyTestTarget {
-            ScreenshotMode.readyTest(target)
-            app.run()
-            return
-        }
-        if let seconds = ScreenshotMode.pointerTestSeconds {
-            ScreenshotMode.pointerTest(seconds: seconds)
-            app.run()
-            return
-        }
-        if let request = ScreenshotMode.attachTest {
-            ScreenshotMode.runAttachTest(request)
-            app.run()
-            return
-        }
-        if let folder = ScreenshotMode.steamTestFolder {
-            ScreenshotMode.steamTest(folder)
-            app.run()
-            return
-        }
-        if let request = ScreenshotMode.importTest {
-            ScreenshotMode.runImportTest(request)
-            app.run()
-            return
-        }
-        if let seconds = ScreenshotMode.soundTestSeconds {
-            ScreenshotMode.soundTest(seconds: seconds)
+        if let alone = Launch.alone, alone() {
             app.run()
             return
         }
@@ -151,15 +37,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     override init() {
-        // The screenshot helper can be pointed at another library, to picture things the
-        // user's own does not have.
-        library = ScreenshotMode.libraryFolder.map { WallpaperLibrary(rootURL: $0) } ?? WallpaperLibrary()
+        // The test host can point the app at another library, to picture things the user's own
+        // does not have.
+        library = Launch.libraryFolder.map { WallpaperLibrary(rootURL: $0) } ?? WallpaperLibrary()
         preferences = Preferences()
         manager = WallpaperManager(library: library, preferences: preferences)
         importer = ImportCoordinator(library: library, manager: manager)
-        // The helper that takes pictures runs next to the copy in use: its window neither
-        // reads nor leaves anything of how the user keeps theirs.
-        let helps = ScreenshotMode.outputDirectory != nil
+        // The test host's helpers run next to the copy in use: their window neither reads nor
+        // leaves anything of how the user keeps theirs.
+        let helps = !Launch.remembers
         workshop = WorkshopStore(library: library, importer: importer, defaults: helps ? nil : .standard)
         super.init()
         windows = WindowManager(state: helps ? MainWindowState(defaults: nil) : nil, remembersFrames: !helps, main: { [unowned self] in
@@ -180,21 +66,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
     }
 
+    private var parts: AppParts {
+        AppParts(library: library, preferences: preferences, manager: manager, importer: importer, workshop: workshop,
+                 cursorSettings: cursorSettings, windows: windows, showMenus: { [unowned self] in
+                     NSApp.mainMenu = makeMainMenu()
+                     watchDeleteKey()
+                 })
+    }
+
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if let directory = ScreenshotMode.outputDirectory, CommandLine.arguments.contains("--select-test") {
-            // The library's own window and menu, to check selecting several wallpapers and
-            // deleting them.
-            NSApp.mainMenu = makeMainMenu()
-            watchDeleteKey()
-            ScreenshotMode.selectTest(windows: windows, library: library, in: directory)
-            return
-        }
-        if let directory = ScreenshotMode.outputDirectory {
-            // Documentation helper; runs alongside the copy in use, so it skips the checks below.
-            ScreenshotMode.run(to: directory, library: library, preferences: preferences,
-                               manager: manager, importer: importer, workshop: workshop, cursorSettings: cursorSettings)
+        if let instead = Launch.instead {
+            instead(parts)
             return
         }
         if activateRunningCopy() {
@@ -229,9 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in self?.presentImportNotices() }
             .store(in: &cancellables)
 
-        if let url = ScreenshotMode.desktopPictureURL {
-            ScreenshotMode.pictureDesktop(of: manager, to: url)
-        }
+        Launch.afterStart?(parts)
 
         isLaunched = true
         if !urlsOpenedBeforeLaunch.isEmpty {
