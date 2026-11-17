@@ -34,5 +34,9 @@ shapes.js
 player-api.js
 placing.js
 camera.js
+shader-values.js
+live-values.js
+hearing.js
+page-places.js
 play.js
 api.js

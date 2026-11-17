@@ -6,9 +6,9 @@
       get CHANNELS() { return CHANNELS; }, set CHANNELS(value) { CHANNELS = value; },
       get FILL() { return FILL; }, set FILL(value) { FILL = value; },
       get FOLLOWED() { return FOLLOWED; }, set FOLLOWED(value) { FOLLOWED = value; },
-      get IDENTITY() { return IDENTITY; },
+      get IDENTITY() { return IDENTITY; }, set IDENTITY(value) { IDENTITY = value; },
       get MAX_LIGHTS() { return MAX_LIGHTS; }, set MAX_LIGHTS(value) { MAX_LIGHTS = value; },
-      get MOVING() { return MOVING; },
+      get MOVING() { return MOVING; }, set MOVING(value) { MOVING = value; },
       get PATH_FADE() { return PATH_FADE; }, set PATH_FADE(value) { PATH_FADE = value; },
       get acquire() { return acquire; },
       get activeCamera() { return activeCamera; },
@@ -199,6 +199,15 @@
     };
     // --- end of what is shared ---
     // --- Parts made at the start ---
+    var pagePlacesPart = makePagePlaces(ctx);
+    var seenPart = pagePlacesPart.seenPart, sceneAt = pagePlacesPart.sceneAt, shownAt = pagePlacesPart.shownAt;
+    var hearingPart = makeHearing(ctx);
+    var hearing = hearingPart.hearing, listen = hearingPart.listen, isSet = hearingPart.isSet;
+    var liveValuesPart = makeLiveValues(ctx);
+    var live = liveValuesPart.live;
+    var IDENTITY, MOVING;
+    var shaderValuesPart = makeShaderValues(ctx);
+    var changed = shaderValuesPart.changed, bands = shaderValuesPart.bands, engineValue = shaderValuesPart.engineValue, setUniform = shaderValuesPart.setUniform;
     var surface, CHANNELS, FILL;
     var placingPart = makePlacing(ctx);
     var times = placingPart.times, matrixOf = placingPart.matrixOf, nudged = placingPart.nudged, placeOf = placingPart.placeOf, worldPlaceOf = placingPart.worldPlaceOf, put = placingPart.put;
@@ -363,133 +372,12 @@
     var objects = [];
     var redraw = true;      // something changed that a still scene has to be drawn again for
 
-    function changed() {
-      redraw = true;
-      wake();
-    }
-
-    var IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-    var MOVING = /^g_(Time|Frametime|Daytime|PointerPosition|PointerPositionLast|AudioSpectrum\d+(Left|Right))$/;
-
-    function bands(count, right) {
-      var values = new Float32Array(count);
-      if (!spectrum) return values;
-      var each = 64 / count;
-      for (var i = 0; i < count; i++) {
-        var sum = 0;
-        for (var j = 0; j < each; j++) sum += spectrum[(right ? 64 : 0) + i * each + j] || 0;
-        values[i] = sum / each;
-      }
-      return values;
-    }
-
-    // What Wallpaper Engine itself tells a shader, by the uniform's name.
-    function engineValue(name, context) {
-      switch (name) {
-        case 'g_Time': return [time];
-        case 'g_Frametime': return [frameTime];
-        case 'g_Daytime': var now = new Date(); return [(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400];
-        case 'g_PointerPosition': return pointer;
-        case 'g_PointerPositionLast': return pointerBefore;
-        // Whether the mouse button is down.
-        case 'g_PointerState': return [pressed ? 1 : 0, 0, pressed ? 1 : 0, 0];
-        case 'g_TexelSize': return [1 / context.width, 1 / context.height];
-        case 'g_TexelSizeHalf': return [0.5 / context.width, 0.5 / context.height];
-        case 'g_Screen': return [sceneWidth, sceneHeight, sceneWidth / sceneHeight];
-        case 'g_ParallaxPosition': return [0.5, 0.5];
-        case 'g_Alpha': case 'g_UserAlpha': case 'g_Brightness': return [1];
-        case 'g_Color': return [1, 1, 1];
-        case 'g_Color4': return [1, 1, 1, 1];
-        case 'g_EyePosition': return [0, 0, 1];
-        case 'g_ViewUp': case 'g_OrientationUp': return [0, 1, 0];
-        case 'g_ViewRight': case 'g_OrientationRight': return [1, 0, 0];
-        case 'g_ViewForward': case 'g_OrientationForward': return [0, 0, -1];
-      }
-      var resolution = /^g_Texture(\d)Resolution$/.exec(name);
-      if (resolution) return context.resolutions[Number(resolution[1])] || [1, 1, 1, 1];
-      if (/^g_Texture\dRotation$/.test(name)) return [1, 0, 0, 1];
-      if (/^g_Texture\dTranslation$/.test(name)) return [0, 0];
-      var audio = /^g_AudioSpectrum(16|32|64)(Left|Right)$/.exec(name);
-      if (audio) return bands(Number(audio[1]), audio[2] === 'Right');
-      return null;
-    }
-
-    function setUniform(uniform, values) {
-      var location = uniform.location;
-      switch (uniform.type) {
-        case gl.FLOAT:
-          if (uniform.size > 1) gl.uniform1fv(location, new Float32Array(values).subarray(0, uniform.size));
-          else gl.uniform1f(location, values[0]);
-          break;
-        case gl.FLOAT_VEC2: gl.uniform2f(location, values[0], values[1]); break;
-        case gl.FLOAT_VEC3: gl.uniform3f(location, values[0], values[1], values[2]); break;
-        case gl.FLOAT_VEC4: gl.uniform4f(location, values[0], values[1], values[2], values[3]); break;
-        case gl.INT: case gl.BOOL: gl.uniform1i(location, values[0]); break;
-      }
-    }
+    // What the shaders are told of the scene: shader-values.js, made at the start.
 
     // A pass of an effect: effects.js.
     var effectsPart = makeEffects(ctx);
     var buildPass = effectsPart.buildPass, withLooks = effectsPart.withLooks, drawPass = effectsPart.drawPass;
-    // `count` numbers, or with `kind` 'flag' a yes or no, or with 'text' a text. `unit`
-    // 'degrees' is for angles: the scene writes them in radians, scripts count in degrees.
-    function live(raw, count, fallback, owner, kind, unit) {
-      var behind = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
-      var curve = behind ? curveOf(behind.animation) : null;
-      var script = behind && typeof behind.script === 'string' ? { said: behind, owner: owner, kind: kind || 'numbers', count: count, unit: unit } : null;
-      if (script) scripts.push(script);
-      // What the scene says is `value.raw`: the editor may make it another while the scene plays.
-      function base() {
-        if (kind === 'text') {
-          var text = plain(value.raw);
-          return text === undefined || text === null ? '' : String(text);
-        }
-        if (kind === 'flag') return flag(value.raw, fallback);
-        return numbers(value.raw, count, fallback);
-      }
-      // An animation plays from the scene's start, or waits for a script to play it; `at` is
-      // how far it has played, in seconds. One that follows another plays as that one does.
-      // Until one that waits has been played, the value stays as the scene gives it.
-      function motionOf(made) {
-        var result = { curve: made, called: made.called, at: 0, playing: !made.startsPaused, started: !made.startsPaused,
-                       speed: 1, leader: null, owner: owner };
-        motions.push(result);
-        return result;
-      }
-      var motion = curve ? motionOf(curve) : null;
-      // `bound`: a setting of the wallpaper stands behind it.
-      var value = { raw: raw, changes: !!curve, motion: motion, script: script, bound: !!(behind && behind.user !== undefined && behind.user !== null) };
-      value.now = base();
-      if (script) script.value = value;
-      // The editor has changed what the scene says: the animation behind it may be another.
-      value.renew = function () {
-        var said = value.raw && typeof value.raw === 'object' && !Array.isArray(value.raw) ? value.raw : null;
-        var next = said ? curveOf(said.animation) : null;
-        if (next && motion) {
-          motion.curve = next;
-          motion.called = next.called;
-        } else if (next) {
-          motion = motionOf(next);
-        } else if (motion) {
-          motions.splice(motions.indexOf(motion), 1);
-          motion = null;
-        }
-        curve = next;
-        value.motion = motion;
-        value.changes = !!next;
-      };
-      value.read = function () {
-        // A script carries on from what the value is; anything else starts from what the
-        // scene says.
-        var result = script && script.made !== undefined ? value.now : base();
-        if (curve && timelineAt !== null) result = curve(timelineAt, result);
-        else if (curve && (motion.leader || motion).started) result = curve((motion.leader || motion).at, result);
-        if (script) result = runScript(script, result);
-        value.now = result;
-        return result;
-      };
-      return value;
-    }
+    // Values with a setting, an animation or a script behind them: live-values.js, made at the start.
     // Values that change: changing-values.js.
     var things, motions, timelineAt, scripts, timers, shared, stored, dirty, pressed, audioBuffers;
     var changingValuesPart = makeChangingValues(ctx);
@@ -524,45 +412,7 @@
     var players;
     var soundsPart = makeSounds(ctx);
     var buildSound = soundsPart.buildSound;
-    // How much an emitter that answers the sound makes, from nought to all its rate: Wallpaper
-    // Engine's audio response, worked out as its own pulse effect does it, which makes nothing
-    // while nothing plays. Its mode is none, the left channel, the right one or both; it hears
-    // the mean of the bands from `start` to `end` of sixteen, bass first, eased from the lower
-    // bound of how loud they are to the upper, raised to the exponent that keeps the quiet
-    // from counting much. Null for one that does not answer it.
-    function hearing(emitter) {
-      var mode = number(plain(emitter.audioprocessingmode), 0);
-      if (!(mode >= 1 && mode <= 3)) return null;
-      listen();
-      var bounds = numbers(plain(emitter.audioprocessingbounds), 2, 0);
-      if (!isSet(emitter.audioprocessingbounds)) bounds = [0.8, 1];
-      var exponent = number(plain(emitter.audioprocessingexponent), 2);
-      var start = Math.max(0, Math.min(15, Math.round(number(plain(emitter.audioprocessingfrequencystart), 0))));
-      var end = Math.max(start, Math.min(15, Math.round(number(plain(emitter.audioprocessingfrequencyend), 1))));
-      return function () {
-        if (!spectrum) return 0;
-        var left = bands(16, false), right = bands(16, true), sum = 0;
-        for (var band = start; band <= end; band++) {
-          sum += mode === 1 ? left[band] : (mode === 2 ? right[band] : (left[band] + right[band]) / 2);
-        }
-        var level = sum / (end - start + 1);
-        var eased = bounds[1] > bounds[0] ? smooth01(bounds[0], bounds[1], level) : (level >= bounds[0] ? 1 : 0);
-        return Math.max(0, Math.min(1, Math.pow(eased, exponent)));
-      };
-    }
-    // The sound the Mac plays, for the shaders and scripts that draw by it; asked for once one
-    // of them wants it, and heard for as long as the canvas is on the page.
-    function listen() {
-      if (listening || typeof window.wallpaperRegisterAudioListener !== 'function') return;
-      listening = true;
-      var host = window.__wallaeroHost;
-      if (host) host.owner = canvas;
-      window.wallpaperRegisterAudioListener(function (levels) { spectrum = levels; });
-      if (host) host.owner = null;
-    }
-    function isSet(value) {
-      return value !== undefined && value !== null;
-    }
+    // What the scene hears: hearing.js, made at the start.
     // Building: building.js.
     var all, scripted, listening;
     makeBuilding(ctx);
@@ -585,31 +435,7 @@
     var frames, asked, before, editions;
     var drawingPart = makeDrawing(ctx);
     var wake = drawingPart.wake, goOn = drawingPart.goOn, holdFilms = drawingPart.holdFilms;
-    function seenPart() {
-      if (seenOnce.frame === frames) return seenOnce;
-      var box = canvas.getBoundingClientRect();
-      var from = box.width > 0 && box.height > 0 ? sceneAt(box.left, box.bottom) : [0, 0];
-      var to = box.width > 0 && box.height > 0 ? sceneAt(box.right, box.top) : [sceneWidth, sceneHeight];
-      seenOnce = { frame: frames, left: Math.max(0, from[0]), bottom: Math.max(0, from[1]),
-                   right: Math.min(sceneWidth, to[0]), top: Math.min(sceneHeight, to[1]) };
-      return seenOnce;
-    }
-    // A point of the page as a point of the scene, and back. The scene counts from its bottom.
-    function sceneAt(pageX, pageY) {
-      var shown = shownAt();
-      return [(pageX - shown.left) / shown.width * sceneWidth, (1 - (pageY - shown.top) / shown.height) * sceneHeight];
-    }
-    // Where the whole scene is on the page, in its pixels; parts of it may be cut off.
-    function shownAt() {
-      var box = canvas.getBoundingClientRect();
-      var fit = canvas.style.objectFit || 'cover';
-      var by = fit === 'contain' ? Math.min(box.width / sceneWidth, box.height / sceneHeight)
-             : Math.max(box.width / sceneWidth, box.height / sceneHeight);
-      var width = fit === 'fill' ? box.width : sceneWidth * by, height = fit === 'fill' ? box.height : sceneHeight * by;
-      var kept = (canvas.style.objectPosition || '50% 50%').split(/\s+/).map(parseFloat);
-      return { left: box.left + (box.width - width) * (isFinite(kept[0]) ? kept[0] : 50) / 100,
-               top: box.top + (box.height - height) * (isFinite(kept[1]) ? kept[1] : 50) / 100, width: width, height: height };
-    }
+    // Where on the page the scene is: page-places.js, made at the start.
     // The mouse: mouse.js.
     var mice, seenOnce;
     var mousePart = makeMouse(ctx);
