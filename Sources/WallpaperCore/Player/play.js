@@ -83,6 +83,7 @@
       get matrixOf() { return matrixOf; },
       get mediaTold() { return mediaTold; }, set mediaTold(value) { mediaTold = value; },
       get merged() { return merged; },
+      get mice() { return mice; }, set mice(value) { mice = value; },
       get mix() { return mix; },
       get motions() { return motions; },
       get newTexture() { return newTexture; },
@@ -112,6 +113,7 @@
       get same() { return same; },
       get scale() { return scale; }, set scale(value) { scale = value; },
       get scene() { return scene; },
+      get sceneAt() { return sceneAt; },
       get sceneHeight() { return sceneHeight; }, set sceneHeight(value) { sceneHeight = value; },
       get sceneLights() { return sceneLights; },
       get scenePathLook() { return scenePathLook; },
@@ -125,6 +127,7 @@
       get scripted() { return scripted; },
       get scriptedLook() { return scriptedLook; }, set scriptedLook(value) { scriptedLook = value; },
       get scripts() { return scripts; }, set scripts(value) { scripts = value; },
+      get seenOnce() { return seenOnce; }, set seenOnce(value) { seenOnce = value; },
       get seenPart() { return seenPart; },
       get serveScripts() { return serveScripts; },
       get setUniform() { return setUniform; },
@@ -135,6 +138,7 @@
       get sheetTime() { return sheetTime; },
       get shifted() { return shifted; },
       get showFilms() { return showFilms; },
+      get shownAt() { return shownAt; },
       get shows() { return shows; },
       get showsAll() { return showsAll; },
       get soundFiles() { return soundFiles; },
@@ -148,6 +152,7 @@
       get surface() { return surface; }, set surface(value) { surface = value; },
       get tellAnimationEvents() { return tellAnimationEvents; },
       get tellNoMedia() { return tellNoMedia; },
+      get tellPointer() { return tellPointer; },
       get texture() { return texture; },
       get things() { return things; },
       get time() { return time; }, set time(value) { time = value; },
@@ -159,6 +164,7 @@
       get view() { return view; },
       get viewOnce() { return viewOnce; }, set viewOnce(value) { viewOnce = value; },
       get viewProjection() { return viewProjection; },
+      get wake() { return wake; },
       get withLooks() { return withLooks; },
       get workshopAsset() { return workshopAsset; },
       get worldPlaceOf() { return worldPlaceOf; }
@@ -1436,32 +1442,6 @@
     var frames, asked, before, editions;
     var drawingPart = makeDrawing(ctx);
     var wake = drawingPart.wake, goOn = drawingPart.goOn, holdFilms = drawingPart.holdFilms;
-    // --- The mouse --------------------------------------------------------------
-
-    // Where the pointer is over the scene, from 0 to 1 from its top left corner: the scene is
-    // fitted to the screen by the page, cut or with bars.
-    function point(event) {
-      var shown = shownAt();
-      pointer = [(event.clientX - shown.left) / shown.width, (event.clientY - shown.top) / shown.height];
-      // Come over the wallpaper — from a window, or for the first time — the pointer has not
-      // moved from where it was last seen, across the screen: it is only now seen here.
-      if (!pointerSeen) pointerBefore = pointer.slice();
-      pointerSeen = true;
-    }
-    // Where the whole scene is on the page, in its pixels; parts of it may be cut off.
-    function shownAt() {
-      var box = canvas.getBoundingClientRect();
-      var fit = canvas.style.objectFit || 'cover';
-      var by = fit === 'contain' ? Math.min(box.width / sceneWidth, box.height / sceneHeight)
-             : Math.max(box.width / sceneWidth, box.height / sceneHeight);
-      var width = fit === 'fill' ? box.width : sceneWidth * by, height = fit === 'fill' ? box.height : sceneHeight * by;
-      var kept = (canvas.style.objectPosition || '50% 50%').split(/\s+/).map(parseFloat);
-      return { left: box.left + (box.width - width) * (isFinite(kept[0]) ? kept[0] : 50) / 100,
-               top: box.top + (box.height - height) * (isFinite(kept[1]) ? kept[1] : 50) / 100, width: width, height: height };
-    }
-    // The part of the scene the screen shows, in the scene's units from its bottom left
-    // corner: all of it, unless the scene is cut to fill the screen. Worked out once a frame.
-    var seenOnce = { frame: -1 };
     function seenPart() {
       if (seenOnce.frame === frames) return seenOnce;
       var box = canvas.getBoundingClientRect();
@@ -1476,26 +1456,21 @@
       var shown = shownAt();
       return [(pageX - shown.left) / shown.width * sceneWidth, (1 - (pageY - shown.top) / shown.height) * sceneHeight];
     }
-    function pageAt(x, y) {
-      var shown = shownAt();
-      return [shown.left + x / sceneWidth * shown.width, shown.top + (1 - y / sceneHeight) * shown.height];
+    // Where the whole scene is on the page, in its pixels; parts of it may be cut off.
+    function shownAt() {
+      var box = canvas.getBoundingClientRect();
+      var fit = canvas.style.objectFit || 'cover';
+      var by = fit === 'contain' ? Math.min(box.width / sceneWidth, box.height / sceneHeight)
+             : Math.max(box.width / sceneWidth, box.height / sceneHeight);
+      var width = fit === 'fill' ? box.width : sceneWidth * by, height = fit === 'fill' ? box.height : sceneHeight * by;
+      var kept = (canvas.style.objectPosition || '50% 50%').split(/\s+/).map(parseFloat);
+      return { left: box.left + (box.width - width) * (isFinite(kept[0]) ? kept[0] : 50) / 100,
+               top: box.top + (box.height - height) * (isFinite(kept[1]) ? kept[1] : 50) / 100, width: width, height: height };
     }
-    // What the mouse does is told to the scripts; whatever they change by it is then drawn.
-    function mouse(kind) {
-      return function (event) {
-        point(event);
-        if (kind === 'down') pressed = true;
-        if (kind === 'up') pressed = false;
-        tellPointer(kind);
-        if (dirty || eye.on) wake();
-      };
-    }
-    var mice = { pointermove: mouse('move'), pointerdown: mouse('down'), pointerup: mouse('up'),
-                 // Gone from the wallpaper: over a window, or to another display.
-                 pointerleave: function () { pointerSeen = false; } };
-    Object.keys(mice).forEach(function (name) { window.addEventListener(name, mice[name], true); });
-    window.addEventListener('resize', changed);
-
+    // The mouse: mouse.js.
+    var mice, seenOnce;
+    var mousePart = makeMouse(ctx);
+    var pageAt = mousePart.pageAt;
     // The graphics chip may take everything back — when the Mac is short of memory, or the
     // web engine's own helper starts anew. Then the scene is built again from the start.
     function lost(event) {

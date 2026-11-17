@@ -22,5 +22,6 @@ textures.js
 effects.js
 glow.js
 drawing.js
+mouse.js
 play.js
 api.js
