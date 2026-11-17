@@ -10,5 +10,6 @@ script-math.js
 scripts.js
 noise.js
 builtin-pictures.js
+sounds.js
 play.js
 api.js
