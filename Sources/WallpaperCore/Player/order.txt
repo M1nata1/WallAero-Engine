@@ -1,3 +1,14 @@
 # The files of the scene player, in the order they are joined into one script.
-# Each is taken as it is, one after another, with nothing between them.
-engine.js
+# Each is taken as it is, one after another, with nothing between them: together they are one
+# function run at once (start.js opens it, api.js closes it), so a file alone is not a script.
+start.js
+values.js
+shader-headers.js
+glsl.js
+curves.js
+script-math.js
+scripts.js
+noise.js
+builtin-pictures.js
+play.js
+api.js
