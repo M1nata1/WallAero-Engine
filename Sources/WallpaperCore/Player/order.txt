@@ -33,5 +33,6 @@ programs.js
 shapes.js
 player-api.js
 placing.js
+camera.js
 play.js
 api.js
