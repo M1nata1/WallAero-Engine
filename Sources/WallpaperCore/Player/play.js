@@ -15,8 +15,10 @@
       get add() { return add; },
       get all() { return all; }, set all(value) { all = value; },
       get also() { return also; },
+      get asked() { return asked; }, set asked(value) { asked = value; },
       get audioBuffers() { return audioBuffers; },
       get bands() { return bands; },
+      get before() { return before; }, set before(value) { before = value; },
       get bound() { return bound; },
       get buildEffects() { return buildEffects; },
       get buildImage() { return buildImage; },
@@ -39,6 +41,7 @@
       get complaint() { return complaint; }, set complaint(value) { complaint = value; },
       get compositeNamed() { return compositeNamed; },
       get composites() { return composites; }, set composites(value) { composites = value; },
+      get copyTarget() { return copyTarget; }, set copyTarget(value) { copyTarget = value; },
       get covers() { return covers; }, set covers(value) { covers = value; },
       get depthOf() { return depthOf; },
       get description() { return description; },
@@ -59,9 +62,12 @@
       get freeLook() { return freeLook; },
       get general() { return general; },
       get gl() { return gl; },
+      get glow() { return glow; },
       get grabProgram() { return grabProgram; },
       get hearing() { return hearing; },
       get inDepth() { return inDepth; },
+      get isLively() { return isLively; },
+      get isMoving() { return isMoving; },
       get isSet() { return isSet; },
       get joined() { return joined; },
       get json() { return json; },
@@ -70,6 +76,7 @@
       get live() { return live; },
       get liveOfAnyKind() { return liveOfAnyKind; },
       get loading() { return loading; }, set loading(value) { loading = value; },
+      get look() { return look; },
       get looksOf() { return looksOf; },
       get m4invert() { return m4invert; },
       get m4mul() { return m4mul; },
@@ -77,6 +84,7 @@
       get mediaTold() { return mediaTold; }, set mediaTold(value) { mediaTold = value; },
       get merged() { return merged; },
       get mix() { return mix; },
+      get motions() { return motions; },
       get newTexture() { return newTexture; },
       get nextPath() { return nextPath; },
       get nudged() { return nudged; },
@@ -91,12 +99,16 @@
       get placed() { return placed; },
       get players() { return players; }, set players(value) { players = value; },
       get pointer() { return pointer; }, set pointer(value) { pointer = value; },
+      get pointerBefore() { return pointerBefore; }, set pointerBefore(value) { pointerBefore = value; },
       get pointerSeen() { return pointerSeen; }, set pointerSeen(value) { pointerSeen = value; },
       get pressed() { return pressed; }, set pressed(value) { pressed = value; },
       get pristine() { return pristine; }, set pristine(value) { pristine = value; },
       get puppets() { return puppets; },
       get put() { return put; },
+      get redraw() { return redraw; }, set redraw(value) { redraw = value; },
+      get refresh() { return refresh; },
       get release() { return release; },
+      get resize() { return resize; },
       get same() { return same; },
       get scale() { return scale; }, set scale(value) { scale = value; },
       get scene() { return scene; },
@@ -114,6 +126,7 @@
       get scriptedLook() { return scriptedLook; }, set scriptedLook(value) { scriptedLook = value; },
       get scripts() { return scripts; }, set scripts(value) { scripts = value; },
       get seenPart() { return seenPart; },
+      get serveScripts() { return serveScripts; },
       get setUniform() { return setUniform; },
       get settleIn() { return settleIn; },
       get shake() { return shake; },
@@ -121,6 +134,7 @@
       get sheetFrames() { return sheetFrames; },
       get sheetTime() { return sheetTime; },
       get shifted() { return shifted; },
+      get showFilms() { return showFilms; },
       get shows() { return shows; },
       get showsAll() { return showsAll; },
       get soundFiles() { return soundFiles; },
@@ -132,6 +146,8 @@
       get stored() { return stored; }, set stored(value) { stored = value; },
       get straightProgram() { return straightProgram; },
       get surface() { return surface; }, set surface(value) { surface = value; },
+      get tellAnimationEvents() { return tellAnimationEvents; },
+      get tellNoMedia() { return tellNoMedia; },
       get texture() { return texture; },
       get things() { return things; },
       get time() { return time; }, set time(value) { time = value; },
@@ -1416,188 +1432,10 @@
       if (again) tellScripts('resizeScreen', new Vec2(width, height));
     }
 
-    // --- Drawing ----------------------------------------------------------
-
-    var frames = 0;
-
-    var fadeWhite = null; // a white picture, darkened to black, for the camera's fade
-    var keptWidth = 0; // the size of the picture kept from before, for a scene that does not clear it
-    function draw() {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
-      gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
-      gl.disable(gl.BLEND);
-      // A scene may say not to clear what was drawn before, so that what moves leaves its trace
-      // on the picture. The glow is added onto the picture, so with it the picture is cleared
-      // all the same, as it is for the first frame.
-      var keeps = general.clearenabled === false && !flag(general.bloom, false) && frames > 0 && sceneTarget.width === keptWidth;
-      keptWidth = sceneTarget.width;
-      if (!keeps) {
-        gl.clearColor(clear[0], clear[1], clear[2], 1);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-      }
-      surface = { target: sceneTarget, copy: copyTarget, width: sceneWidth, height: sceneHeight, left: 0, bottom: 0 };
-      // In a scene in three dimensions, as Wallpaper Engine sorts it: first every model's parts
-      // that hide what is behind them, then everything in the scene's order with the models'
-      // parts that show through — else a glow drawn early hides, by its depth, the street
-      // drawn after it.
-      var passes = inDepth ? ['solid', 'through'] : [null];
-      // What others take as a picture is made first: a planet's surface, a face in a frame.
-      objects.forEach(function (object) {
-        if (!object.makeComposite) return;
-        object.makeComposite();
-        gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
-        gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
-      });
-      // What the scene has before its first model is drawn before any model, as the scene
-      // orders it: a background over the whole screen does not then hide the models drawn
-      // after it (3796846129's ToeJam and Earl).
-      var drawn = objects.slice();
-      var firstModel = drawn.findIndex(function (object) { return object.isModel; });
-      var before = inDepth && firstModel > 0 ? drawn.slice(0, firstModel) : [];
-      if (before.length) passes = ['under'].concat(passes);
-      passes.forEach(function (pass) {
-        (pass === 'under' ? before : drawn).forEach(function (object) {
-          // What a layer holds is drawn by that layer.
-          if (object.heldBy) return;
-          // A picture or a text standing in the world goes with the models, in the scene's
-          // order: one laid on a stage before the dancers are is under their feet (3796846129).
-          // What draws over what the scene shows so far stays with the rest.
-          var flat = !!object.inWorld && !object.takesScene && !object.holds;
-          if (pass === 'solid' && !object.isModel && !flat) return;
-          if (pass === 'through' && (flat || before.indexOf(object) >= 0)) return;
-          gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
-          gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
-          object.draw(pass === 'under' ? 'through' : pass);
-        });
-      });
-      if (flag(general.bloom, false)) glow();
-      // Dark for a moment while the camera goes from one of its paths to the next.
-      var onPath = inDepth && !freeLook() ? pathLook(activeCamera()) : null;
-      if (onPath && onPath.dark > 0) {
-        fadeWhite = fadeWhite || flat(255, 255, 255, 255);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.framebuffer);
-        gl.viewport(0, 0, sceneTarget.width, sceneTarget.height);
-        put(fadeWhite.layers[0], FILL, [0, 0, 0, onPath.dark], 'translucent');
-      }
-      // Onto the canvas, turned over: the scene is kept with its top row first.
-      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, sceneTarget.framebuffer);
-      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
-      gl.blitFramebuffer(0, 0, sceneTarget.width, sceneTarget.height, 0, sceneTarget.height, sceneTarget.width, 0, gl.COLOR_BUFFER_BIT, gl.NEAREST);
-      frames++;
-    }
-
-    var asked = 0;
-    var before = 0;
-
-    function wake() {
-      if (!asked && !stopped) asked = requestAnimationFrame(frame);
-    }
-
-    var testBegun = false;
-    // How many times the editor or the settings have changed the scene (see `runScript`).
-    var editions = 0;
-    function frame(now) {
-      asked = 0;
-      if (stopped) return;
-      // In a test, once the first frame has made the scene's objects, nothing more is done
-      // until their pictures are all in: how many frames that takes varies from run to run.
-      if (testClock && testBegun && loading > 0) {
-        wake();
-        return;
-      }
-      testBegun = true;
-      // The speed the app plays the wallpaper at; a long gap, as after a pause, counts as none.
-      // Held by the editor, the scene's time stands.
-      var host = window.__wallaeroHost;
-      var passed = before && !editorClock.held ? Math.min(0.1, Math.max(0, (now - before) / 1000)) * ((host && host.rate) || 1) : 0;
-      before = now;
-      goOn(passed);
-      // Drawn anew only when it would come out another picture: a scene whose scripts only
-      // wait, or whose clock still shows the same minute, is left as it is. One the editor
-      // holds changes only as it is changed.
-      var moving = !editorClock.held && isMoving();
-      var must = moving || redraw || dirty || loading > 0;
-      redraw = false;
-      dirty = false;
-      if (must) draw();
-      pointerBefore = pointer.slice();
-      // A scene in which nothing moves is drawn once it is all there, and then left alone.
-      if (moving || loading > 0 || redraw || dirty || (!editorClock.held && isLively())) {
-        wake();
-      } else {
-        before = 0;
-      }
-    }
-
-    // The scene goes on by a while, in seconds: its clock, its scripts, its animations, its
-    // particles; what that makes of it is drawn after.
-    function goOn(passed) {
-      // Never nought for scripts, as in Wallpaper Engine: the first frame takes the one before
-      // as long as a sixtieth (3737268876's camera works out `frametime * (1 / frametime)`).
-      if (passed > 0) frameTime = passed;
-      // By the editor's clock each frame draws its chances afresh from the moment it starts
-      // at: what frames drawn while the scene stood (as its pictures came in, a number that
-      // varies from run to run) took of them changes nothing of what comes after.
-      if (editorClock.on) seedChance(Math.round(time * 1000) + 1);
-      time += passed;
-      if (testClock) testClock.at = time * 1000;
-      // The editor's timeline shows every animation at the scene's moment; standing, at
-      // the moment the editor shows it at.
-      if (editorClock.on && passed > 0) timelineAt = time;
-      holdFilms();
-      resize();
-      serveScripts();
-      look(passed);
-      if (showFilms()) dirty = true;
-      // Animations move on; one that plays once stops at its end.
-      motions.forEach(function (motion) {
-        if (motion.leader || !motion.playing) return;
-        motion.was = motion.at;
-        motion.at += passed * motion.speed;
-        var curve = motion.curve;
-        if (curve.mode === 'single' && curve.frames > 0 && motion.at * curve.rate >= curve.frames) {
-          motion.at = curve.frames / curve.rate;
-          motion.playing = false;
-        }
-      });
-      motions.slice().forEach(function (motion) {
-        var lead = motion.leader || motion;
-        if (lead.was !== undefined && lead.was !== lead.at) tellAnimationEvents(motion, lead.was, lead.at);
-      });
-      motions.forEach(function (motion) { if (!motion.leader) motion.was = undefined; });
-      // A script may make a layer, or put one elsewhere, while the objects are gone through.
-      things.slice().forEach(function (thing) { refresh(thing, false); });
-      // A script nothing has asked for by now belongs to something that could not be made.
-      scripts.slice().forEach(function (script) {
-        if (script.made === undefined) script.made = null;
-      });
-      if (!mediaTold) tellNoMedia();
-      objects.slice().forEach(function (object) {
-        if (object.step && passed > 0 && standing(object).visible) object.step(passed);
-      });
-    }
-
-    // Videos stand while the editor holds the scene, at the scene's moment, and play on with it.
-    function holdFilms() {
-      if (!editorClock.on) return;
-      films.forEach(function (each) {
-        var video = each.video;
-        if (editorClock.held) {
-          if (!video.paused) video.pause();
-          var length = video.duration;
-          var at = length > 0 && isFinite(length) ? time % length : 0;
-          if (each.heldAt !== at) {
-            each.heldAt = at;
-            video.currentTime = at;
-          }
-        } else if (each.heldAt !== undefined) {
-          each.heldAt = undefined;
-          var started = video.play();
-          if (started && started['catch']) started['catch'](function () {});
-        }
-      });
-    }
-
+    // Drawing: drawing.js.
+    var frames, asked, before, editions;
+    var drawingPart = makeDrawing(ctx);
+    var wake = drawingPart.wake, goOn = drawingPart.goOn, holdFilms = drawingPart.holdFilms;
     // --- The mouse --------------------------------------------------------------
 
     // Where the pointer is over the scene, from 0 to 1 from its top left corner: the scene is

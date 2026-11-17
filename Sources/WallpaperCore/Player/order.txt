@@ -21,5 +21,6 @@ pictures.js
 textures.js
 effects.js
 glow.js
+drawing.js
 play.js
 api.js
