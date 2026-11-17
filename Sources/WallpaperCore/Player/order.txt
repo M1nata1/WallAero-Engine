@@ -15,5 +15,6 @@ particles.js
 texts.js
 puppets.js
 models.js
+editor.js
 play.js
 api.js
