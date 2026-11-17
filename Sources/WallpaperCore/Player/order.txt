@@ -32,5 +32,6 @@ targets.js
 programs.js
 shapes.js
 player-api.js
+placing.js
 play.js
 api.js
