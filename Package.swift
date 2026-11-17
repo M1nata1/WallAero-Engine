@@ -116,6 +116,13 @@ let package = Package(
             dependencies: ["WallpaperCore"],
             path: "Tests/WallpaperCoreTests"
         ),
+        // The scene player's own tests (Tests/PlayerTests, for node) and its shaders through glslang.
+        .testTarget(
+            name: "PlayerScriptTests",
+            dependencies: ["WallpaperCore", "ShaderTranslation"],
+            path: "Tests/PlayerScriptTests",
+            linkerSettings: [.linkedFramework("JavaScriptCore"), .linkedLibrary("c++")]
+        ),
         .testTarget(
             name: "CursorCoreTests",
             dependencies: ["CursorCore"],

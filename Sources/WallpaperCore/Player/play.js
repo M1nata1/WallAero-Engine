@@ -225,6 +225,9 @@
       return result;
     }
     var files = keyed(scene && scene.files);
+    // The global object the scene's scripts share is the scene's own: one played anew in the
+    // editor starts without what the scripts had left there.
+    SCRIPT_GLOBAL = Object.create(null);
     SCRIPTS_SHARE_GLOBAL = Object.keys(files).some(function (name) {
       return typeof files[name] === 'string' && files[name].indexOf('globalThis') >= 0;
     });

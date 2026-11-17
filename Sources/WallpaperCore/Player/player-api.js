@@ -7,6 +7,8 @@
         if (ctx.stopped) return;
         tellScripts('destroy');
         ctx.stopped = true;
+        // Chance as the page has it, no longer the editor's.
+        Math.random = unseeded;
         if (ctx.asked) cancelAnimationFrame(ctx.asked);
         Object.keys(ctx.mice).forEach(function (name) { window.removeEventListener(name, ctx.mice[name], true); });
         window.removeEventListener('resize', changed);
