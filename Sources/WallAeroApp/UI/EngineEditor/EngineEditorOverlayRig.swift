@@ -79,10 +79,9 @@ extension EngineEditorOverlay {
         guard let model else { return [] }
         var moves = model.standingBones(of: rig)
         if model.mode == .object, !model.showsTimeline, let object,
-           let said = player?.ask("bones", [object]) as? [[NSNumber]], said.count == moves.count {
+           let said = player?.ask(.bones(object)), said.count == moves.count {
             moves = said.map { m in
-                m.count >= 6 ? CGAffineTransform(a: m[0].doubleValue, b: m[1].doubleValue, c: m[2].doubleValue, d: m[3].doubleValue,
-                                                 tx: m[4].doubleValue, ty: m[5].doubleValue) : .identity
+                m.count >= 6 ? CGAffineTransform(a: m[0], b: m[1], c: m[2], d: m[3], tx: m[4], ty: m[5]) : .identity
             }
         }
         return rig.bones.map { bone in

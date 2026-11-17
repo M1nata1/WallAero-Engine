@@ -34,7 +34,7 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
             guard frameRate != oldValue, let webView, let project else { return }
             installUserScripts(in: webView, for: project)
             webView.frameRateLimit = Int32(drawingRate)
-            webView.executeScript("window.__wallaeroDrawing && window.__wallaeroDrawing.setFrameRate(\(frameRate))")
+            webView.executeScript(PlayerCommand.frameRate(frameRate).script)
         }
     }
 
@@ -67,7 +67,7 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
     /// the scene file is reported here instead of being shown.
     var onSceneFileChange: (() -> Void)?
 
-    private var webView: CEFPageView?
+    private(set) var webView: CEFPageView?
     private let stillView = NSImageView()
     /// A picture of the page, behind it. A web view is see-through until its page has drawn,
     /// and on a busy Mac — at login above all — that can take seconds; this picture is what is
@@ -76,7 +76,7 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
     private var project: WebProject?
     private var watcher: FolderWatcher?
 
-    private var hasLoaded = false
+    private(set) var hasLoaded = false
     private var loadWaiters: [CheckedContinuation<Void, Never>] = []
     private var isReady = false
     /// Tells a late answer that it belongs to a page that has since been loaded anew.
@@ -195,20 +195,10 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
         await withCheckedContinuation { loadWaiters.append($0) }
     }
 
-    /// Runs a script in the page, once it is there.
-    func evaluate(_ script: String) {
+    /// Tells the page's scripts something, once the page is there.
+    func send(_ command: PlayerCommand) {
         guard hasLoaded else { return }
-        webView?.executeScript(script)
-    }
-
-    /// What a script evaluates to in the page; nil if it fails or the page is not there.
-    func value(of script: String) async -> Any? {
-        guard hasLoaded, let webView else { return nil }
-        let json: String? = await withCheckedContinuation { continuation in
-            webView.evaluateScript(script) { continuation.resume(returning: $0) }
-        }
-        guard let data = json?.data(using: .utf8) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        webView?.executeScript(command.script)
     }
 
     /// Whether the page is hidden behind a still of itself, as it is while paused.
@@ -253,12 +243,12 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
 
     private func applyHostSettings() {
         guard hasLoaded else { return }
-        webView?.executeScript("window.__wallaeroHost && window.__wallaeroHost.apply(\(hostSettingsJSON))")
+        webView?.executeScript(PlayerCommand.host(hostSettings).script)
     }
 
     /// What the page's media is to do: `playing` is false while the wallpaper is paused.
-    private var hostSettingsJSON: String {
-        "{rate: \(rate), muted: \(isMuted), volume: \(max(0, min(1, volume))), playing: \(!isFrozen)}"
+    private var hostSettings: PlayerHostSettings {
+        PlayerHostSettings(rate: Double(rate), muted: isMuted, volume: Double(max(0, min(1, volume))), playing: !isFrozen)
     }
 
     private func applyPlaying() {
@@ -296,8 +286,9 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
     /// from its top left corner. A paused wallpaper is told nothing.
     func pointer(_ kind: PointerForwarder.Kind, at point: CGPoint) {
         guard hasLoaded, isPlaying, !isFrozen else { return }
-        let place = String(format: "%.1f, %.1f", point.x, point.y)
-        webView?.executeScript("window.__wallaeroHost && window.__wallaeroHost.pointer('\(kind.rawValue)', \(place))")
+        // A tenth of a point is as near as a page goes.
+        let x = (point.x * 10).rounded() / 10, y = (point.y * 10).rounded() / 10
+        webView?.executeScript(PlayerCommand.pointer(kind: kind.rawValue, x: x, y: y).script)
     }
 
     // MARK: - Sound
@@ -331,8 +322,8 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
         guard wanted != isToldMedia else { return }
         isToldMedia = wanted
         if wanted {
-            NowPlaying.shared.addListener(self) { [weak self] script in
-                self?.webView?.executeScript(script)
+            NowPlaying.shared.addListener(self) { [weak self] message in
+                self?.webView?.executeScript(message.script)
             }
         } else {
             NowPlaying.shared.removeListener(self)
@@ -346,8 +337,8 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
         guard wanted != isHearingSound else { return }
         isHearingSound = wanted
         if wanted {
-            SoundSpectrum.shared.addListener(self) { [weak self] script in
-                self?.webView?.executeScript(script)
+            SoundSpectrum.shared.addListener(self) { [weak self] levels in
+                self?.webView?.executeScript(levels.script)
             }
         } else {
             SoundSpectrum.shared.removeListener(self)
@@ -406,13 +397,13 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
     // MARK: - Page set-up
 
     private func installUserScripts(in webView: CEFPageView, for project: WebProject) {
-        var source = Self.bridgeScript.replacingOccurrences(of: "__HOST_SETTINGS__", with: hostSettingsJSON)
+        var source = Self.bridgeScript.replacingOccurrences(of: "__HOST_SETTINGS__", with: hostSettings.json.text)
         if project.isScene, let scene = Self.sceneJSON(in: project.folder) {
             // File pages cannot fetch files, so the scene is handed to the runtime directly.
-            source += "\nwindow.wallaeroScene = \(scene);"
+            source += "\n" + PlayerCommand.pageScene(scene).script
         }
         if rendersStill {
-            source += "\nwindow.wallaeroStill = true;"
+            source += "\n" + PlayerCommand.drawsStill.script
         }
         let drawing = Self.drawingScript
             .replacingOccurrences(of: "__FRAME_RATE__", with: String(max(0, frameRate)))
@@ -1125,12 +1116,7 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
         }
         if let properties = project?.userPropertiesJSON {
             // The wallpaper's own settings, at the values its author chose.
-            view.executeScript("""
-            (function (properties) {
-              var listener = window.wallpaperPropertyListener;
-              if (listener && typeof listener.applyUserProperties === 'function') listener.applyUserProperties(properties);
-            })(\(properties));
-            """)
+            view.executeScript(PlayerCommand.userProperties(properties).script)
         }
         pageDidSettle()
     }
@@ -1142,8 +1128,8 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
             return
         }
         switch handler {
-        case "wallaeroHost": hostMessage(message)
-        case "wallaeroEditor": onEditorMessage?(message)
+        case PageMessages.host: hostMessage(message)
+        case PageMessages.editor: onEditorMessage?(message)
         default: break
         }
     }
@@ -1186,8 +1172,8 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
             }
             // Only the scene changed: redraw it in place, so the video does not start over.
             installUserScripts(in: webView, for: project)
-            if let scene = Self.sceneJSON(in: project.folder) {
-                webView.executeScript("window.wallaero && window.wallaero.setScene(\(scene))")
+            if let scene = Self.sceneJSON(in: project.folder), let json = JSONValue(data: Data(scene.utf8)) {
+                webView.executeScript(PlayerCommand.showScene(json).script)
             }
         } else {
             reloadPage()

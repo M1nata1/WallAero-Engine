@@ -147,23 +147,22 @@ final class EngineEditorPreviewController {
 
     /// What is wrong with the text of a script, without running it.
     func checkScript(_ text: String) -> EngineScriptProblem? {
-        guard let said = sceneView?.scenePlayer?.ask("checkScript", [text]) as? [String: Any] else { return nil }
-        return Self.problem(said)
+        sceneView?.scenePlayer?.ask(.checkScript(text)).map(Self.problem)
     }
 
-    private static func problem(_ said: [String: Any]) -> EngineScriptProblem {
-        EngineScriptProblem(message: said["message"] as? String ?? "", line: (said["line"] as? NSNumber)?.intValue ?? 0, during: said["during"] as? String)
+    private static func problem(_ said: PlayerScriptProblem) -> EngineScriptProblem {
+        EngineScriptProblem(message: said.message ?? "", line: said.line ?? 0, during: said.during)
     }
 
     /// The settings a script declares.
     func scriptDeclares(_ text: String) -> [[String: Any]] {
-        sceneView?.scenePlayer?.ask("scriptDeclares", [text]) as? [[String: Any]] ?? []
+        sceneView?.scenePlayer?.ask(.scriptDeclares(text))?.any as? [[String: Any]] ?? []
     }
 
     /// What went wrong with scripts, by their text, and what they wrote since the last time.
     func scriptReport() -> (errors: [String: EngineScriptProblem], log: [String])? {
-        guard let said = sceneView?.scenePlayer?.ask("scriptReport") as? [String: Any] else { return nil }
-        return ((said["errors"] as? [String: [String: Any]] ?? [:]).mapValues(Self.problem), said["log"] as? [String] ?? [])
+        guard let said = sceneView?.scenePlayer?.ask(.scriptReport) else { return nil }
+        return ((said.errors ?? [:]).mapValues(Self.problem), said.log ?? [])
     }
 
     /// What the right button offers at a point of the scene: the object under it, and what can
@@ -171,7 +170,7 @@ final class EngineEditorPreviewController {
     func sceneMenu(at point: CGPoint) -> NSMenu? {
         guard let model, let player = sceneView?.scenePlayer else { return nil }
         let menu = NSMenu()
-        if let hit = (player.ask("hit", [point.x, point.y]) as? NSNumber)?.intValue {
+        if let hit = player.ask(.hit(x: point.x, y: point.y)) {
             model.selection = hit
             menu.addItem(NSMenuItem(title: model.name(of: hit), action: nil, keyEquivalent: ""))
             menu.items.last?.isEnabled = false
@@ -217,8 +216,8 @@ final class EngineEditorPreviewController {
         let before = model.selection
         add()
         guard let made = model.selection, made != before,
-              let place = sceneView?.scenePlayer?.ask("placeAt", [made, point.x, point.y]) as? [NSNumber], place.count >= 2 else { return }
-        model.applyFromPreview(object: made, patch: ["x": place[0].doubleValue, "y": place[1].doubleValue])
+              let place = sceneView?.scenePlayer?.ask(.placeAt(made, x: point.x, y: point.y)), place.count >= 2 else { return }
+        model.applyFromPreview(object: made, patch: ["x": place[0], "y": place[1]])
         model.endGesture()
     }
 
@@ -229,13 +228,13 @@ final class EngineEditorPreviewController {
 
     /// A picture's mesh and bones as they are edited; nil makes it a plain picture.
     func showPuppet(_ id: Int, table: [String: Any]?, layers: Any?) {
-        sceneView?.scenePlayer?.askAndShow("puppet", [id, table ?? NSNull(), layers ?? NSNull()])
+        sceneView?.scenePlayer?.askAndShow(.puppet(id, table: table.map { JSONValue(any: $0) }, layers: layers.map { JSONValue(any: $0) }))
         overlay?.needsDisplay = true
     }
 
     /// Holds a picture's bones where the editor has them, or lets them play again.
     func holdBones(_ id: Int, _ poses: [[Double]]?) {
-        sceneView?.scenePlayer?.askAndShow("holdPuppet", [id, poses ?? NSNull()])
+        sceneView?.scenePlayer?.askAndShow(.holdPuppet(id, poses: poses))
         overlay?.needsDisplay = true
     }
 
@@ -255,7 +254,7 @@ final class EngineEditorPreviewController {
 
     /// An object's own size, in the scene's pixels.
     func objectSize(_ id: Int) -> CGSize? {
-        guard let size = (sceneView?.scenePlayer?.ask("outline", [id]) as? [String: Any])?["size"] as? [Double], size.count >= 2 else { return nil }
+        guard let size = sceneView?.scenePlayer?.ask(.outline(id))?.size, size.count >= 2 else { return nil }
         return CGSize(width: size[0], height: size[1])
     }
 
@@ -385,14 +384,14 @@ final class EngineEditorPreviewController {
     }
 
     private static var editorScript: String {
-        SceneEditorScript.source + "\nwindow.wallaeroEditor.setAccent('\(NSColor.controlAccentColor.cssHex)');"
+        SceneEditorScript.source + "\n" + PlayerCommand.editorAccent(NSColor.controlAccentColor.cssHex).script + ";"
     }
 
     private func showAccentColor() {
         overlay?.needsDisplay = true
         guard let view = webView else { return }
         view.editorScript = Self.editorScript
-        view.evaluate("window.wallaeroEditor && window.wallaeroEditor.setAccent('\(NSColor.controlAccentColor.cssHex)')")
+        view.send(.editorAccent(NSColor.controlAccentColor.cssHex))
     }
 
     /// Hands the player what changed of the scene: the scene file alone is followed as it plays;
@@ -422,25 +421,8 @@ final class EngineEditorPreviewController {
             return
         }
         guard let view = webView else { return }
-        let call: String
-        if changed.isEmpty {
-            call = "window.wallaero.setEngineScene(\(Self.literal(scene)))"
-        } else {
-            changed["scene.json"] = scene
-            let table = (try? JSONSerialization.data(withJSONObject: changed, options: [])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
-            call = "window.wallaero.setEngineFiles(\(table))"
-        }
         // What the editor script showed while an object was dragged is in the scene now.
-        view.evaluate("""
-        (function () {
-          if (!window.wallaero) return;
-          var scene = window.wallaero.scene;
-          if (scene && scene.background) scene.background.engine = {};
-          \(call);
-          window.wallaero.updateEngine();
-          if (window.wallaeroEditor && window.wallaeroEditor.refresh) setTimeout(window.wallaeroEditor.refresh, 0);
-        })()
-        """)
+        view.send(.showEngineScene(scene: scene, files: changed))
     }
 
     /// The scene's files were laid out anew: they are read again.
@@ -449,7 +431,7 @@ final class EngineEditorPreviewController {
             player.reloadFiles()
             return
         }
-        webView?.evaluate("window.wallaero && window.wallaero.reloadEngine && window.wallaero.reloadEngine()")
+        webView?.send(.reloadEngine)
     }
 
     func select(_ id: Int?) {
@@ -457,7 +439,7 @@ final class EngineEditorPreviewController {
             if overlay.object != id { overlay.selectObject(id) }
             return
         }
-        webView?.evaluate("window.wallaeroEditor && window.wallaeroEditor.selectObject(\(id.map(String.init) ?? "null"))")
+        webView?.send(.editorSelectObject(id))
     }
 
     /// How the scene is looked at, as in Blender: 0 (on the keypad too) through its camera or
@@ -475,7 +457,7 @@ final class EngineEditorPreviewController {
 
     /// What the scene's camera shows now.
     func cameraView() -> EngineCameraView? {
-        (sceneView?.scenePlayer?.ask("cameraView") as? [String: Any]).flatMap(EngineCameraView.init)
+        (sceneView?.scenePlayer?.ask(.cameraView)?.any as? [String: Any]).flatMap(EngineCameraView.init)
     }
 
     /// Has the scene looked at through its camera, or freely: from the editor's own eye for one
@@ -484,7 +466,7 @@ final class EngineEditorPreviewController {
         var said: [String: Any] = ["free": free]
         if let look { said["look"] = look.forPlayer }
         if let flat { said["flat"] = flat }
-        sceneView?.scenePlayer?.askAndShow("setView", [said])
+        sceneView?.scenePlayer?.askAndShow(.setView(JSONValue(any: said)))
         overlay?.needsDisplay = true
     }
 
@@ -527,11 +509,10 @@ final class EngineEditorPreviewController {
 
     /// Where a camera object stands and how it is turned to look as an eye does.
     func cameraPlacing(_ look: EngineLook) -> (origin: [Double], angles: [Double])? {
-        guard let said = sceneView?.scenePlayer?.ask("cameraPlacing", [[look.eye.x, look.eye.y, look.eye.z],
-                                                                       [look.center.x, look.center.y, look.center.z],
-                                                                       [look.up.x, look.up.y, look.up.z]]) as? [String: Any],
-              let origin = said["origin"] as? [Double], let angles = said["angles"] as? [Double] else { return nil }
-        return (origin, angles)
+        guard let said = sceneView?.scenePlayer?.ask(.cameraPlacing(eye: [look.eye.x, look.eye.y, look.eye.z],
+                                                                     center: [look.center.x, look.center.y, look.center.z],
+                                                                     up: [look.up.x, look.up.y, look.up.z])) else { return nil }
+        return (said.origin, said.angles)
     }
 
     /// Going through the scene's time, as in Blender, whether the timeline's keys are open or
@@ -621,19 +602,19 @@ final class EngineEditorPreviewController {
 
     /// How the player has a picture's bones stand, for tests.
     func boneMoves(of id: Int, atRest: Bool) -> [CGAffineTransform] {
-        (sceneView?.scenePlayer?.ask("bones", [id, atRest]) as? [[Double]] ?? []).filter { $0.count >= 6 }.map {
+        (sceneView?.scenePlayer?.ask(.bones(id, atRest: atRest)) ?? []).filter { $0.count >= 6 }.map {
             CGAffineTransform(a: $0[0], b: $0[1], c: $0[2], d: $0[3], tx: $0[4], ty: $0[5])
         }
     }
 
     /// Where an object's middle is on the page, for tests.
     func outlineMiddle(of id: Int) -> [Double] {
-        (sceneView?.scenePlayer?.ask("outline", [id]) as? [String: Any]).flatMap { $0["middle"] as? [Double] } ?? []
+        sceneView?.scenePlayer?.ask(.outline(id))?.middle ?? []
     }
 
     /// What the player works out of an animation, for tests.
     func curveValue(_ animation: JSONValue, seconds: Double, base: [Double]) -> [Double]? {
-        sceneView?.scenePlayer?.ask("curveValue", [animation.any, seconds, base]) as? [Double]
+        sceneView?.scenePlayer?.ask(.curveValue(animation, seconds: seconds, base: base))
     }
 
     private func handle(_ message: [String: Any]) {
@@ -666,12 +647,6 @@ final class EngineEditorPreviewController {
         name.replacingOccurrences(of: "\\", with: "/").lowercased()
     }
 
-    /// A text as a JavaScript string.
-    static func literal(_ text: String) -> String {
-        let data = (try? JSONSerialization.data(withJSONObject: [text], options: [])) ?? Data("[\"\"]".utf8)
-        let array = String(decoding: data, as: UTF8.self)
-        return String(array.dropFirst().dropLast())
-    }
 }
 
 /// The preview at the proportions of the scene, centred in the space it is given.

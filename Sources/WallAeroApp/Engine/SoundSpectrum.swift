@@ -16,7 +16,7 @@ final class SoundSpectrum {
 
     private struct Listener {
         weak var owner: AnyObject?
-        let handler: (String) -> Void
+        let handler: (PlayerCommand) -> Void
     }
 
     /// Where the sound comes from. Nil means the Mac itself; the helper that checks the
@@ -32,14 +32,14 @@ final class SoundSpectrum {
     private var pendingStop: Task<Void, Never>?
 
     private init() {
-        capture.onScript = { [weak self] script in
-            Task { @MainActor in self?.deliver(script) }
+        capture.onLevels = { [weak self] levels in
+            Task { @MainActor in self?.deliver(.sound(levels)) }
         }
     }
 
-    /// Starts handing `handler` the script that passes the latest levels to a page. The owner is
-    /// not kept alive; when it goes away, so does its handler.
-    func addListener(_ owner: AnyObject, handler: @escaping (String) -> Void) {
+    /// Starts handing `handler` the latest levels, to be sent to a page. The owner is not kept
+    /// alive; when it goes away, so does its handler.
+    func addListener(_ owner: AnyObject, handler: @escaping (PlayerCommand) -> Void) {
         listeners[ObjectIdentifier(owner)] = Listener(owner: owner, handler: handler)
         update()
     }
@@ -49,14 +49,14 @@ final class SoundSpectrum {
         update()
     }
 
-    private func deliver(_ script: String) {
+    private func deliver(_ levels: PlayerCommand) {
         var someoneLeft = false
         for (key, listener) in listeners {
             if listener.owner == nil {
                 listeners[key] = nil
                 someoneLeft = true
             } else {
-                listener.handler(script)
+                listener.handler(levels)
             }
         }
         if someoneLeft { update() }
@@ -82,27 +82,6 @@ final class SoundSpectrum {
             }
         }
     }
-
-    /// The script that hands levels to a page; `__wallaeroHost` is the bridge of `WebWallpaperView`.
-    nonisolated static func script(for levels: [Float]) -> String {
-        var text = "window.__wallaeroHost&&window.__wallaeroHost.sound(["
-        text.reserveCapacity(text.count + levels.count * 6 + 2)
-        for (index, level) in levels.enumerated() {
-            if index > 0 { text.append(",") }
-            // Thousandths, written out by hand: this runs for every band, thirty times a second.
-            let thousandths = Int((min(level, 1) * 1000).rounded())
-            if thousandths <= 0 {
-                text.append("0")
-            } else if thousandths >= 1000 {
-                text.append("1")
-            } else {
-                text.append("0.")
-                text.append(contentsOf: String(1000 + thousandths).dropFirst())
-            }
-        }
-        text.append("])")
-        return text
-    }
 }
 
 /// Something that hands over sound as it plays: the tap on the Mac's sound, or a made-up signal
@@ -121,15 +100,15 @@ protocol SoundSource: AnyObject {
 /// efficiency cores. While nothing sounds it rests: the levels are worked out four times a second
 /// instead of thirty, and the first sound that arrives brings the pace back.
 private final class Capture {
-    /// Called on the capture's queue with the script for the latest levels.
-    var onScript: ((String) -> Void)?
+    /// Called on the capture's queue with the latest levels.
+    var onLevels: (([Float]) -> Void)?
     /// Makes the source of the sound; nil means the tap on the Mac's own.
     var makeSource: (() -> SoundSource)?
 
     private static let framesPerSecond = 30.0
     /// How often pages hear from the app while nothing is playing, in seconds.
     private static let silenceInterval = 0.25
-    private static let silentScript = SoundSpectrum.script(for: [Float](repeating: 0, count: 2 * SpectrumAnalyzer.bandCount))
+    private static let silentLevels = [Float](repeating: 0, count: 2 * SpectrumAnalyzer.bandCount)
     /// A sample this far from zero ends the rest. It is well under what moves a band, so the
     /// rest never costs the start of a sound.
     private static let wakingLevel: Float = 3e-5
@@ -147,7 +126,7 @@ private final class Capture {
     private var right: [Float] = []
     private var writeIndex = 0
     private var lastSound = DispatchTime(uptimeNanoseconds: 0)
-    private var lastSilentScript = DispatchTime(uptimeNanoseconds: 0)
+    private var lastSilence = DispatchTime(uptimeNanoseconds: 0)
     private var isFlat = false
     private var flatTicks = 0
     private var isResting = false
@@ -286,15 +265,15 @@ private final class Capture {
         if levels.contains(where: { $0 > 0 }) {
             isFlat = false
             flatTicks = 0
-            onScript?(SoundSpectrum.script(for: levels))
+            onLevels?(levels)
             return
         }
         // Zeros go out at once when the sound stops, and after that only as often as a page
         // needs them to know that what it hears is silence.
-        if !isFlat || isResting || Double(now.uptimeNanoseconds - lastSilentScript.uptimeNanoseconds) >= Self.silenceInterval * 1e9 {
+        if !isFlat || isResting || Double(now.uptimeNanoseconds - lastSilence.uptimeNanoseconds) >= Self.silenceInterval * 1e9 {
             isFlat = true
-            lastSilentScript = now
-            onScript?(Self.silentScript)
+            lastSilence = now
+            onLevels?(Self.silentLevels)
         }
         flatTicks += 1
         if flatTicks >= Self.ticksBeforeRest {

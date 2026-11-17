@@ -389,9 +389,9 @@ final class WallpaperManager: NSObject, ObservableObject {
     /// waiting for it to be saved.
     func showUnsaved(_ scene: WallpaperScene, of id: UUID) {
         guard let data = try? SceneProject.encoded(scene, readable: false) else { return }
-        let script = "window.wallaero && window.wallaero.setScene(\(String(decoding: data, as: UTF8.self)))"
+        let json = JSONValue(data: data)
         for screen in screens.values where screen.item?.id == id {
-            screen.view.webView?.evaluate(script)
+            if let json { screen.view.webView?.send(.showScene(json)) }
             screen.view.nativeView?.showUnsaved(data)
         }
     }

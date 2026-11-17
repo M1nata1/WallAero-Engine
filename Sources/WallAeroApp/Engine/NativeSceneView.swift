@@ -244,7 +244,7 @@ final class NativeSceneView: NSView {
         if hears != isHearingSound {
             isHearingSound = hears
             if hears {
-                SoundSpectrum.shared.addListener(self) { [weak self] script in self?.player?.perform(script) }
+                SoundSpectrum.shared.addListener(self) { [weak self] levels in self?.player?.send(levels) }
             } else {
                 SoundSpectrum.shared.removeListener(self)
             }
@@ -253,7 +253,7 @@ final class NativeSceneView: NSView {
         if told != isToldMedia {
             isToldMedia = told
             if told {
-                NowPlaying.shared.addListener(self) { [weak self] script in self?.player?.perform(script) }
+                NowPlaying.shared.addListener(self) { [weak self] message in self?.player?.send(message) }
             } else {
                 NowPlaying.shared.removeListener(self)
             }

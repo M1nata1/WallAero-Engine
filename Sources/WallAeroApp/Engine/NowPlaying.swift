@@ -61,7 +61,7 @@ final class NowPlaying {
 
     private struct Listener {
         weak var owner: AnyObject?
-        let handler: (String) -> Void
+        let handler: (PlayerCommand) -> Void
     }
 
     private var listeners: [ObjectIdentifier: Listener] = [:]
@@ -74,7 +74,7 @@ final class NowPlaying {
     private var refused: Set<Source> = []
     private var observers: [NSObjectProtocol] = []
     private var ticker: Timer?
-    private var lastSent = ""
+    private var lastSent: PlayerCommand?
     private weak var ownPlayer: PlaylistPlayer?
     private var ownWatch: AnyCancellable?
     /// The app's own files whose tags have been read.
@@ -84,15 +84,15 @@ final class NowPlaying {
 
     // MARK: - Listeners
 
-    /// Starts handing `handler` the scripts that tell a page what plays: at once, and whenever
-    /// it changes. The owner is not kept alive; when it goes away, so does its handler.
-    func addListener(_ owner: AnyObject, handler: @escaping (String) -> Void) {
+    /// Starts handing `handler` what to tell a page of what plays: at once, and whenever it
+    /// changes. The owner is not kept alive; when it goes away, so does its handler.
+    func addListener(_ owner: AnyObject, handler: @escaping (PlayerCommand) -> Void) {
         let isFirst = listeners.isEmpty
         listeners[ObjectIdentifier(owner)] = Listener(owner: owner, handler: handler)
         if isFirst {
             start()
         }
-        handler(script(full: true))
+        handler(message(full: true))
     }
 
     func removeListener(_ owner: AnyObject) {
@@ -377,22 +377,22 @@ final class NowPlaying {
             tracks[.own] = own
         }
         guard current?.state == .playing else { return }
-        deliver(script(full: false))
+        deliver(message(full: false))
     }
 
     private func send() {
-        let script = script(full: true)
-        guard script != lastSent else { return }
-        lastSent = script
-        deliver(script)
+        let message = message(full: true)
+        guard message != lastSent else { return }
+        lastSent = message
+        deliver(message)
     }
 
-    private func deliver(_ script: String) {
+    private func deliver(_ message: PlayerCommand) {
         for (key, listener) in listeners {
             if listener.owner == nil {
                 listeners[key] = nil
             } else {
-                listener.handler(script)
+                listener.handler(message)
             }
         }
         if listeners.isEmpty {
@@ -400,8 +400,8 @@ final class NowPlaying {
         }
     }
 
-    /// The script that tells a page: all of it, or where the track has got to.
-    private func script(full: Bool) -> String {
+    /// What tells a page: all of it, or where the track has got to.
+    private func message(full: Bool) -> PlayerCommand {
         var message: [String: Any]
         if let track = current {
             let position = livePosition(track)
@@ -419,8 +419,7 @@ final class NowPlaying {
         } else {
             message = full ? ["enabled": false, "state": State.stopped.rawValue] : ["timeline": ["position": 0, "duration": 0]]
         }
-        let data = (try? JSONSerialization.data(withJSONObject: message)) ?? Data("{}".utf8)
-        return "window.__wallaeroHost && window.__wallaeroHost.media && window.__wallaeroHost.media(\(String(decoding: data, as: UTF8.self)))"
+        return .media(JSONValue(any: message))
     }
 
     // MARK: - Covers
@@ -431,7 +430,7 @@ final class NowPlaying {
         if coverWanted == identity {
             coverWanted = nil
         }
-        lastSent = ""
+        lastSent = nil
         send()
     }
 

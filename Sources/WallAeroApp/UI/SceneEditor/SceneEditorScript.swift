@@ -3,6 +3,13 @@
 /// scenes in the background, which the scene's player places — and reports each change to the
 /// app, which owns the scene. It is never written into the wallpaper itself.
 enum SceneEditorScript {
+    /// The script run on the page's real clock, while the page's own is the editor's timeline's
+    /// (`WebWallpaperView`'s editor clock keeps the real one as `__wallaeroReal`).
+    static var onRealClock: String {
+        "(function (requestAnimationFrame, setTimeout, setInterval) {\n" + source
+            + "\n})((window.__wallaeroReal || window).requestAnimationFrame, (window.__wallaeroReal || window).setTimeout, (window.__wallaeroReal || window).setInterval);"
+    }
+
     static let source = #"""
     (function () {
       'use strict';
@@ -130,7 +137,7 @@ enum SceneEditorScript {
       // --- The objects of Wallpaper Engine's scene in the background ---------------------
 
       function engine() {
-        return window.WallaeroEngine && window.WallaeroEngine.describe ? window.WallaeroEngine : null;
+        return window.WallaeroEngine && window.WallaeroEngine.api ? window.WallaeroEngine.api : null;
       }
 
       // Tells the app what the scene has, once its player has it.

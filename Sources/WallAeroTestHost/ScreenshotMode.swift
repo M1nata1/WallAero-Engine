@@ -1842,7 +1842,7 @@ enum ScreenshotMode {
             } else {
                 print("no picture could be taken")
             }
-            let report = await view.value(of: "window.WallaeroEngine && window.WallaeroEngine.report ? window.WallaeroEngine.report() : 'no player on the page'")
+            let report = await view.value(of: "window.WallaeroEngine && window.WallaeroEngine.api ? window.WallaeroEngine.api.report() : 'no player on the page'")
             print(report as? String ?? "nothing reported")
             for script in values(of: "--eval-end") {
                 let value = await view.value(of: script)
@@ -1863,7 +1863,7 @@ enum ScreenshotMode {
         }
         await pointer(0)
         while Date().timeIntervalSince(started) < 30 {
-            let loading = await view.value(of: "window.WallaeroEngine && window.WallaeroEngine.loading ? window.WallaeroEngine.loading() : 1") as? Int ?? 1
+            let loading = await view.value(of: "window.WallaeroEngine && window.WallaeroEngine.api ? window.WallaeroEngine.api.loading() : 1") as? Int ?? 1
             if Date().timeIntervalSince(started) >= least, loading == 0 { break }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
@@ -1871,7 +1871,7 @@ enum ScreenshotMode {
         let stem = output.deletingPathExtension().path
         for (index, moment) in moments.enumerated() {
             await pointer(index)
-            let went = await view.value(of: "WallaeroEngine.goTo(\(moment))") as? Bool ?? false
+            let went = await view.value(of: "WallaeroEngine.api.goTo(\(moment))") as? Bool ?? false
             // Drawn at the page's next frame; a video's seek takes a while to come.
             try? await Task.sleep(nanoseconds: 300_000_000)
             let file = URL(fileURLWithPath: stem + "-t" + FreezeShots.name(of: moment) + ".png")
@@ -1886,7 +1886,7 @@ enum ScreenshotMode {
             let power = PowerSample()
             power?.start()
             _ = await view.value(of: """
-                (function () { window.__wallaeroGaps = []; var last = 0; WallaeroEngine.holdClock(false);
+                (function () { window.__wallaeroGaps = []; var last = 0; WallaeroEngine.api.holdClock(false);
                   function frame(now) { if (last) window.__wallaeroGaps.push(now - last); last = now; requestAnimationFrame(frame); }
                   requestAnimationFrame(frame); return true; })()
                 """)
@@ -1900,7 +1900,7 @@ enum ScreenshotMode {
                 print(String(format: "watts: %.2f (gpu %.2f, cpu %.2f), whole Mac", watts["total"] ?? 0, watts["gpu"] ?? 0, watts["cpu"] ?? 0))
             }
         }
-        let report = await view.value(of: "window.WallaeroEngine && window.WallaeroEngine.report ? window.WallaeroEngine.report() : 'no player on the page'")
+        let report = await view.value(of: "window.WallaeroEngine && window.WallaeroEngine.api ? window.WallaeroEngine.api.report() : 'no player on the page'")
         summary["report"] = report as? String ?? ""
         if let data = try? JSONSerialization.data(withJSONObject: summary, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: stem + ".json"))
@@ -2111,7 +2111,7 @@ enum ScreenshotMode {
                     }
                 }
                 MainActor.assumeIsolated {
-                    view.webView?.evaluate(SoundSpectrum.script(for: levels))
+                    view.webView?.send(.sound(levels))
                 }
             }
         }
@@ -2360,10 +2360,10 @@ enum ScreenshotMode {
         if CommandLine.arguments.contains("--synthetic") {
             SoundSpectrum.shared.makeSource = { SyntheticSound(turns: [3, 4, 3, 3]) }
         }
-        SoundSpectrum.shared.addListener(probe) { script in
-            // The numbers between the brackets of the script a page would run.
-            guard let open = script.lastIndex(of: "["), let close = script.lastIndex(of: "]") else { return }
-            let levels = script[script.index(after: open)..<close].split(separator: ",").compactMap { Float($0) }
+        SoundSpectrum.shared.addListener(probe) { command in
+            // The levels as a page would get them: in thousandths.
+            guard case .sound(let heard) = command else { return }
+            let levels = heard.map { (min(max($0, 0), 1) * 1000).rounded() / 1000 }
             probe.frames += 1
             probe.latest = levels
             probe.loudest = max(probe.loudest, levels.max() ?? 0)

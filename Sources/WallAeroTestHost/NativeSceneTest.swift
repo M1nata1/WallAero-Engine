@@ -1,6 +1,6 @@
 @testable import WallAeroApp
 import AppKit
-import MetalScene
+@_spi(Testing) import MetalScene
 import WallpaperCore
 
 /// `--native-test <scene folder> <picture.png> [--after <seconds>] [--size <w> <h>] [--pointer-at <s> <x> <y>]
@@ -164,7 +164,7 @@ enum FreezeShots {
         var summary: [String: Any] = ["moments": moments]
         func loaded() -> Bool {
             let waited = Date().timeIntervalSince(started)
-            let loading = Int(player.evaluate("WallaeroEngine.loading()") ?? "") ?? 0
+            let loading = player.ask(.loading) ?? 0
             return waited >= 30 || (waited >= least && loading == 0)
         }
         func shoot(_ index: Int) {
