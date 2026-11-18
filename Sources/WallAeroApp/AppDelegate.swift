@@ -74,6 +74,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                  })
     }
 
+    /// Scenes laid out before v4.0 get their table as data (`WallpaperEngineSceneData.migrate`),
+    /// in the background; what was there before goes at the next launch.
+    static func moveSceneDataOn(_ library: WallpaperLibrary) {
+        let folders = library.items.filter { $0.kind == .web }.map { library.projectURL(for: $0) }
+        Task.detached(priority: .utility) {
+            let done = WallpaperEngineSceneData.migrate(scenes: folders)
+            if done.written > 0 || done.cleared > 0 {
+                Log.library.info("Scene tables: \(done.written) written as data, \(done.cleared) scenes cleared of the old script and player")
+            }
+        }
+    }
+
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -87,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = makeMainMenu()
         watchDeleteKey()
         manager.start()
+        Self.moveSceneDataOn(library)
         MediaConversion.shared.layOutLibrary(library) { [weak self] redone in
             for item in redone { self?.manager.webWallpaperDidChange(item) }
         }

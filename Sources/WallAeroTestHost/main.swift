@@ -41,6 +41,15 @@ func runAlone() -> Bool {
         ScreenshotMode.energyTest(target)
         return true
     }
+    // Moves a library's scenes on from before v4.0, as the app does at launch: run it twice to
+    // have the old files taken out as well.
+    if let index = arguments.firstIndex(of: "--move-scene-data"), index + 1 < arguments.count {
+        let library = WallpaperLibrary(rootURL: URL(fileURLWithPath: arguments[index + 1], isDirectory: true))
+        let folders = library.items.filter { $0.kind == .web }.map { library.projectURL(for: $0) }
+        let done = WallpaperEngineSceneData.migrate(scenes: folders)
+        print("written \(done.written), cleared \(done.cleared), of \(folders.count) web wallpapers")
+        exit(0)
+    }
     // Lays a scene's Wallpaper Engine project out anew, as the app does after an update, for a
     // copy of a scene to be tested.
     if let index = arguments.firstIndex(of: "--lay-out"), index + 1 < arguments.count {

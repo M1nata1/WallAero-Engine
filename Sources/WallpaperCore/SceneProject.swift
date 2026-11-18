@@ -81,11 +81,8 @@ public enum SceneProject {
     @discardableResult
     public static func refreshGeneratedFiles(in folder: URL) throws -> Bool {
         var changed = false
-        var generated = [(entryFileName, indexHTML), ("runtime.js", runtime)]
-        // The player of Wallpaper Engine's scenes is large, and only scenes that hold one get it.
-        if FileManager.default.fileExists(atPath: folder.appendingPathComponent(WallpaperEngineScene.folderName).path) {
-            generated.append((WallpaperEngineRuntime.fileName, WallpaperEngineRuntime.script))
-        }
+        // The player of Wallpaper Engine's scenes is not among them: the app hands it to the page.
+        let generated = [(entryFileName, indexHTML), ("runtime.js", runtime)]
         for (name, content) in generated {
             let url = folder.appendingPathComponent(name)
             if (try? String(contentsOf: url, encoding: .utf8)) != content {

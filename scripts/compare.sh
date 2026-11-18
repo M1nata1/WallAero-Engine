@@ -105,7 +105,8 @@ if [ "${IMPORT}" = 1 ] || [ ! -f "${MANIFEST}" ]; then
         local index=0
         while IFS= read -r folder; do
             [ -n "${folder}" ] || continue
-            [ -f "${folder}/engine/files.js" ] || continue   # a scene; pages and videos are not compared
+            # A scene (its table: files.json since v4.0, files.js before); pages and videos are not compared.
+            [ -f "${folder}/engine/files.json" ] || [ -f "${folder}/engine/files.js" ] || continue
             local name="$1"
             [ "${index}" -gt 0 ] && name="$1-${index}"
             printf '%s\t%s\n' "${name}" "${folder#${LIBRARY}.new/}" >> "${LIBRARY}.new/manifest.tsv"

@@ -405,6 +405,12 @@ public enum PlayerEnvironment {
     public static let size = "__size"
     /// What a video, sound or picture element of the environment is known by on the Swift side.
     public static let handle = "__handle"
+    /// The scene's table (`WallpaperEngineSceneData`), as the player finds it: natively set by
+    /// the Swift side, in Chromium by the script `CEFHost` makes of `files.json` (`scenePrefix`).
+    public static let scene = "wallaeroEngineScene"
+    public static let scenePrefix = "window.wallaeroEngineScene = "
+    /// What the page asks for to have the player: the app's own is handed to it.
+    public static let playerFile = "engine.js"
 }
 
 /// The handlers a page in Chromium posts its messages to.

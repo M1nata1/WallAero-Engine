@@ -129,12 +129,7 @@ public final class MetalScenePlayer {
         if followsEditorClock { run(.followsEditorClock) }
         if let testEpoch { run(.testEpoch(testEpoch)) }
         applySize()
-        let table = folder.appendingPathComponent("engine/files.js")
-        guard let files = try? String(contentsOf: table, encoding: .utf8) else {
-            note("no engine/files.js in \(folder.path)")
-            return
-        }
-        context.evaluateScript(files, withSourceURL: table)
+        guard giveSceneData() else { return }
         context.evaluateScript(engineScript, withSourceURL: URL(string: "wallaero://engine.js"))
         #if DEBUG
         // The player's table and the app's list of what it asks must be the same.
@@ -289,10 +284,33 @@ public final class MetalScenePlayer {
 
     /// The scene's files laid out anew: read again, and the scene played anew.
     public func reloadFiles() {
-        let table = folder.appendingPathComponent("engine/files.js")
-        guard let files = try? String(contentsOf: table, encoding: .utf8) else { return }
-        context.evaluateScript(files, withSourceURL: table)
+        guard giveSceneData() else { return }
         run(.replay)
+    }
+
+    /// The scene's table, read as data and handed to the player as an object; false, with a
+    /// note, when there is none or it is of a format the app does not read.
+    private func giveSceneData() -> Bool {
+        let data: Data
+        switch WallpaperEngineSceneData.read(scene: folder) {
+        case .success(let read): data = read
+        case .failure(let problem):
+            note("the scene's table cannot be played: \(problem) (\(folder.path))")
+            return false
+        }
+        var text = data
+        text.append(0)
+        let parsed: JSValueRef? = text.withUnsafeBytes { bytes in
+            let string = JSStringCreateWithUTF8CString(bytes.bindMemory(to: CChar.self).baseAddress)
+            defer { JSStringRelease(string) }
+            return JSValueMakeFromJSONString(context.jsGlobalContextRef, string)
+        }
+        guard let parsed, let value = JSValue(jsValueRef: parsed, in: context), value.isObject else {
+            note("the scene's table does not read (\(folder.path))")
+            return false
+        }
+        context.globalObject.setObject(value, forKeyedSubscript: PlayerEnvironment.scene as NSString)
+        return true
     }
 
     /// One of the player's questions (`PlayerQuery`), and its answer; nil for none.

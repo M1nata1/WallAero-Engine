@@ -13,13 +13,16 @@ import ImageIO
 /// here is what a page cannot do: the package is unpacked and the textures, kept in a format of
 /// Wallpaper Engine's, become pictures a page can load.
 ///
-///     engine/files.js    – the scene's text files, the list of its pictures, sounds and fonts,
+///     engine/files.json  – the scene's text files, the list of its pictures, sounds and fonts,
 ///                          and its puppets: pictures that bend, with their bones and animations
+///                          (`WallpaperEngineSceneData`)
 ///     engine/tex/        – the pictures, and the videos that stand in place of pictures
 ///     engine/sounds/     – the sounds
 ///     engine/fonts/      – the fonts its texts are written in
 public enum WallpaperEngineScene {
     public static let folderName = "engine"
+    /// What the scene's page asks for, as a script, to have the table (`WallpaperEngineSceneData`):
+    /// Chromium is handed `files.json` for it by the app; no such file is written.
     public static let filesName = "files.js"
 
     /// What a scene has that the player does not play, as the number of its objects that have
@@ -178,15 +181,11 @@ public enum WallpaperEngineScene {
             }
         }
 
-        // The files go to the page as a script: a page opened from a file may load a script of
-        // its folder, while reading a file takes a setting pages do not always have. What the
-        // scene's files say is only ever data there — texts in a table.
+        // The table, as data: what the scene's files say is only ever texts in it.
         let table: [String: Any] = ["files": texts, "textures": textures, "sounds": soundFiles, "fonts": fontFiles, "puppets": puppets]
-        let json = try JSONSerialization.data(withJSONObject: table, options: [.sortedKeys])
-        var script = Data("window.wallaeroEngineScene = ".utf8)
-        script.append(json)
-        script.append(Data(";\n".utf8))
-        try script.write(to: engine.appendingPathComponent(filesName), options: .atomic)
+        try WallpaperEngineSceneData.write(table, scene: folder)
+        // A scene laid out before v4.0 had it as a script.
+        try? files.removeItem(at: WallpaperEngineSceneData.oldScriptURL(scene: folder))
         if let data = try? JSONSerialization.data(withJSONObject: newCache, options: [.sortedKeys]) {
             try? data.write(to: cacheURL, options: .atomic)
         }

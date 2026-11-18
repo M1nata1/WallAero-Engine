@@ -146,6 +146,11 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
         webView.delegate = self
         // The page may load the files of its own folder and no others.
         webView.readableFolders = [project.folder.path]
+        // A scene of Wallpaper Engine's is handed the app's player and its table as the scripts
+        // its page asks for: neither lies in its folder.
+        if project.isScene {
+            webView.servedScripts = Self.servedScripts(for: project.folder)
+        }
         webView.frameRateLimit = Int32(drawingRate)
         webView.audioMuted = isMuted
         // The editor's preview is worked with the mouse; a wallpaper on the desktop is told of
@@ -164,6 +169,24 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
                 self?.filesDidChange(paths)
             }
         }
+    }
+
+    private static func servedScripts(for folder: URL) -> [CEFServedScript] {
+        guard FileManager.default.fileExists(atPath: folder.appendingPathComponent(WallpaperEngineScene.folderName).path) else { return [] }
+        var served = [CEFServedScript(path: folder.appendingPathComponent(PlayerEnvironment.playerFile).path,
+                                      text: WallpaperEngineRuntime.script, file: nil, suffix: "")]
+        let table = WallpaperEngineSceneData.url(scene: folder)
+        switch WallpaperEngineSceneData.read(scene: folder) {
+        case .success where FileManager.default.fileExists(atPath: table.path):
+            served.append(CEFServedScript(path: folder.appendingPathComponent("\(WallpaperEngineScene.folderName)/\(WallpaperEngineScene.filesName)").path,
+                                          text: PlayerEnvironment.scenePrefix, file: table.path, suffix: ";\n"))
+        case .failure(let problem):
+            Log.playback.error("Cannot play the scene in \(folder.lastPathComponent, privacy: .public): its table \(String(describing: problem), privacy: .public)")
+        default:
+            // Laid out before v4.0 and not yet moved on: the page loads the old script itself.
+            break
+        }
+        return served
     }
 
     func unload() {

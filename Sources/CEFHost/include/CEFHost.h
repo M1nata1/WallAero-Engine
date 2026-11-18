@@ -33,6 +33,18 @@ NS_ASSUME_NONNULL_BEGIN
 @property (readonly) BOOL mainFrameOnly;
 @end
 
+/// A script the page loads from a file that is not where it asks for it: what the app hands it
+/// instead is `text` followed by the file `file`, if any, followed by `suffix`. Read as the page
+/// asks, so that a file of hundreds of megabytes costs no more than loading it from its folder.
+@interface CEFServedScript : NSObject
+- (instancetype)initWithPath:(NSString *)path text:(NSString *)text file:(nullable NSString *)file suffix:(NSString *)suffix;
+/// The path the page asks for, as in its file address.
+@property (readonly, copy) NSString *path;
+@property (readonly, copy) NSString *text;
+@property (nullable, readonly, copy) NSString *file;
+@property (readonly, copy) NSString *suffix;
+@end
+
 @class CEFPageView;
 
 NS_SWIFT_UI_ACTOR
@@ -53,6 +65,8 @@ NS_SWIFT_UI_ACTOR
 /// The folders whose files the page may load; any other file is refused. Pages from the web
 /// are not limited by it.
 @property (nonatomic, copy) NSArray<NSString *> *readableFolders;
+/// Scripts the page is handed in place of files it asks for (see `CEFServedScript`).
+@property (nonatomic, copy) NSArray<CEFServedScript *> *servedScripts;
 /// Mouse and wheel events over the view go to the page (the editor's preview); a wallpaper on
 /// the desktop is told of the pointer through its scripts instead.
 @property (nonatomic) BOOL forwardsMouse;

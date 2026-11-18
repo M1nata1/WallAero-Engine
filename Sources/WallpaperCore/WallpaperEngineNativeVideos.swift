@@ -7,11 +7,7 @@ extension WallpaperEngineProjectFolder {
     /// in `project/` once, into the hidden `.native-videos/` (which the WebM conversion leaves
     /// alone), and decoded by the Mac's media engine.
     public static func nativeVideos(scene folder: URL) -> [String: URL] {
-        let table = folder.appendingPathComponent("\(WallpaperEngineScene.folderName)/\(WallpaperEngineScene.filesName)")
-        guard let script = try? String(contentsOf: table, encoding: .utf8), let start = script.firstIndex(of: "{"),
-              let json = try? JSONSerialization.jsonObject(with: Data(script[start...].trimmingCharacters(in: CharacterSet(charactersIn: ";\n ")).utf8)) as? [String: Any],
-              let textures = json["textures"] as? [String: Any]
-        else {
+        guard let json = WallpaperEngineSceneData.table(scene: folder), let textures = json["textures"] as? [String: Any] else {
             return [:]
         }
         let files = FileManager.default
