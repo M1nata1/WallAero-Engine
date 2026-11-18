@@ -7,6 +7,7 @@ import WallpaperCore
 enum Log {
     static let playback = Logger(subsystem: "com.fadevec.WallAeroEngine", category: "playback")
     static let cursor = Logger(subsystem: "com.fadevec.WallAeroEngine", category: "cursor")
+    static let library = Logger(subsystem: "com.fadevec.WallAeroEngine", category: "library")
 }
 
 enum LaunchAtLogin {

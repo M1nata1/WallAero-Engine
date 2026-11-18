@@ -154,9 +154,7 @@ final class WallpaperEngineEditingTests: XCTestCase {
         XCTAssertEqual(project.pictureSettingTitles, [.init(name: "custombg", title: "Custom background")])
 
         func laidOutTextures() throws -> [String] {
-            let script = try String(contentsOf: scene.appendingPathComponent("engine/files.js"), encoding: .utf8)
-            let json = try XCTUnwrap(script.range(of: "= ").map { String(script[$0.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: ";\n")) })
-            let table = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+            let table = try XCTUnwrap(WallpaperEngineSceneData.table(scene: scene))
             return ((table["textures"] as? [String: Any]) ?? [:]).keys.sorted()
         }
         try WallpaperEngineProjectFolder.layOut(scene: scene)
@@ -545,7 +543,7 @@ final class NativeSceneChoiceTests: XCTestCase {
         XCTAssertFalse(SceneProject.isNativelyPlayable(folder))
         let engine = folder.appendingPathComponent(WallpaperEngineScene.folderName)
         try FileManager.default.createDirectory(at: engine, withIntermediateDirectories: true)
-        try "window.wallaeroEngineScene = {};".write(to: engine.appendingPathComponent("files.js"), atomically: true, encoding: .utf8)
+        try #"{"format":1}"#.write(to: engine.appendingPathComponent("files.json"), atomically: true, encoding: .utf8)
         XCTAssertTrue(SceneProject.isNativelyPlayable(folder))
 
         var dimmed = scene
@@ -629,5 +627,54 @@ final class StockFontTests: XCTestCase {
         XCTAssertEqual(rig.points.count, 3)
         XCTAssertEqual(rig.triangles, [0, 2, 1])
         XCTAssertEqual(rig.holds?.count, 3)
+    }
+}
+
+/// Scenes laid out before v4.0 are moved on to a table of data, and lose the old script and
+/// player only at the launch after.
+final class WallpaperEngineSceneDataTests: XCTestCase {
+    func testAnOldSceneIsMovedOnInTwoLaunches() throws {
+        let folder = try TestMedia.directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let engine = folder.appendingPathComponent(WallpaperEngineScene.folderName)
+        try FileManager.default.createDirectory(at: engine, withIntermediateDirectories: true)
+        let old = #"window.wallaeroEngineScene = {"files":{"scene.json":"{}"},"textures":{}};"# + "\n"
+        try old.write(to: engine.appendingPathComponent("files.js"), atomically: true, encoding: .utf8)
+        try "player".write(to: folder.appendingPathComponent("engine.js"), atomically: true, encoding: .utf8)
+        // Before: the table is read from the script.
+        XCTAssertEqual(WallpaperEngineSceneData.table(scene: folder)?["textures"] as? [String: String], [:])
+
+        // The first launch writes the data beside the old files and takes nothing away.
+        XCTAssertEqual(WallpaperEngineSceneData.migrate(scenes: [folder]).written, 1)
+        let data = try Data(contentsOf: WallpaperEngineSceneData.url(scene: folder))
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"format":1,"files":{"scene.json":"{}"},"textures":{}}"#)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: engine.appendingPathComponent("files.js").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("engine.js").path))
+
+        // The next one takes the old files away; a third finds nothing to do.
+        XCTAssertEqual(WallpaperEngineSceneData.migrate(scenes: [folder]).cleared, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: engine.appendingPathComponent("files.js").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("engine.js").path))
+        XCTAssertEqual(WallpaperEngineSceneData.migrate(scenes: [folder]).written + WallpaperEngineSceneData.migrate(scenes: [folder]).cleared, 0)
+        XCTAssertNotNil(WallpaperEngineSceneData.table(scene: folder)?["files"])
+    }
+
+    func testATableOfALaterFormatIsRefused() throws {
+        let folder = try TestMedia.directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let engine = folder.appendingPathComponent(WallpaperEngineScene.folderName)
+        try FileManager.default.createDirectory(at: engine, withIntermediateDirectories: true)
+        try #"{"format":2,"files":{}}"#.write(to: engine.appendingPathComponent("files.json"), atomically: true, encoding: .utf8)
+        guard case .failure(.newer(2)) = WallpaperEngineSceneData.read(scene: folder) else { return XCTFail("a later format is read") }
+    }
+
+    func testABrokenOldScriptIsLeftAlone() throws {
+        let folder = try TestMedia.directory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let engine = folder.appendingPathComponent(WallpaperEngineScene.folderName)
+        try FileManager.default.createDirectory(at: engine, withIntermediateDirectories: true)
+        try "window.something = 1;".write(to: engine.appendingPathComponent("files.js"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(WallpaperEngineSceneData.migrate(scenes: [folder]).written, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: engine.appendingPathComponent("files.js").path))
     }
 }

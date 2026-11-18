@@ -18,6 +18,8 @@
 #include "include/cef_application_mac.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/cef_stream.h"
+#include "include/wrapper/cef_stream_resource_handler.h"
 #include "include/wrapper/cef_library_loader.h"
 
 @class CEFPageView;
@@ -93,6 +95,75 @@ class BrowserApp : public CefApp, public CefBrowserProcessHandler {
   IMPLEMENT_REFCOUNTING(BrowserApp);
 };
 
+// MARK: - Scripts handed to a page
+
+// What the app hands a page in place of a file it asks for: a text, a file read as it is asked
+// for, and a text after it.
+struct Served {
+  std::string text;
+  std::string file;
+  std::string suffix;
+};
+
+class JoinedReader : public CefReadHandler {
+ public:
+  JoinedReader(const Served& served, FILE* file) : served_(served), file_(file) {}
+  ~JoinedReader() override {
+    if (file_) {
+      fclose(file_);
+    }
+  }
+
+  size_t Read(void* ptr, size_t size, size_t n) override {
+    size_t wanted = size * n, done = 0;
+    char* out = static_cast<char*>(ptr);
+    while (done < wanted) {
+      if (part_ == 0) {
+        done += Take(served_.text, out + done, wanted - done);
+      } else if (part_ == 1) {
+        size_t read = file_ ? fread(out + done, 1, wanted - done, file_) : 0;
+        done += read;
+        if (read == 0) {
+          part_ = 2;
+          at_ = 0;
+        }
+      } else if (part_ == 2) {
+        done += Take(served_.suffix, out + done, wanted - done);
+      } else {
+        break;
+      }
+    }
+    position_ += done;
+    return size ? done / size : 0;
+  }
+  int Seek(int64_t offset, int whence) override { return -1; }
+  int64_t Tell() override { return position_; }
+  int Eof() override { return part_ == 3 ? 1 : 0; }
+  bool MayBlock() override { return true; }
+
+ private:
+  // Copies what is left of `text` from `at_`; on to the next part once it is all given.
+  size_t Take(const std::string& text, char* out, size_t room) {
+    size_t left = text.size() - at_;
+    size_t count = left < room ? left : room;
+    memcpy(out, text.data() + at_, count);
+    at_ += count;
+    if (at_ >= text.size()) {
+      part_ += 1;
+      at_ = 0;
+    }
+    return count;
+  }
+
+  Served served_;
+  FILE* file_;
+  int part_ = 0;
+  size_t at_ = 0;
+  int64_t position_ = 0;
+
+  IMPLEMENT_REFCOUNTING(JoinedReader);
+};
+
 // MARK: - A page's client
 
 // Hands what Chromium says about a page to its view. Holds the view weakly: a view that is gone
@@ -114,6 +185,48 @@ class PageClient : public CefClient,
   void SetReadableFolders(std::vector<std::string> folders) {
     std::lock_guard<std::mutex> lock(foldersLock_);
     folders_ = std::move(folders);
+  }
+
+  // The scripts handed to the page in place of files, by the path it asks for. Set on the
+  // main thread, read on Chromium's input-output thread.
+  void SetServed(std::map<std::string, Served> served) {
+    std::lock_guard<std::mutex> lock(foldersLock_);
+    served_ = std::move(served);
+  }
+
+  bool FindServed(const std::string& url, Served& found) {
+    if (url.rfind("file:", 0) != 0) {
+      return false;
+    }
+    NSURL *fileURL = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
+    if (!fileURL.path) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(foldersLock_);
+    auto at = served_.find(fileURL.path.UTF8String);
+    if (at == served_.end()) {
+      return false;
+    }
+    found = at->second;
+    return true;
+  }
+
+  CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
+                                                   CefRefPtr<CefFrame> frame,
+                                                   CefRefPtr<CefRequest> request) override {
+    Served served;
+    if (!FindServed(request->GetURL().ToString(), served)) {
+      return nullptr;
+    }
+    FILE* file = nullptr;
+    if (!served.file.empty()) {
+      file = fopen(served.file.c_str(), "rb");
+      if (!file) {
+        return nullptr;
+      }
+    }
+    CefRefPtr<CefStreamReader> stream = CefStreamReader::CreateForHandler(new JoinedReader(served, file));
+    return new CefStreamResourceHandler("text/javascript", stream);
   }
 
   CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
@@ -239,6 +352,10 @@ class PageClient : public CefClient,
     if (url.rfind("file:", 0) != 0) {
       return RV_CONTINUE;
     }
+    Served served;
+    if (FindServed(url, served)) {
+      return RV_CONTINUE;
+    }
     NSURL *fileURL = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
     char real[PATH_MAX];
     if (!fileURL.path || !realpath(fileURL.path.fileSystemRepresentation, real)) {
@@ -270,6 +387,7 @@ class PageClient : public CefClient,
   __weak CEFPageView *view_;
   std::mutex foldersLock_;
   std::vector<std::string> folders_;
+  std::map<std::string, Served> served_;
 
   IMPLEMENT_REFCOUNTING(PageClient);
 };
@@ -389,6 +507,20 @@ class PageClient : public CefClient,
 
 // MARK: - User scripts
 
+@implementation CEFServedScript
+
+- (instancetype)initWithPath:(NSString *)path text:(NSString *)text file:(NSString *)file suffix:(NSString *)suffix {
+  if ((self = [super init])) {
+    _path = [path copy];
+    _text = [text copy];
+    _file = [file copy];
+    _suffix = [suffix copy];
+  }
+  return self;
+}
+
+@end
+
 @implementation CEFUserScript
 
 - (instancetype)initWithSource:(NSString *)source atDocumentEnd:(BOOL)atDocumentEnd mainFrameOnly:(BOOL)mainFrameOnly {
@@ -428,6 +560,7 @@ class PageClient : public CefClient,
     self.layer.opaque = NO;
     _userScripts = @[];
     _readableFolders = @[];
+    _servedScripts = @[];
     _frameRateLimit = 60;
     _pendingScripts = [NSMutableArray array];
     _device = MTLCreateSystemDefaultDevice();
@@ -457,6 +590,7 @@ class PageClient : public CefClient,
   }
   _client = new PageClient(self);
   self.readableFolders = _readableFolders;
+  self.servedScripts = _servedScripts;
   CefWindowInfo info;
   info.SetAsWindowless(nullptr);
   info.shared_texture_enabled = true;
@@ -646,6 +780,18 @@ class PageClient : public CefClient,
   _frameRateLimit = MAX(1, MIN(240, frameRateLimit));
   if (_browser) {
     _browser->GetHost()->SetWindowlessFrameRate(_frameRateLimit);
+  }
+}
+
+- (void)setServedScripts:(NSArray<CEFServedScript *> *)servedScripts {
+  _servedScripts = [servedScripts copy];
+  std::map<std::string, Served> served;
+  for (CEFServedScript *script in _servedScripts) {
+    served[script.path.UTF8String] = Served{script.text.UTF8String, script.file ? script.file.fileSystemRepresentation : "",
+                                            script.suffix.UTF8String};
+  }
+  if (_client) {
+    _client->SetServed(std::move(served));
   }
 }
 

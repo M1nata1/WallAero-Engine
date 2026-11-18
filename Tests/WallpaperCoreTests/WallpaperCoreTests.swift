@@ -2014,13 +2014,11 @@ final class WallpaperEngineSceneTests: XCTestCase {
         ] + picture("Sky", texture: texture(width: 200, height: 100, canvas: 256, color: [0, 0, 255, 255])))
     }
 
-    /// What the page is handed: the table in `engine/files.js`.
+    /// What the player is handed: the table in `engine/files.json`.
     private func table(in folder: URL) throws -> [String: Any] {
-        let script = try String(contentsOf: folder.appendingPathComponent("engine/files.js"), encoding: .utf8)
-        let prefix = "window.wallaeroEngineScene = "
-        XCTAssertTrue(script.hasPrefix(prefix))
-        let json = script.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines).dropLast()
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let data = try Data(contentsOf: folder.appendingPathComponent("engine/files.json"))
+        XCTAssertTrue(data.starts(with: Data(#"{"format":1,"#.utf8)), "the format comes first")
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     func testTheScenesFilesAreLaidOutForThePlayer() throws {
@@ -2116,11 +2114,13 @@ final class WallpaperEngineSceneTests: XCTestCase {
         XCTAssertEqual(scene.variables.map(\.property), ["greeting", "look", "speed"])
         XCTAssertEqual(scene.variables.map(\.kind), [.text, .choice, .number])
         XCTAssertEqual(scene.variables[1].text, "Night")
-        // The page, the runtime and the player that draws the scene.
-        for name in ["index.html", "runtime.js", "engine.js", "engine/files.js"] {
+        // The page, its runtime and the scene's table; the player is the app's, not the scene's.
+        for name in ["index.html", "runtime.js", "engine/files.json"] {
             XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path), name)
         }
-        XCTAssertEqual(try String(contentsOf: folder.appendingPathComponent("engine.js"), encoding: .utf8), WallpaperEngineRuntime.script)
+        for name in ["engine.js", "engine/files.js"] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path), name)
+        }
         XCTAssertEqual(library.leftOutOnImport[added[0].id], .init(animations: 1, objects: 1))
     }
 

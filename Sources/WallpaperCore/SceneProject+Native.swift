@@ -14,7 +14,7 @@ extension SceneProject {
         guard background.kind == .engine, scene.layers.isEmpty,
               background.blur == 0, background.brightness == 100, background.contrast == 100,
               background.saturation == 100, background.hue == 0,
-              FileManager.default.fileExists(atPath: folder.appendingPathComponent("\(WallpaperEngineScene.folderName)/files.js").path)
+              WallpaperEngineSceneData.exists(scene: folder)
         else { return false }
         for (name, template) in [("custom.css", customCSS), ("custom.js", customJS)] {
             guard let text = try? String(contentsOf: folder.appendingPathComponent(name), encoding: .utf8) else { continue }
