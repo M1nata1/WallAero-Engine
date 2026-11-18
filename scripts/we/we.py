@@ -24,6 +24,10 @@ from PIL import Image, ImageFilter
 POINTS = [(int(1280 * (i + 0.5) / 4), int(800 * (j + 0.5) / 4)) for i in range(4) for j in range(4)]
 # WE's Safe Start dialog: its blue OK button.
 DIALOG_BUTTON = [(740, 276), (790, 276)]
+# WE's own window, which it opens after it fell over and started again: its blue "Installed" tab
+# and OK button; and where its Cancel button is.
+WINDOW_MARKS = [(160, 135), (976, 717)]
+WINDOW_CANCEL = (1082, 717)
 # What is left out of both: Windows' "not activated" note in the bottom right corner.
 MASK = (920, 690, 1280, 800)
 SMALL = (320, 200)
@@ -38,6 +42,8 @@ def screen(path):
     print('magenta', magenta)
     if all(px[x, y][2] > 180 and px[x, y][0] < 80 for x, y in DIALOG_BUTTON):
         print('dialog')
+    if all(px[x, y][2] > 200 and px[x, y][0] < 130 for x, y in WINDOW_MARKS):
+        print('window')
 
 
 def small(path):

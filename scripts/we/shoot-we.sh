@@ -34,6 +34,10 @@ while IFS=$'\t' read -r name folder library how; do
     while [ $(( $(date +%s) - started )) -lt 240 ]; do
         sleep 5
         said="$(screen)"
+        if echo "$said" | grep -q window; then
+            # WE's own window, opened as it started again: Cancel.
+            "$WIN" click 1082 717 >/dev/null; continue
+        fi
         if echo "$said" | grep -q dialog; then
             # WE fell over and restarted behind its Safe Start dialog: OK, and wait on.
             "$WIN" click 763 276 >/dev/null; continue
@@ -42,5 +46,8 @@ while IFS=$'\t' read -r name folder library how; do
     done
     if [ "$loaded" -eq 0 ]; then echo "$name: not drawn by WE in 4 minutes"; continue; fi
     sleep 15
-    "$WIN" shot "$OUT/$name.png" >/dev/null && echo "$name: $(( $(date +%s) - started )) s"
+    if screen | grep -q window; then "$WIN" click 1082 717 >/dev/null; sleep 10; fi
+    "$WIN" shot "$OUT/$name.png" >/dev/null
+    if screen | grep -Eq 'window|dialog'; then rm -f "$OUT/$name.png"; echo "$name: covered by WE's window"; continue; fi
+    echo "$name: $(( $(date +%s) - started )) s"
 done < "$PLAN"
