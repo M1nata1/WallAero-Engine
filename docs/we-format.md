@@ -11,6 +11,7 @@ The split (architecture plan, stage 5):
   code for it instead of keeping a copy.
 
 A row marked **both** is a rule written twice. Stage 5 is done when no row says **both**.
+Shared cases live in `Tests/Fixtures/we-format/`; both sides' tests read them.
 
 Last surveyed: 2026-11-19, on `WallAero-Engine-v-4.1` (after v4.0).
 
@@ -38,8 +39,8 @@ Last surveyed: 2026-11-19, on `WallAero-Engine-v-4.1` (after v4.0).
 
 | # | Rule | Swift | Player | Now | Goes to |
 |---|------|-------|--------|-----|---------|
-| 16 | Timeline curve: keys, handles, `magic`, modes loop/mirror/single, `wraploop`, `relative` | `WallpaperEngineAnimation.numbers`, `.reach`, `span`, `along` (editor timeline and inspector) | `curves.js` `curveOf` | **both** | Player; the editor asks it through a light `JSContext` |
-| 17 | Bones: hierarchy to world transforms, skinning of the corners | `WallpaperEnginePuppetRig.posedPoints`, `posedTransforms`, `localPoses` (rig editor overlay) | `puppets.js` | **both** | Player for skinning (the editor asks through the `bones` query); the editor's own keys and how they ease stay in Swift, which bakes them into the `.mdl` |
+| 16 | Timeline curve: keys, handles, `magic`, modes loop/mirror/single, `wraploop`, `relative` | asks the player's `curves.js` (`WallpaperEngineCurves`, its own `JSContext`); keeps only how handles are drawn and edited (`reach`, `workOutMagicHandles`) | `curves.js` `curveOf` | Player | Player |
+| 17 | Bones: hierarchy to world transforms, skinning of the corners | asks the player (`bones` query) after holding the bones where the editor has them (`holdPuppet`); keeps the editor's own keys and how they ease, baked into the `.mdl` | `puppets.js` | Player | Player |
 | 18 | A value bound to a setting with a choice: `user.condition` equals the setting | writes it (`EngineUserProperties`) | `values.js` | Player | Player |
 | 19 | Shader combos and `#if` | — | `glsl.js` | Player | Player (stage 8) |
 | 20 | Scripts: their API, expressions, declared properties | reads what the player found (`WallpaperEngineScriptSetting`) | `scene-scripts.js`, `script-math.js`, `scripts.js` | Player | Player |

@@ -37,6 +37,15 @@ public enum WallpaperEngineRuntime {
         fatalError("the scene player is missing: no Player/order.txt in the app's resources or beside the sources")
     }()
 
+    /// One file of the player, as it is: for code that runs a part of it alone
+    /// (`WallpaperEngineCurves`).
+    static func file(named name: String) -> String? {
+        for folder in playerFolders {
+            if let text = try? String(contentsOf: folder.appendingPathComponent(name), encoding: .utf8) { return text }
+        }
+        return nil
+    }
+
     static var playerFolders: [URL] {
         var folders: [URL] = []
         if let resources = Bundle.main.resourceURL { folders.append(resources.appendingPathComponent("Player", isDirectory: true)) }

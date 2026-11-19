@@ -42,6 +42,24 @@ test('a relative animation adds to the value it is given', () => {
   assert.deepStrictEqual([0, 0.5].map((t) => engine.api.curveValue(relative, t, [5])[0]), [5, 10]);
 });
 
+test('curves come out as the shared cases say (Tests/Fixtures/we-format/curves.json)', () => {
+  // curves.js alone, as the app runs it for the editor (WallpaperEngineCurves.swift).
+  const fs = require('fs');
+  const path = require('path');
+  const vm = require('vm');
+  const page = {};
+  vm.createContext(page);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', '..', 'Sources', 'WallpaperCore', 'Player', 'curves.js'), 'utf8'), page);
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'Fixtures', 'we-format', 'curves.json'), 'utf8'));
+  for (const each of fixture.cases) {
+    const curve = page.curveOf(fixture.animations[each.animation]);
+    const got = 'frame' in each ? curve.atFrame(each.frame, each.base) : curve(each.seconds, each.base);
+    got.forEach((value, index) => assert.ok(Math.abs(value - each.expected[index]) < 1e-6, `${each.animation} ${JSON.stringify(each)}: ${got}`));
+    // The whole player works them out the same way.
+    if ('seconds' in each) assert.deepStrictEqual(engine.api.curveValue(fixture.animations[each.animation], each.seconds, each.base), got);
+  }
+});
+
 test('numbers are read from text, one number or none', () => {
   assert.deepStrictEqual(Array.from(engine.numbers('1 2', 3, 7)), [1, 2, 7]);
   assert.deepStrictEqual(Array.from(engine.numbers(4, 3, 0)), [4, 4, 4]);

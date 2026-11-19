@@ -415,52 +415,6 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
         animations[animation].keys[bone] = keys
     }
 
-    /// Where every corner is at a frame of an animation, or at rest without one.
-    public func posedPoints(animation: Int?, frame: Double) -> [Point] {
-        let world = worldTransforms(animation: animation, frame: frame)
-        let weights = self.weights()
-        return points.enumerated().map { index, point in
-            guard !bones.isEmpty else { return point }
-            var x = 0.0, y = 0.0
-            for slot in 0..<4 where weights[index].weights[slot] > 0 {
-                let bone = weights[index].bones[slot]
-                let move = world[bone]
-                // From where the bone is at rest to where it is now.
-                let along = alongBone(bone, point)
-                let rx = along.x, ry = along.y
-                let px = move.a * rx + move.c * ry + move.tx
-                let py = move.b * rx + move.d * ry + move.ty
-                x += px * weights[index].weights[slot]
-                y += py * weights[index].weights[slot]
-            }
-            return Point(x: x, y: y)
-        }
-    }
-
-    /// Each bone's place and turn in the picture at a frame; the place of a bone's joint is
-    /// where the transform takes nought.
-    public func posedTransforms(animation: Int?, frame: Double) -> [CGAffineTransform] {
-        worldTransforms(animation: animation, frame: frame)
-    }
-
-    /// Each bone's place and turn in the picture at a frame, as an affine transform of where it
-    /// holds things from its joint.
-    func worldTransforms(animation: Int?, frame: Double) -> [CGAffineTransform] {
-        var result = [CGAffineTransform?](repeating: nil, count: bones.count)
-        func world(_ index: Int, _ depth: Int) -> CGAffineTransform {
-            if let done = result[index] { return done }
-            let bone = bones[index]
-            var key = animation.flatMap { animations.indices.contains($0) ? pose(of: index, in: animations[$0], at: frame) : nil } ?? Key(frame: 0)
-            key.angle += bone.restAngle
-            let place = restPlace(of: index)
-            let local = key.turn.concatenating(CGAffineTransform(translationX: place.x + key.dx, y: place.y + key.dy))
-            let made = bone.parent.flatMap { $0 != index && depth < 64 ? world($0, depth + 1) : nil }.map { local.concatenating($0) } ?? local
-            result[index] = made
-            return made
-        }
-        return bones.indices.map { world($0, 0) }
-    }
-
     /// Each bone from its parent at a frame, for the player: place (2), turn, scale (2), and
     /// the turns about the picture's x and y axes. `draft` stands in for what the animation says.
     public func localPoses(animation: Int?, frame: Double, draft: [Int: Key] = [:]) -> [[Double]] {
@@ -471,20 +425,6 @@ public struct WallpaperEnginePuppetRig: Codable, Equatable, Sendable {
             let place = restPlace(of: bone.index)
             return [place.x + key.dx, place.y + key.dy, bone.restAngle + key.angle, 1, 1, key.tiltX, key.tiltY]
         }
-    }
-
-    /// The same as `posedTransforms`, with bones in `draft` where they stand for now.
-    public func posedTransforms(animation: Int?, frame: Double, draft: [Int: Key]) -> [CGAffineTransform] {
-        guard !draft.isEmpty, let animation, animations.indices.contains(animation) else {
-            return worldTransforms(animation: animation, frame: frame)
-        }
-        var copy = self
-        for (bone, key) in draft {
-            var held = key
-            held.frame = Int(frame.rounded())
-            copy.animations[animation].keys[bone] = [held]
-        }
-        return copy.worldTransforms(animation: animation, frame: frame)
     }
 
     /// The rig as the player is handed a puppet, drawn with `material`.
@@ -738,9 +678,8 @@ extension WallpaperEnginePuppetRig {
             return
         }
         let zero = [Double](repeating: 0, count: 5)
-        animations[animation].keys[bone] = frames.map { frame in
-            let n = edited.numbers(atFrame: frame, base: zero)
-            return Key(frame: Int(frame.rounded()), angle: n[0] * .pi / 180, dx: n[3], dy: n[4], tiltX: n[1] * .pi / 180, tiltY: n[2] * .pi / 180)
+        animations[animation].keys[bone] = zip(frames, edited.numbers(atFrames: frames, base: zero)).map { frame, n in
+            Key(frame: Int(frame.rounded()), angle: n[0] * .pi / 180, dx: n[3], dy: n[4], tiltX: n[1] * .pi / 180, tiltY: n[2] * .pi / 180)
         }
     }
 }

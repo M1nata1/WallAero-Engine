@@ -600,7 +600,7 @@ final class EngineEditorPreviewController {
     }
     private var rewind: DispatchWorkItem?
 
-    /// How the player has a picture's bones stand, for tests.
+    /// How the player has a picture's bones stand: at rest, or as it shows them now.
     func boneMoves(of id: Int, atRest: Bool) -> [CGAffineTransform] {
         (sceneView?.scenePlayer?.ask(.bones(id, atRest: atRest)) ?? []).filter { $0.count >= 6 }.map {
             CGAffineTransform(a: $0[0], b: $0[1], c: $0[2], d: $0[3], tx: $0[4], ty: $0[5])
