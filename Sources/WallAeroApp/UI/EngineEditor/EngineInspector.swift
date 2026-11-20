@@ -115,6 +115,11 @@ private struct EngineObjectTabs: View {
 // MARK: - An object
 
 private struct EngineObjectProperties: View {
+    /// What the player takes a value of an object to be when the scene does not say it.
+    static func unsaidFlag(_ key: String) -> Bool { WallpaperEngineDefaults.object(key)?.boolValue ?? false }
+    static func unsaidNumber(_ key: String) -> Double { WallpaperEngineDefaults.object(key)?.numberValue ?? 0 }
+    static func unsaidText(_ key: String) -> String { WallpaperEngineDefaults.object(key)?.stringValue ?? "" }
+
     @ObservedObject var model: EngineEditorModel
     let id: Int
     let tab: EngineEditorModel.ObjectTab
@@ -134,7 +139,7 @@ private struct EngineObjectProperties: View {
         Section {
             TextField("Name", text: model.text(id, "name"))
             LabeledContent("Kind") { Text(EngineEditorModel.kindTitle(kind)) }
-            Toggle("Visible", isOn: model.flag(id, "visible", default: true))
+            Toggle("Visible", isOn: model.flag(id, "visible", default: Self.unsaidFlag("visible")))
                 .disabled(model.isScripted(id, "visible"))
             if ![.sound, .light, .camera].contains(kind) {
                 Toggle("Show on Lock Screen", isOn: model.showsOnLockScreen(id))
@@ -142,30 +147,32 @@ private struct EngineObjectProperties: View {
         }
         if kind != .sound {
             Section("Position") {
-                let size = model.document.size
+                let size = model.sceneSize
                 // What hangs on another, and a camera, are placed from a middle.
                 let hangs = model.document.parent(of: id) != nil || kind == .camera
-                NumberRow("X", value: model.part(id, "origin", 0, default: [0, 0, 0]),
+                // Where an object without a place of its own stands, as the player places it.
+                let placed: [Double] = model.description?.object(id).map { [$0.x, $0.y, 0] } ?? [0, 0, 0]
+                NumberRow("X", value: model.part(id, "origin", 0, default: placed),
                           in: hangs ? -size.width...size.width : -size.width / 2...size.width * 1.5)
                     .disabled(model.isScripted(id, "origin"))
-                NumberRow("Y", value: model.part(id, "origin", 1, default: [0, 0, 0]),
+                NumberRow("Y", value: model.part(id, "origin", 1, default: placed),
                           in: hangs ? -size.height...size.height : -size.height / 2...size.height * 1.5)
                     .disabled(model.isScripted(id, "origin"))
                 NumberRow("Scale", value: model.uniformScale(id), in: 1...400, suffix: "%")
                     .disabled(model.isScripted(id, "scale"))
                 NumberRow("Rotation", value: model.rotation(id), in: -180...180, suffix: "°")
                     .disabled(model.isScripted(id, "angles"))
-                NumberRow("Parallax Depth", value: model.part(id, "parallaxDepth", 0, default: [1, 1]), in: 0...4, step: 0.01)
+                NumberRow("Parallax Depth", value: model.part(id, "parallaxDepth", 0, default: WallpaperEngineDefaults.numbers("parallaxDepth", count: 2)), in: 0...4, step: 0.01)
             }
         }
         if [.image, .text, .solid, .composition, .fullscreen].contains(kind) {
             Section("Appearance") {
-                NumberRow("Opacity", value: model.part(id, "alpha", 0, default: [1], scale: 100), in: 0...100, suffix: "%")
+                NumberRow("Opacity", value: model.part(id, "alpha", 0, default: WallpaperEngineDefaults.numbers("alpha", count: 1), scale: 100), in: 0...100, suffix: "%")
                     .disabled(model.isScripted(id, "alpha"))
                 ColorRow("Color", hex: model.color(id, "color"))
                     .disabled(model.isScripted(id, "color"))
                 if kind != .text {
-                    Picker("Blend Mode", selection: model.number(id, "colorBlendMode", default: 0)) {
+                    Picker("Blend Mode", selection: model.number(id, "colorBlendMode", default: Self.unsaidNumber("colorBlendMode"))) {
                         ForEach(Self.blendModes, id: \.value) { mode in
                             Text(mode.title).tag(mode.value)
                         }
@@ -203,7 +210,7 @@ private struct EngineObjectProperties: View {
             }
         case .solid:
             Section("Size") {
-                let scene = model.document.size
+                let scene = model.sceneSize
                 NumberRow("Width", value: model.part(id, "size", 0, default: [100, 100]), in: 1...max(scene.width * 2, 100))
                 NumberRow("Height", value: model.part(id, "size", 1, default: [100, 100]), in: 1...max(scene.height * 2, 100))
             }
@@ -225,36 +232,36 @@ private struct EngineObjectProperties: View {
                     }
                 }
                 Button("Add Font…") { model.importFont(for: id) }
-                NumberRow("Size", value: model.number(id, "pointsize", default: 32), in: 4...400)
+                NumberRow("Size", value: model.number(id, "pointsize", default: Self.unsaidNumber("pointsize")), in: 4...400)
                     .disabled(model.isScripted(id, "pointsize"))
-                Picker("Alignment", selection: model.text(id, "horizontalalign", default: "center")) {
+                Picker("Alignment", selection: model.text(id, "horizontalalign", default: Self.unsaidText("horizontalalign"))) {
                     Text("Left").tag("left")
                     Text("Center").tag("center")
                     Text("Right").tag("right")
                 }
-                Picker("Vertical Alignment", selection: model.text(id, "verticalalign", default: "center")) {
+                Picker("Vertical Alignment", selection: model.text(id, "verticalalign", default: Self.unsaidText("verticalalign"))) {
                     Text("Top").tag("top")
                     Text("Center").tag("center")
                     Text("Bottom").tag("bottom")
                 }
-                NumberRow("Padding", value: model.part(id, "padding", 0, default: [32, 32]), in: 0...200)
-                NumberRow("Letter Spacing", value: model.part(id, "spacing", 0, default: [0, 0]), in: -50...100, step: 0.1)
-                NumberRow("Line Spacing", value: model.part(id, "spacing", 1, default: [0, 0]), in: -100...200, step: 0.1)
-                Toggle("Background", isOn: model.flag(id, "opaquebackground", default: false))
+                NumberRow("Padding", value: model.part(id, "padding", 0, default: WallpaperEngineDefaults.numbers("padding", count: 2)), in: 0...200)
+                NumberRow("Letter Spacing", value: model.part(id, "spacing", 0, default: WallpaperEngineDefaults.numbers("spacing", count: 2)), in: -50...100, step: 0.1)
+                NumberRow("Line Spacing", value: model.part(id, "spacing", 1, default: WallpaperEngineDefaults.numbers("spacing", count: 2)), in: -100...200, step: 0.1)
+                Toggle("Background", isOn: model.flag(id, "opaquebackground", default: Self.unsaidFlag("opaquebackground")))
                 if model.value(id, "opaquebackground")?.boolValue == true {
-                    ColorRow("Background Color", hex: model.color(id, "backgroundcolor", default: [0, 0, 0]))
+                    ColorRow("Background Color", hex: model.color(id, "backgroundcolor", default: WallpaperEngineDefaults.numbers("backgroundcolor", count: 3)))
                 }
             }
             Section("Text Box") {
-                Toggle("Limit Width", isOn: model.flag(id, "limitwidth", default: false))
+                Toggle("Limit Width", isOn: model.flag(id, "limitwidth", default: Self.unsaidFlag("limitwidth")))
                 if model.value(id, "limitwidth")?.boolValue == true {
-                    NumberRow("Width", value: model.number(id, "maxwidth", default: 500), in: 10...4000)
+                    NumberRow("Width", value: model.number(id, "maxwidth", default: Self.unsaidNumber("maxwidth")), in: 10...4000)
                 }
-                Toggle("Limit Lines", isOn: model.flag(id, "limitrows", default: false))
+                Toggle("Limit Lines", isOn: model.flag(id, "limitrows", default: Self.unsaidFlag("limitrows")))
                 if model.value(id, "limitrows")?.boolValue == true {
-                    NumberRow("Lines", value: model.number(id, "maxrows", default: 1), in: 1...50)
+                    NumberRow("Lines", value: model.number(id, "maxrows", default: Self.unsaidNumber("maxrows")), in: 1...50)
                 }
-                Toggle("Ellipsis Where Cut", isOn: model.flag(id, "limituseellipsis", default: false))
+                Toggle("Ellipsis Where Cut", isOn: model.flag(id, "limituseellipsis", default: Self.unsaidFlag("limituseellipsis")))
                 Picker("Keep to Screen Edge", selection: model.text(id, "anchor", default: "none")) {
                     Text("No").tag("none")
                     Text("Center").tag("center")
@@ -269,22 +276,22 @@ private struct EngineObjectProperties: View {
                 }
             }
             Section("Outline and Shadow") {
-                Toggle("Outline", isOn: model.flag(id, "outline", default: false))
+                Toggle("Outline", isOn: model.flag(id, "outline", default: Self.unsaidFlag("outline")))
                 if model.value(id, "outline")?.boolValue == true {
-                    ColorRow("Outline Color", hex: model.color(id, "outlinecolor", default: [0, 0, 0]))
-                    NumberRow("Outline Thickness", value: model.number(id, "outlinethickness", default: 1), in: 0...30, step: 0.1)
+                    ColorRow("Outline Color", hex: model.color(id, "outlinecolor", default: WallpaperEngineDefaults.numbers("outlinecolor", count: 3)))
+                    NumberRow("Outline Thickness", value: model.number(id, "outlinethickness", default: Self.unsaidNumber("outlinethickness")), in: 0...30, step: 0.1)
                 }
-                Toggle("Shadow", isOn: model.flag(id, "dropshadow", default: false))
+                Toggle("Shadow", isOn: model.flag(id, "dropshadow", default: Self.unsaidFlag("dropshadow")))
                 if model.value(id, "dropshadow")?.boolValue == true {
-                    ColorRow("Shadow Color", hex: model.color(id, "dropshadowcolor", default: [0, 0, 0]))
-                    NumberRow("Shadow X", value: model.part(id, "dropshadowoffset", 0, default: [4, 4]), in: -100...100)
-                    NumberRow("Shadow Y", value: model.part(id, "dropshadowoffset", 1, default: [4, 4]), in: -100...100)
-                    NumberRow("Shadow Softness", value: model.number(id, "dropshadowsize", default: 4), in: 0...50, step: 0.1)
-                    NumberRow("Shadow Opacity", value: model.number(id, "dropshadowopacity", default: 1), in: 0...3, step: 0.01)
+                    ColorRow("Shadow Color", hex: model.color(id, "dropshadowcolor", default: WallpaperEngineDefaults.numbers("dropshadowcolor", count: 3)))
+                    NumberRow("Shadow X", value: model.part(id, "dropshadowoffset", 0, default: WallpaperEngineDefaults.numbers("dropshadowoffset", count: 2)), in: -100...100)
+                    NumberRow("Shadow Y", value: model.part(id, "dropshadowoffset", 1, default: WallpaperEngineDefaults.numbers("dropshadowoffset", count: 2)), in: -100...100)
+                    NumberRow("Shadow Softness", value: model.number(id, "dropshadowsize", default: Self.unsaidNumber("dropshadowsize")), in: 0...50, step: 0.1)
+                    NumberRow("Shadow Opacity", value: model.number(id, "dropshadowopacity", default: Self.unsaidNumber("dropshadowopacity")), in: 0...3, step: 0.01)
                 }
-                Toggle("Blur", isOn: model.flag(id, "blur", default: false))
+                Toggle("Blur", isOn: model.flag(id, "blur", default: Self.unsaidFlag("blur")))
                 if model.value(id, "blur")?.boolValue == true {
-                    NumberRow("Blur Amount", value: model.number(id, "blursize", default: 2), in: 0...50, step: 0.1)
+                    NumberRow("Blur Amount", value: model.number(id, "blursize", default: Self.unsaidNumber("blursize")), in: 0...50, step: 0.1)
                 }
             }
         case .particles:
@@ -304,8 +311,8 @@ private struct EngineObjectProperties: View {
             EngineParticleSystemSections(model: model, object: id)
         case .sound:
             Section("Sound") {
-                NumberRow("Volume", value: model.part(id, "volume", 0, default: [1], scale: 100), in: 0...100, suffix: "%")
-                Picker("Playback", selection: model.text(id, "playbackmode", default: "loop")) {
+                NumberRow("Volume", value: model.part(id, "volume", 0, default: WallpaperEngineDefaults.numbers("volume", count: 1), scale: 100), in: 0...100, suffix: "%")
+                Picker("Playback", selection: model.text(id, "playbackmode", default: Self.unsaidText("playbackmode"))) {
                     Text("Repeat").tag("loop")
                     Text("Random Order").tag("random")
                     Text("Once").tag("single")
@@ -333,9 +340,9 @@ private struct EngineObjectProperties: View {
                 }
                 ColorRow("Color", hex: model.color(id, "color"))
                     .disabled(model.isScripted(id, "color"))
-                NumberRow("Brightness", value: model.number(id, "intensity", default: 1), in: 0...20, step: 0.01)
-                NumberRow("Reach", value: model.number(id, "radius", default: 500), in: 0...max(model.document.size.width * 2, 1000))
-                NumberRow("Falloff", value: model.number(id, "exponent", default: 1), in: 0.01...10, step: 0.01)
+                NumberRow("Brightness", value: model.number(id, "intensity", default: Self.unsaidNumber("intensity")), in: 0...20, step: 0.01)
+                NumberRow("Reach", value: model.number(id, "radius", default: Self.unsaidNumber("radius")), in: 0...max(model.sceneSize.width * 2, 1000))
+                NumberRow("Falloff", value: model.number(id, "exponent", default: Self.unsaidNumber("exponent")), in: 0.01...10, step: 0.01)
                 NumberRow("Height", value: model.part(id, "origin", 2, default: [0, 0, 200]), in: -500...2000)
             }
         case .camera:
@@ -376,10 +383,10 @@ private struct EngineObjectProperties: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                NumberRow("Metalness", value: model.materialValue(id, "metallic", default: 0.5), in: 0...1, step: 0.01)
-                NumberRow("Surface Roughness", value: model.materialValue(id, "roughness", default: 0.5), in: 0...1, step: 0.01)
+                NumberRow("Metalness", value: model.materialValue(id, "metallic", default: WallpaperEngineDefaults.table["lit"]?["metallic"]?.numberValue ?? 0), in: 0...1, step: 0.01)
+                NumberRow("Surface Roughness", value: model.materialValue(id, "roughness", default: WallpaperEngineDefaults.table["lit"]?["roughness"]?.numberValue ?? 0), in: 0...1, step: 0.01)
                 if reflection.wrappedValue {
-                    NumberRow("Reflectivity", value: model.materialValue(id, "reflectivity", default: 1), in: 0...1, step: 0.01)
+                    NumberRow("Reflectivity", value: model.materialValue(id, "reflectivity", default: WallpaperEngineDefaults.table["lit"]?["reflectivity"]?.numberValue ?? 0), in: 0...1, step: 0.01)
                 }
             }
         } header: {
@@ -658,35 +665,35 @@ private struct EngineSceneProperties: View {
         Section("Scene") {
             TextField("Title", text: Binding(get: { model.document.title }, set: { model.document.title = $0 }))
             LabeledContent("Size") {
-                Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
+                Text(verbatim: "\(Int(model.sceneSize.width)) × \(Int(model.sceneSize.height))")
                     .foregroundStyle(.secondary)
             }
-            ColorRow("Background Color", hex: model.generalColor("clearcolor", default: [0, 0, 0]))
+            ColorRow("Background Color", hex: model.generalColor("clearcolor", default: WallpaperEngineDefaults.numbers(general: "clearcolor", count: 3)))
         }
     }
 
     @ViewBuilder
     private var viewTab: some View {
         Section("Camera") {
-            Toggle("Parallax", isOn: model.generalFlag("cameraparallax", default: false))
+            Toggle("Parallax", isOn: model.generalFlag("cameraparallax", default: WallpaperEngineDefaults.general("cameraparallax")?.boolValue ?? false))
             if model.document[general: "cameraparallax"]?.plain.boolValue == true {
-                NumberRow("Amount", value: model.general("cameraparallaxamount", default: 0.5), in: 0...2, step: 0.01)
-                NumberRow("Delay", value: model.general("cameraparallaxdelay", default: 0.1), in: 0...1, step: 0.01)
-                NumberRow("Pointer Influence", value: model.general("cameraparallaxmouseinfluence", default: 0), in: 0...1, step: 0.01)
+                NumberRow("Amount", value: model.general("cameraparallaxamount", default: WallpaperEngineDefaults.general("cameraparallaxamount")?.numberValue ?? 0), in: 0...2, step: 0.01)
+                NumberRow("Delay", value: model.general("cameraparallaxdelay", default: WallpaperEngineDefaults.general("cameraparallaxdelay")?.numberValue ?? 0), in: 0...1, step: 0.01)
+                NumberRow("Pointer Influence", value: model.general("cameraparallaxmouseinfluence", default: WallpaperEngineDefaults.general("cameraparallaxmouseinfluence")?.numberValue ?? 0), in: 0...1, step: 0.01)
             }
-            Toggle("Shake", isOn: model.generalFlag("camerashake", default: false))
+            Toggle("Shake", isOn: model.generalFlag("camerashake", default: WallpaperEngineDefaults.general("camerashake")?.boolValue ?? false))
             if model.document[general: "camerashake"]?.plain.boolValue == true {
-                NumberRow("Amplitude", value: model.general("camerashakeamplitude", default: 0.5), in: 0...5, step: 0.01)
-                NumberRow("Speed", value: model.general("camerashakespeed", default: 3), in: 0...10, step: 0.01)
-                NumberRow("Roughness", value: model.general("camerashakeroughness", default: 1), in: 0...5, step: 0.01)
+                NumberRow("Amplitude", value: model.general("camerashakeamplitude", default: WallpaperEngineDefaults.general("camerashakeamplitude")?.numberValue ?? 0), in: 0...5, step: 0.01)
+                NumberRow("Speed", value: model.general("camerashakespeed", default: WallpaperEngineDefaults.general("camerashakespeed")?.numberValue ?? 0), in: 0...10, step: 0.01)
+                NumberRow("Roughness", value: model.general("camerashakeroughness", default: WallpaperEngineDefaults.general("camerashakeroughness")?.numberValue ?? 0), in: 0...5, step: 0.01)
             }
-            NumberRow("Camera Zoom", value: model.general("zoom", default: 1), in: 0.5...3, step: 0.01)
+            NumberRow("Camera Zoom", value: model.general("zoom", default: WallpaperEngineDefaults.general("zoom")?.numberValue ?? 0), in: 0.5...3, step: 0.01)
         }
         Section("Bloom") {
-            Toggle("Bloom", isOn: model.generalFlag("bloom", default: false))
+            Toggle("Bloom", isOn: model.generalFlag("bloom", default: WallpaperEngineDefaults.general("bloom")?.boolValue ?? false))
             if model.document[general: "bloom"]?.plain.boolValue == true {
-                NumberRow("Strength", value: model.general("bloomstrength", default: 2), in: 0...5, step: 0.01)
-                NumberRow("Threshold", value: model.general("bloomthreshold", default: 0.65), in: 0...1, step: 0.01)
+                NumberRow("Strength", value: model.general("bloomstrength", default: WallpaperEngineDefaults.general("bloomstrength")?.numberValue ?? 0), in: 0...5, step: 0.01)
+                NumberRow("Threshold", value: model.general("bloomthreshold", default: WallpaperEngineDefaults.general("bloomthreshold")?.numberValue ?? 0), in: 0...1, step: 0.01)
             }
         }
     }
@@ -694,16 +701,16 @@ private struct EngineSceneProperties: View {
     @ViewBuilder
     private var environmentTab: some View {
         Section("Physics") {
-            NumberRow("Gravity", value: model.general("gravitystrength", default: 1), in: 0...5, step: 0.01)
-            Toggle("Wind", isOn: model.generalFlag("windenabled", default: false))
+            NumberRow("Gravity", value: model.general("gravitystrength", default: WallpaperEngineDefaults.general("gravitystrength")?.numberValue ?? 0), in: 0...5, step: 0.01)
+            Toggle("Wind", isOn: model.generalFlag("windenabled", default: WallpaperEngineDefaults.general("windenabled")?.boolValue ?? false))
             if model.document[general: "windenabled"]?.plain.boolValue == true {
-                NumberRow("Wind Strength", value: model.general("windstrength", default: 1), in: 0...5, step: 0.01)
+                NumberRow("Wind Strength", value: model.general("windstrength", default: WallpaperEngineDefaults.general("windstrength")?.numberValue ?? 0), in: 0...5, step: 0.01)
                 NumberRow("Wind Direction", value: model.windDirection(), in: -180...180, suffix: "°")
             }
         }
         Section("Scene Light") {
-            ColorRow("Ambient Light", hex: model.generalColor("ambientcolor", default: [0.3, 0.3, 0.3]))
-            ColorRow("Sky Light", hex: model.generalColor("skylightcolor", default: [0.3, 0.3, 0.3]))
+            ColorRow("Ambient Light", hex: model.generalColor("ambientcolor", default: WallpaperEngineDefaults.numbers(general: "ambientcolor", count: 3)))
+            ColorRow("Sky Light", hex: model.generalColor("skylightcolor", default: WallpaperEngineDefaults.numbers(general: "skylightcolor", count: 3)))
         }
     }
 }

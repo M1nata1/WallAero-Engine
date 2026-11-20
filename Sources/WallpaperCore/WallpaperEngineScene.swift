@@ -304,7 +304,8 @@ public enum WallpaperEngineScene {
 
     /// The name a file of the scene is known by: Wallpaper Engine is a Windows program, where
     /// names differ neither by case nor by the slash — nor, here, by whether a letter's marks
-    /// are written with it or apart, as the Mac writes the names of files.
+    /// are written with it or apart, as the Mac writes the names of files. The player looks names
+    /// up the same way (`key` in values.js); Tests/Fixtures/we-format/names.json holds both to it.
     static func key(_ name: String) -> String {
         name.replacingOccurrences(of: "\\", with: "/").lowercased().precomposedStringWithCanonicalMapping
     }
@@ -321,9 +322,7 @@ public enum WallpaperEngineScene {
         var scripts: [String] = []
         func look(_ value: Any) {
             if let dictionary = value as? [String: Any] {
-                if let name = dictionary["user"] as? String {
-                    used.insert(name)
-                } else if let name = (dictionary["user"] as? [String: Any])?["name"] as? String {
+                if let user = dictionary["user"], let name = JSONValue.object(["user": JSONValue(any: user)]).setting?.name {
                     used.insert(name)
                 }
                 if let script = dictionary["script"] as? String {

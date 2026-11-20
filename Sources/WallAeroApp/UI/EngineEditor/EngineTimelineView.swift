@@ -483,8 +483,8 @@ struct EngineTimelineCurves: View {
 
     static func fitted(_ animation: WallpaperEngineAnimation) -> ClosedRange<Double> {
         let zero = Array(repeating: 0.0, count: animation.channelCount)
-        let samples = stride(from: 0.0, through: max(animation.length, 1), by: max(animation.length, 1) / 120)
-            .flatMap { animation.numbers(atFrame: $0, base: zero) }
+        let frames = Array(stride(from: 0.0, through: max(animation.length, 1), by: max(animation.length, 1) / 120))
+        let samples = animation.numbers(atFrames: frames, base: zero).flatMap { $0 }
         let low = samples.min() ?? 0, high = samples.max() ?? 1
         let room = max((high - low) * 0.12, max(abs(high), 1) * 0.02)
         return (low - room)...(high + room)
@@ -533,13 +533,15 @@ struct EngineTimelineCurves: View {
         let range = range(animation)
         let zero = Array(repeating: 0.0, count: animation.channelCount)
         guard let target = model.timelineTarget else { return }
+        // The curves' points, worked out once for all the numbers, every two points across.
+        let first = max(scale.x(0), 0), end = min(scale.x(animation.duration), size.width)
+        let xs = Array(stride(from: first, through: max(end, first + 1), by: 2))
+        let samples = animation.numbers(atFrames: xs.map { scale.time($0) * animation.rate }, base: zero)
         for channel in 0..<animation.channelCount {
             let color = Self.colors[channel % Self.colors.count]
             var curve = Path()
-            let first = max(scale.x(0), 0), end = min(scale.x(animation.duration), size.width)
-            for x in stride(from: first, through: max(end, first + 1), by: 2) {
-                let frame = scale.time(x) * animation.rate
-                let point = CGPoint(x: x, y: y(animation.numbers(atFrame: frame, base: zero)[channel], range, height: size.height))
+            for (x, numbers) in zip(xs, samples) {
+                let point = CGPoint(x: x, y: y(numbers[channel], range, height: size.height))
                 if curve.isEmpty { curve.move(to: point) } else { curve.addLine(to: point) }
             }
             context.stroke(curve, with: .color(color), lineWidth: 1.5)

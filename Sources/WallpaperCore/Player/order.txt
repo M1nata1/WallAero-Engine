@@ -3,6 +3,7 @@
 # function run at once (start.js opens it, api.js closes it), so a file alone is not a script.
 start.js
 values.js
+defaults.js
 shader-headers.js
 glsl.js
 curves.js

@@ -128,22 +128,39 @@ public enum JSONValue: Equatable, Hashable, Sendable {
     // MARK: - Values a scene may tie to something
 
     /// A value of a scene may stand behind a setting of the wallpaper, a script or an
-    /// animation; it is then a dictionary with the value itself under "value". This is that
-    /// value, or the value itself.
+    /// animation; it is then a dictionary with the value itself under "value" — one that names a
+    /// setting under "user" is such a dictionary even without it, as the player reads it
+    /// (`plain` in values.js; Tests/Fixtures/we-format/values.json holds both to one rule).
+    /// This is the value as written, or the value itself.
     public var plain: JSONValue {
-        if case .object(let dictionary) = self, let value = dictionary["value"] {
-            return value
+        if case .object(let dictionary) = self, dictionary["value"] != nil || dictionary["user"] != nil {
+            return dictionary["value"] ?? .null
         }
         return self
     }
 
     /// The value with its plain value replaced, whatever it stands behind kept.
     public func replacingPlain(with value: JSONValue) -> JSONValue {
-        if case .object(var dictionary) = self, dictionary["value"] != nil {
+        if case .object(var dictionary) = self, dictionary["value"] != nil || dictionary["user"] != nil {
             dictionary["value"] = value
             return .object(dictionary)
         }
         return value
+    }
+
+    /// The setting of the wallpaper a value stands on: its name, and the choice it must be at
+    /// for a yes, if it says one (`{"user": {"name": …, "condition": "2"}}`).
+    public var setting: (name: String, choice: String?)? {
+        guard case .object(let dictionary) = self, let user = dictionary["user"] else { return nil }
+        if case .string(let name) = user { return (name, nil) }
+        guard case .string(let name)? = user["name"] else { return nil }
+        switch user["condition"] {
+        case .string(let choice)?: return (name, choice)
+        // As the player compares it: a whole number written without a fraction.
+        case .number(let number)?: return (name, number == number.rounded() && abs(number) < 1e15 ? String(Int64(number)) : String(number))
+        case .bool(let flag)?: return (name, flag ? "true" : "false")
+        default: return (name, nil)
+        }
     }
 
     /// Numbers Wallpaper Engine writes in one text, "1.00000 0.50000 0.00000": a place, a

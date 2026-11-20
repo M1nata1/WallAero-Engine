@@ -96,7 +96,7 @@
       var up = path.up ? path.up(into, [0, 1, 0]) : [0, 1, 0];
       if (!(up[0] || up[1] || up[2])) up = [0, 1, 0];
       var dark = 0;
-      if (shot.paths.length > 1 && flag(ctx.general.camerafade, true)) {
+      if (shot.paths.length > 1 && flag(ctx.general.camerafade, defaults.general.camerafade)) {
         if (path.ends && path.seconds > 0) dark = Math.max(dark, 1 - (path.seconds - into) / ctx.PATH_FADE);
         if (play.changed) dark = Math.max(dark, 1 - into / ctx.PATH_FADE);
       }
@@ -119,7 +119,7 @@
       if (ctx.viewOnce.frame === ctx.frames) return ctx.viewOnce;
       // While the scene is being made, before scripts can move the camera, there is no frame yet.
       var moved = ctx.camera || { x: 0, y: 0, zoom: 1 };
-      var x = moved.x, y = moved.y, zoom = moved.zoom * Math.max(0.01, number(ctx.general.zoom, 1)), fov = 0;
+      var x = moved.x, y = moved.y, zoom = moved.zoom * Math.max(0.01, number(ctx.general.zoom, defaults.general.zoom)), fov = 0;
       for (var index = ctx.things.length - 1; index >= 0; index--) {
         var shot = ctx.things[index];
         if (!shot.isCamera || !showsAll(shot)) continue;

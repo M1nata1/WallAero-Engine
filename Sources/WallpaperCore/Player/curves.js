@@ -111,12 +111,17 @@
           frame = frame % length;
         }
       }
+      return atFrame(frame, base);
+    }
+    // The numbers at a frame of one play through, as the editor's timeline draws them.
+    function atFrame(frame, base) {
       var result = base.slice();
       channels.forEach(function (keys, index) {
         if (index < result.length) result[index] = (relative ? base[index] : 0) + at(keys, frame);
       });
       return result;
     }
+    valueAt.atFrame = atFrame;
     // How it plays: the name scripts know it by, whether it waits for one of them to start
     // it, and the value of the same object whose animation it plays along with.
     valueAt.called = typeof options.name === 'string' ? options.name : '';

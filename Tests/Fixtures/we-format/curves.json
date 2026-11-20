@@ -1,0 +1,714 @@
+{
+ "about": "Wallpaper Engine timeline curves (docs/we-format.md, row 16): an animation as a scene writes it, the numbers at a moment in seconds since the start or at a frame of one play through, with base the value the scene gives. The player's curves.js works them out; the app asks it.",
+ "animations": {
+  "linearLoop": {
+   "c0": [
+    {
+     "frame": 0,
+     "value": 0,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    },
+    {
+     "frame": 30,
+     "value": 10,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    }
+   ],
+   "options": {
+    "fps": 30,
+    "length": 30,
+    "mode": "loop"
+   }
+  },
+  "single": {
+   "c0": [
+    {
+     "frame": 0,
+     "value": 0,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    },
+    {
+     "frame": 30,
+     "value": 10,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    }
+   ],
+   "options": {
+    "fps": 30,
+    "length": 30,
+    "mode": "single"
+   }
+  },
+  "mirror": {
+   "c0": [
+    {
+     "frame": 0,
+     "value": 0,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    },
+    {
+     "frame": 15,
+     "value": 30,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    }
+   ],
+   "options": {
+    "fps": 15,
+    "length": 45,
+    "mode": "mirror"
+   }
+  },
+  "relative": {
+   "c0": [
+    {
+     "frame": 0,
+     "value": 0,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    },
+    {
+     "frame": 30,
+     "value": 5,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    }
+   ],
+   "relative": true,
+   "options": {
+    "fps": 30,
+    "length": 30,
+    "mode": "single"
+   }
+  },
+  "handles": {
+   "c0": [
+    {
+     "frame": 0,
+     "value": 0,
+     "front": {
+      "enabled": true,
+      "x": 1,
+      "y": 0
+     },
+     "back": {
+      "enabled": false
+     }
+    },
+    {
+     "frame": 30,
+     "value": 100,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": true,
+      "x": -1,
+      "y": 0
+     }
+    }
+   ],
+   "options": {
+    "fps": 30,
+    "length": 30,
+    "mode": "single"
+   }
+  },
+  "wraploop": {
+   "c0": [
+    {
+     "frame": 0,
+     "value": 0,
+     "front": {
+      "enabled": true,
+      "x": 1,
+      "y": 2
+     },
+     "back": {
+      "enabled": true,
+      "x": -1,
+      "y": -2
+     }
+    },
+    {
+     "frame": 10,
+     "value": 10,
+     "front": {
+      "enabled": true,
+      "x": 1,
+      "y": 0
+     },
+     "back": {
+      "enabled": true,
+      "x": -1,
+      "y": 0
+     }
+    },
+    {
+     "frame": 20,
+     "value": -5,
+     "front": {
+      "enabled": true,
+      "x": 0.5,
+      "y": 3
+     },
+     "back": {
+      "enabled": true,
+      "x": -1.5,
+      "y": -3
+     }
+    }
+   ],
+   "options": {
+    "fps": 30,
+    "length": 40,
+    "mode": "loop",
+    "wraploop": true
+   }
+  },
+  "noLength": {
+   "c0": [
+    {
+     "frame": 5,
+     "value": 1,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    },
+    {
+     "frame": 25,
+     "value": 9,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    }
+   ],
+   "c1": [
+    {
+     "frame": 0,
+     "value": 3,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    }
+   ],
+   "options": {
+    "fps": 10
+   }
+  },
+  "unsorted": {
+   "c0": [
+    {
+     "frame": 20,
+     "value": 4,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    },
+    {
+     "frame": 0,
+     "value": 0,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    },
+    {
+     "frame": 10,
+     "value": 8,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    }
+   ],
+   "options": {
+    "fps": 30,
+    "length": 20,
+    "mode": "single"
+   }
+  },
+  "badKeys": {
+   "c0": [
+    {
+     "frame": 0,
+     "value": 2,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    },
+    {
+     "frame": "x",
+     "value": 1
+    },
+    null,
+    {
+     "frame": 10,
+     "value": 4,
+     "front": {
+      "enabled": false
+     },
+     "back": {
+      "enabled": false
+     }
+    }
+   ],
+   "c7": "no",
+   "options": {
+    "fps": 30,
+    "length": 10,
+    "mode": "single"
+   }
+  }
+ },
+ "cases": [
+  {
+   "animation": "linearLoop",
+   "base": [
+    0
+   ],
+   "seconds": 0,
+   "expected": [
+    0
+   ]
+  },
+  {
+   "animation": "linearLoop",
+   "base": [
+    0
+   ],
+   "seconds": 0.25,
+   "expected": [
+    2.5
+   ]
+  },
+  {
+   "animation": "linearLoop",
+   "base": [
+    0
+   ],
+   "seconds": 0.5,
+   "expected": [
+    5
+   ]
+  },
+  {
+   "animation": "linearLoop",
+   "base": [
+    0
+   ],
+   "seconds": 1,
+   "expected": [
+    0
+   ]
+  },
+  {
+   "animation": "linearLoop",
+   "base": [
+    0
+   ],
+   "seconds": 1.5,
+   "expected": [
+    5
+   ]
+  },
+  {
+   "animation": "linearLoop",
+   "base": [
+    0
+   ],
+   "frame": 15,
+   "expected": [
+    5
+   ]
+  },
+  {
+   "animation": "linearLoop",
+   "base": [
+    0
+   ],
+   "frame": 45,
+   "expected": [
+    10
+   ]
+  },
+  {
+   "animation": "single",
+   "base": [
+    0
+   ],
+   "seconds": 0.5,
+   "expected": [
+    5
+   ]
+  },
+  {
+   "animation": "single",
+   "base": [
+    0
+   ],
+   "seconds": 1,
+   "expected": [
+    10
+   ]
+  },
+  {
+   "animation": "single",
+   "base": [
+    0
+   ],
+   "seconds": 2,
+   "expected": [
+    10
+   ]
+  },
+  {
+   "animation": "single",
+   "base": [
+    0
+   ],
+   "frame": -5,
+   "expected": [
+    0
+   ]
+  },
+  {
+   "animation": "mirror",
+   "base": [
+    0
+   ],
+   "seconds": 0.5,
+   "expected": [
+    15
+   ]
+  },
+  {
+   "animation": "mirror",
+   "base": [
+    0
+   ],
+   "seconds": 1,
+   "expected": [
+    30
+   ]
+  },
+  {
+   "animation": "mirror",
+   "base": [
+    0
+   ],
+   "seconds": 4,
+   "expected": [
+    30
+   ]
+  },
+  {
+   "animation": "mirror",
+   "base": [
+    0
+   ],
+   "seconds": 5,
+   "expected": [
+    30
+   ]
+  },
+  {
+   "animation": "mirror",
+   "base": [
+    0
+   ],
+   "seconds": 7,
+   "expected": [
+    30
+   ]
+  },
+  {
+   "animation": "relative",
+   "base": [
+    5,
+    7
+   ],
+   "seconds": 0,
+   "expected": [
+    5,
+    7
+   ]
+  },
+  {
+   "animation": "relative",
+   "base": [
+    5,
+    7
+   ],
+   "seconds": 0.5,
+   "expected": [
+    7.5,
+    7
+   ]
+  },
+  {
+   "animation": "relative",
+   "base": [
+    5,
+    7
+   ],
+   "seconds": 3,
+   "expected": [
+    10,
+    7
+   ]
+  },
+  {
+   "animation": "handles",
+   "base": [
+    0
+   ],
+   "frame": 7.5,
+   "expected": [
+    10.589253213
+   ]
+  },
+  {
+   "animation": "handles",
+   "base": [
+    0
+   ],
+   "frame": 15,
+   "expected": [
+    49.99999553
+   ]
+  },
+  {
+   "animation": "handles",
+   "base": [
+    0
+   ],
+   "frame": 22.5,
+   "expected": [
+    89.410746787
+   ]
+  },
+  {
+   "animation": "handles",
+   "base": [
+    0
+   ],
+   "frame": 30,
+   "expected": [
+    100
+   ]
+  },
+  {
+   "animation": "wraploop",
+   "base": [
+    0
+   ],
+   "frame": -5,
+   "expected": [
+    -0.924555966
+   ]
+  },
+  {
+   "animation": "wraploop",
+   "base": [
+    0
+   ],
+   "frame": 3,
+   "expected": [
+    2.44769349
+   ]
+  },
+  {
+   "animation": "wraploop",
+   "base": [
+    0
+   ],
+   "frame": 15,
+   "expected": [
+    -1.972444701
+   ]
+  },
+  {
+   "animation": "wraploop",
+   "base": [
+    0
+   ],
+   "frame": 25,
+   "expected": [
+    -2.867342692
+   ]
+  },
+  {
+   "animation": "wraploop",
+   "base": [
+    0
+   ],
+   "frame": 35,
+   "expected": [
+    -0.924555966
+   ]
+  },
+  {
+   "animation": "wraploop",
+   "base": [
+    0
+   ],
+   "seconds": 1.2,
+   "expected": [
+    -0.750300134
+   ]
+  },
+  {
+   "animation": "wraploop",
+   "base": [
+    0
+   ],
+   "seconds": 2.5,
+   "expected": [
+    -0.924555966
+   ]
+  },
+  {
+   "animation": "noLength",
+   "base": [
+    0,
+    0,
+    0
+   ],
+   "seconds": 0,
+   "expected": [
+    1,
+    3,
+    0
+   ]
+  },
+  {
+   "animation": "noLength",
+   "base": [
+    0,
+    0,
+    0
+   ],
+   "seconds": 1,
+   "expected": [
+    3,
+    3,
+    0
+   ]
+  },
+  {
+   "animation": "noLength",
+   "base": [
+    0,
+    0,
+    0
+   ],
+   "seconds": 2.4,
+   "expected": [
+    8.6,
+    3,
+    0
+   ]
+  },
+  {
+   "animation": "noLength",
+   "base": [
+    0,
+    0,
+    0
+   ],
+   "seconds": 2.6,
+   "expected": [
+    1,
+    3,
+    0
+   ]
+  },
+  {
+   "animation": "unsorted",
+   "base": [
+    0
+   ],
+   "frame": 5,
+   "expected": [
+    4
+   ]
+  },
+  {
+   "animation": "unsorted",
+   "base": [
+    0
+   ],
+   "frame": 15,
+   "expected": [
+    6
+   ]
+  },
+  {
+   "animation": "badKeys",
+   "base": [
+    0
+   ],
+   "frame": 5,
+   "expected": [
+    3
+   ]
+  }
+ ]
+}

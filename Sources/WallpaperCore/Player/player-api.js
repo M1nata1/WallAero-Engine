@@ -1,6 +1,6 @@
   // What the app asks of a scene playing: made by play() with what it shares (`ctx`), handing back what the rest of it uses.
   function makePlayerApi(ctx) {
-    var files = ctx.files, pictures = ctx.pictures, gl = ctx.gl, json = ctx.json, texture = ctx.texture, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, objects = ctx.objects, changed = ctx.changed, forScripts = ctx.forScripts, tellScripts = ctx.tellScripts, hearOfMedia = ctx.hearOfMedia, nudged = ctx.nudged, buildPuppet = ctx.buildPuppet, cameraLook = ctx.cameraLook, activeCamera = ctx.activeCamera, view = ctx.view, standing = ctx.standing, spot = ctx.spot, merged = ctx.merged, refresh = ctx.refresh, color = ctx.color, isSet = ctx.isSet, hexOf = ctx.hexOf, changeOf = ctx.changeOf, amended = ctx.amended, amendGeneral = ctx.amendGeneral, skeleton = ctx.skeleton, canonical = ctx.canonical, follow = ctx.follow, isMoving = ctx.isMoving, isLively = ctx.isLively, wake = ctx.wake, goOn = ctx.goOn, holdFilms = ctx.holdFilms, sceneAt = ctx.sceneAt, pageAt = ctx.pageAt, lost = ctx.lost, restored = ctx.restored;
+    var files = ctx.files, pictures = ctx.pictures, gl = ctx.gl, json = ctx.json, materialPass = ctx.materialPass, texture = ctx.texture, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, objects = ctx.objects, changed = ctx.changed, forScripts = ctx.forScripts, tellScripts = ctx.tellScripts, hearOfMedia = ctx.hearOfMedia, nudged = ctx.nudged, buildPuppet = ctx.buildPuppet, cameraLook = ctx.cameraLook, activeCamera = ctx.activeCamera, view = ctx.view, standing = ctx.standing, spot = ctx.spot, merged = ctx.merged, refresh = ctx.refresh, color = ctx.color, isSet = ctx.isSet, hexOf = ctx.hexOf, changeOf = ctx.changeOf, amended = ctx.amended, amendGeneral = ctx.amendGeneral, skeleton = ctx.skeleton, canonical = ctx.canonical, follow = ctx.follow, isMoving = ctx.isMoving, isLively = ctx.isLively, wake = ctx.wake, goOn = ctx.goOn, holdFilms = ctx.holdFilms, sceneAt = ctx.sceneAt, pageAt = ctx.pageAt, lost = ctx.lost, restored = ctx.restored;
     ctx.player = {
       // `again` when the same canvas is about to be drawn on anew: what it has is then kept.
       stop: function (again) {
@@ -37,7 +37,7 @@
           any = true;
         });
         if (!any || ctx.stopped) return;
-        ctx.clear = numbers(general.clearcolor, 3, 0);
+        ctx.clear = numbers(general.clearcolor, 3, defaults.general.clearcolor);
         ctx.things.slice().forEach(function (thing) { refresh(thing, true); });
         tellScripts('applyUserProperties', other);
         changed();
@@ -128,7 +128,7 @@
           return { depth: false, x: seen.x, y: seen.y, zoom: seen.zoom, width: ctx.sceneWidth, height: ctx.sceneHeight };
         }
         var look = cameraLook(), shot = activeCamera();
-        var fov = (shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) || number(general.perspectiveoverridefov, number(general.fov, 50));
+        var fov = (shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) || number(general.perspectiveoverridefov, number(general.fov, defaults.general.fov));
         return { depth: true, eye: look.eye, center: look.center, up: look.up, fov: fov, scripted: !!ctx.scriptedLook,
                  camera: shot ? Number(shot.id) : null, hangs: !!(shot && shot.parent !== undefined) };
       },
@@ -296,23 +296,23 @@
       var file = String(plain(object.image) || plain(object.particle) || '');
       var hangs = isSet(object.parent);
       var origin = numbers(object.origin, 3, unplaced(object));
-      var scale = numbers(object.scale, 3, 1);
-      var angles = numbers(object.angles, 3, 0);
+      var scale = numbers(object.scale, 3, defaults.object.scale);
+      var angles = numbers(object.angles, 3, defaults.object.angles);
       var result = {
         id: Number(object.id), kind: kind, parent: hangs && numbered(object.parent) ? Number(object.parent) : null,
         // Unnamed, an object goes by its file: "models/girl.json" is “girl”.
         name: String(plain(object.name) || file.replace(/^.*\//, '').replace(/\.[^.]*$/, '') || ''),
-        isVisible: flag(object.visible, true), x: real(origin[0]), y: real(origin[1]), scaleX: real(scale[0], 1), scaleY: real(scale[1], 1),
-        rotation: real(-angles[2] * 180 / Math.PI), opacity: real(number(object.alpha, 1) * 100, 100), color: hexOf(numbers(object.color, 3, 1)),
+        isVisible: flag(object.visible, defaults.object.visible), x: real(origin[0]), y: real(origin[1]), scaleX: real(scale[0], 1), scaleY: real(scale[1], 1),
+        rotation: real(-angles[2] * 180 / Math.PI), opacity: real(number(object.alpha, defaults.object.alpha) * 100, 100), color: hexOf(numbers(object.color, 3, defaults.object.color)),
         steered: ctx.FOLLOWED.filter(function (name) { return changesByItself(object[name]); }),
         effects: (Array.isArray(object.effects) ? object.effects : []).map(describeEffect)
       };
       if (kind === 'text') {
         var text = plain(object.text);
         result.text = isSet(text) ? String(text) : '';
-        result.fontSize = real(number(object.pointsize, 32), 32);
+        result.fontSize = real(number(object.pointsize, defaults.text.pointsize), 32);
       }
-      if (kind === 'sound') result.volume = real(number(object.volume, 1) * 100, 100);
+      if (kind === 'sound') result.volume = real(number(object.volume, defaults.sound.volume) * 100, 100);
       if (kind === 'particles') {
         var over = object.instanceoverride || {};
         result.particleCount = real(number(over.count, 1) * 100, 100);
@@ -372,7 +372,7 @@
       var seen = {};
       (effect.passes || []).forEach(function (step, index) {
         if (step.command) return;
-        var own = ((json(step.material) || {}).passes || [])[0];
+        var own = materialPass(step.material);
         var vertex = own ? files['shaders/' + key(own.shader) + '.vert'] : null;
         var fragment = own ? files['shaders/' + key(own.shader) + '.frag'] : null;
         if (typeof vertex !== 'string' || typeof fragment !== 'string') return;

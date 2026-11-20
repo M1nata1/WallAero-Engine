@@ -16,7 +16,7 @@
     ctx.camera = { x: 0, y: 0, zoom: 1 };
 
     function tremble() {
-      ctx.shake.on = flag(general.camerashake, false);
+      ctx.shake.on = flag(general.camerashake, defaults.general.camerashake);
       if (!ctx.shake.on) {
         if (ctx.shake.x || ctx.shake.y) {
           ctx.shake.x = ctx.shake.y = 0;
@@ -24,8 +24,8 @@
         }
         return;
       }
-      var reach = number(general.camerashakeamplitude, 0.5) / 100 * ctx.sceneHeight;
-      var at = ctx.time * number(general.camerashakespeed, 3), rough = Math.max(0, number(general.camerashakeroughness, 1));
+      var reach = number(general.camerashakeamplitude, defaults.general.camerashakeamplitude) / 100 * ctx.sceneHeight;
+      var at = ctx.time * number(general.camerashakespeed, defaults.general.camerashakespeed), rough = Math.max(0, number(general.camerashakeroughness, defaults.general.camerashakeroughness));
       function wobble(seed) {
         return (smoothNoise(at, seed * 13.7, 4096, seed) - 0.5) * 2 + rough * 0.5 * (smoothNoise(at * 4, seed * 29.1, 4096, seed + 1) - 0.5) * 2;
       }
@@ -36,14 +36,14 @@
 
     function look(seconds) {
       tremble();
-      ctx.eye.on = flag(general.cameraparallax, false);
+      ctx.eye.on = flag(general.cameraparallax, defaults.general.cameraparallax);
       if (!ctx.eye.on) {
         ctx.eye.settling = false;
         return;
       }
-      ctx.eye.amount = number(general.cameraparallaxamount, 0.5);
-      var reach = number(general.cameraparallaxmouseinfluence, 0.5);
-      var delay = Math.max(0, number(general.cameraparallaxdelay, 0.1));
+      ctx.eye.amount = number(general.cameraparallaxamount, defaults.general.cameraparallaxamount);
+      var reach = number(general.cameraparallaxmouseinfluence, defaults.general.cameraparallaxmouseinfluence);
+      var delay = Math.max(0, number(general.cameraparallaxdelay, defaults.general.cameraparallaxdelay));
       var toX = (Math.max(0, Math.min(1, ctx.pointer[0])) - 0.5) * reach, toY = (Math.max(0, Math.min(1, ctx.pointer[1])) - 0.5) * reach;
       var share = delay > 0 ? 1 - Math.exp(-seconds / delay) : 1;
       var x = ctx.eye.x + (toX - ctx.eye.x) * share, y = ctx.eye.y + (toY - ctx.eye.y) * share;

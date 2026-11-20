@@ -260,8 +260,18 @@ public struct WallpaperEngineAnimation: Equatable, Sendable {
     public func reach(_ side: Side, frame: Double, channel: Int) -> Double {
         let keys = self.keys(channel)
         guard let index = keys.firstIndex(where: { $0.frame == frame }) else { return 1 }
-        guard let other = beside(keys, index, by: side == .back ? -1 : 1), other.frame != frame else { return 1 }
-        return abs(other.frame - frame) / 2
+        // The moment beside it on that side; a loop that wraps goes round to the other end.
+        let by = side == .back ? -1 : 1
+        let other: Double
+        if keys.indices.contains(index + by) {
+            other = keys[index + by].frame
+        } else if wraps {
+            other = by > 0 ? keys[0].frame + length : keys[keys.count - 1].frame - length
+        } else {
+            return 1
+        }
+        guard other != frame else { return 1 }
+        return abs(other - frame) / 2
     }
 
     /// How the moment's handles hang together when one is moved.
@@ -389,92 +399,23 @@ public struct WallpaperEngineAnimation: Equatable, Sendable {
 
     // MARK: - The curve
 
-    /// The numbers a moment after the start, as the player works them out; a number the
-    /// animation does not have is left as `base` has it.
+    /// The numbers a moment after the start, as the player works them out (its own code does,
+    /// `WallpaperEngineCurves`); a number the animation does not have is left as `base` has it.
     public func numbers(atSeconds seconds: Double, base: [Double]) -> [Double] {
-        var frame = seconds * rate
-        let length = self.length
-        if length > 0 {
-            switch options.mode {
-            case .mirror:
-                frame = frame.truncatingRemainder(dividingBy: length * 2)
-                if frame > length { frame = length * 2 - frame }
-            case .single: frame = min(frame, length)
-            case .loop: frame = frame.truncatingRemainder(dividingBy: length)
-            }
-        }
-        return numbers(atFrame: frame, base: base)
+        WallpaperEngineCurves.shared.numbers(raw, seconds: seconds, base: base)
     }
 
+    /// The numbers at a frame of one play through, as the timeline draws them.
     public func numbers(atFrame frame: Double, base: [Double]) -> [Double] {
-        var result = base
-        for channel in 0..<channelCount where channel < result.count {
-            let keys = self.keys(channel)
-            guard !keys.isEmpty else { continue }
-            result[channel] = (isRelative ? base[channel] : 0) + value(keys, at: frame)
-        }
-        return result
+        WallpaperEngineCurves.shared.numbers(raw, frame: frame, base: base)
+    }
+
+    /// The numbers at each of many frames: for drawing the curve.
+    public func numbers(atFrames frames: [Double], base: [Double]) -> [[Double]] {
+        WallpaperEngineCurves.shared.numbers(raw, frames: frames, base: base)
     }
 
     private var wraps: Bool { options.mode == .loop && options.wrapsLoop && length > 0 }
-
-    private func beside(_ keys: [Key], _ index: Int, by: Int) -> Key? {
-        let other = index + by
-        if keys.indices.contains(other) { return keys[other] }
-        guard wraps else { return nil }
-        var key = by > 0 ? keys[0] : keys[keys.count - 1]
-        key.frame += Double(by) * length
-        // A loop arrives at its first moment as that moment leaves.
-        if by > 0, let front = key.front { key.back = Handle(x: -front.x, y: -front.y, magic: front.magic) }
-        return key
-    }
-
-    private static func along(_ a: Double, _ b: Double, _ c: Double, _ d: Double, _ t: Double) -> Double {
-        let rest = 1 - t
-        return rest * rest * rest * a + 3 * rest * rest * t * b + 3 * rest * t * t * c + t * t * t * d
-    }
-
-    private func span(_ from: Key, _ to: Key, _ frame: Double) -> Double {
-        let wide = to.frame - from.frame
-        guard wide > 0 else { return to.value }
-        if from.front == nil, to.back == nil {
-            return from.value + (to.value - from.value) * (frame - from.frame) / wide
-        }
-        var x1 = from.frame, y1 = from.value, x2 = to.frame, y2 = to.value
-        if let front = from.front {
-            x1 += max(0, min(2, front.x)) * wide / 2
-            y1 += front.y
-        }
-        if let back = to.back {
-            x2 += max(-2, min(0, back.x)) * wide / 2
-            y2 += back.y
-        }
-        var low = 0.0, high = 1.0
-        for _ in 0..<24 {
-            let middle = (low + high) / 2
-            if Self.along(from.frame, x1, x2, to.frame, middle) < frame { low = middle } else { high = middle }
-        }
-        return Self.along(from.value, y1, y2, to.value, (low + high) / 2)
-    }
-
-    private func value(_ keys: [Key], at frame: Double) -> Double {
-        let last = keys.count - 1
-        if frame <= keys[0].frame {
-            if let before = beside(keys, 0, by: -1), frame < keys[0].frame {
-                return span(before, keys[0], frame)
-            }
-            return keys[0].value
-        }
-        if frame >= keys[last].frame {
-            if let after = beside(keys, last, by: 1), frame > keys[last].frame {
-                return span(keys[last], after, frame)
-            }
-            return keys[last].value
-        }
-        var index = 1
-        while keys[index].frame < frame { index += 1 }
-        return span(keys[index - 1], keys[index], frame)
-    }
 }
 
 /// What of an object can have an animation: one of its values, a value of one of its effects,

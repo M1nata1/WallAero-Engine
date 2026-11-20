@@ -73,17 +73,9 @@ extension EngineEditorOverlay {
         needsDisplay = true
     }
 
-    /// The bones as they stand now on the scene. In Object Mode, with nothing to hold them, the
-    /// player says where they have got to as it plays.
+    /// The bones as they stand now on the scene, as the player has them.
     private func boneShapes(_ rig: WallpaperEnginePuppetRig, _ plane: RigPlane) -> [RigBoneShape] {
-        guard let model else { return [] }
-        var moves = model.standingBones(of: rig)
-        if model.mode == .object, !model.showsTimeline, let object,
-           let said = player?.ask(.bones(object)), said.count == moves.count {
-            moves = said.map { m in
-                m.count >= 6 ? CGAffineTransform(a: m[0], b: m[1], c: m[2], d: m[3], tx: m[4], ty: m[5]) : .identity
-            }
-        }
+        guard let model, let moves = model.standingBones(of: rig) else { return [] }
         return rig.bones.map { bone in
             let move = moves[bone.index]
             let tail = rig.alongBone(bone.index, rig.restTail(of: bone.index))
@@ -253,8 +245,7 @@ extension EngineEditorOverlay {
         case .pose:
             let found = nearestBone(at, shapes)
             model.selectBone(found?.index)
-            if let found {
-                let moves = model.standingBones(of: rig)
+            if let found, let moves = model.standingBones(of: rig) {
                 let pivot = WallpaperEnginePuppetRig.Point(x: moves[found.index].tx, y: moves[found.index].ty)
                 if model.tool == .move {
                     rigGesture = .move(found.index, key: model.pose(of: found.index), from: place, parent: found.parent.map { moves[$0] })

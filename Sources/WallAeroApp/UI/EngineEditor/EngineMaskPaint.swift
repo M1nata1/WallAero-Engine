@@ -244,7 +244,7 @@ extension EngineEditorModel {
         if let name, let found {
             session = EngineMaskPaint(target: target, mask: found, texture: name, isNew: false, before: before)
         } else {
-            let size = preview.objectSize(target.object) ?? document.size
+            let size = preview.objectSize(target.object) ?? sceneSize
             let chosen = WallpaperEngineMask.size(forObject: Int(size.width), Int(size.height))
             let blank = WallpaperEngineMask(width: chosen.width, height: chosen.height, values: target.mask.start)
             guard let made = try? blank.save(forEffect: effectName(of: target), to: projectFolder) else { return }

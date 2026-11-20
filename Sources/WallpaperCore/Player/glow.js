@@ -59,9 +59,9 @@
     function glow() {
       // In a scene drawn with a high range of brightness, the glow has settings of its own; its
       // threshold counts from brighter than white, which a picture here never is.
-      var hdr = flag(general.hdr, false);
-      var strength = hdr ? number(general.bloomhdrstrength, 2) : number(general.bloomstrength, 2);
-      var threshold = hdr ? Math.min(0.95, number(general.bloomhdrthreshold, 1) * 0.65) : number(general.bloomthreshold, 0.65);
+      var hdr = flag(general.hdr, defaults.general.hdr);
+      var strength = hdr ? number(general.bloomhdrstrength, defaults.general.bloomhdrstrength) : number(general.bloomstrength, defaults.general.bloomstrength);
+      var threshold = hdr ? Math.min(0.95, number(general.bloomhdrthreshold, defaults.general.bloomhdrthreshold) * 0.65) : number(general.bloomthreshold, defaults.general.bloomthreshold);
       if (!brightProgram || !blurProgram || !(strength > 0)) return;
       var quarter = acquire(ctx.sceneTarget.width / 4, ctx.sceneTarget.height / 4);
       var small = [acquire(ctx.sceneTarget.width / 8, ctx.sceneTarget.height / 8), acquire(ctx.sceneTarget.width / 8, ctx.sceneTarget.height / 8)];
@@ -88,7 +88,7 @@
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.bindFramebuffer(gl.FRAMEBUFFER, ctx.sceneTarget.framebuffer);
       gl.viewport(0, 0, ctx.sceneTarget.width, ctx.sceneTarget.height);
-      var tint = numbers(general.bloomtint, 3, 1);
+      var tint = numbers(general.bloomtint, 3, defaults.general.bloomtint);
       put({ texture: small[1].texture }, FILL, [tint[0], tint[1], tint[2], 1], 'additive');
       release(quarter);
       small.forEach(release);

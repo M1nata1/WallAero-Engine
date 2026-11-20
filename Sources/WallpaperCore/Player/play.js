@@ -97,6 +97,7 @@
       get lost() { return lost; },
       get m4invert() { return m4invert; },
       get m4mul() { return m4mul; },
+      get materialPass() { return materialPass; },
       get matrixOf() { return matrixOf; },
       get mediaTold() { return mediaTold; }, set mediaTold(value) { mediaTold = value; },
       get merged() { return merged; },
@@ -307,6 +308,12 @@
       return found || name;
     }
 
+    // The first pass of a material, by its name: what a picture, a model's part, a particle
+    // system or a pass of an effect is drawn with. Null for a material not in the scene.
+    function materialPass(name) {
+      return ((json(String(name || '')) || {}).passes || [])[0] || null;
+    }
+
     function json(name) {
       var text = files[key(name)];
       if (typeof text !== 'string') return null;
@@ -362,7 +369,7 @@
     function screenLayer(object) {
       return /composelayer|fullscreenlayer|projectlayer/.test(key(String(plain(object.image) || '')));
     }
-    var clear = numbers(general.clearcolor, 3, 0);
+    var clear = numbers(general.clearcolor, 3, defaults.general.clearcolor);
     var scale = 1;          // pixels drawn to a unit of the scene
     var sceneTarget = null; // the whole scene, as drawn so far
     var copyTarget = null;  // a copy of it, for what is blended with what lies under it

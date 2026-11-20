@@ -304,12 +304,7 @@ final class WallpaperEnginePuppetRigTests: XCTestCase {
         XCTAssertEqual(Double(played.frames[last]), 60, accuracy: 1e-6)
         // Halfway, eased: halfway turned.
         XCTAssertEqual(Double(played.frames[(1 * played.frameCount + 15) * 9 + 5]), 0.25, accuracy: 1e-6)
-
-        // A corner by the arm's tip follows the arm at the end.
-        let at30 = rig.posedPoints(animation: 0, frame: 30)
-        let rest = rig.points
-        let moved = zip(at30, rest).contains { abs($0.x - $1.x) + abs($0.y - $1.y) > 1 }
-        XCTAssertTrue(moved)
+        // How the corners follow is the player's (puppets.js); the editor asks it.
     }
 
     func testABoneTiltedAboutXIsSqueezedAndWrittenWhereWallpaperEngineKeepsIt() throws {
@@ -322,11 +317,7 @@ final class WallpaperEnginePuppetRigTests: XCTestCase {
         rig.setKey(.init(frame: 0), bone: root, animation: 0)
         rig.setKey(.init(frame: 10, tiltX: .pi / 2), bone: root, animation: 0)
 
-        // A quarter turn about x: every corner seen on the bone's line.
-        let posed = rig.posedPoints(animation: 0, frame: 10)
-        XCTAssertTrue(posed.allSatisfy { abs($0.y) < 1e-6 })
-        XCTAssertFalse(rig.points.allSatisfy { abs($0.y) < 1e-6 })
-
+        // A quarter turn about x, written for the player to squeeze the picture by.
         let read = try XCTUnwrap(WallpaperEnginePuppet(data: rig.mdl(material: "materials/eye.json")))
         let last = 10 * 9
         XCTAssertEqual(Double(read.animations[0].frames[last + 3]), .pi / 2, accuracy: 1e-6)
@@ -586,12 +577,9 @@ final class StockFontTests: XCTestCase {
         XCTAssertEqual(read.bones[1].tail?.y ?? 0, 90, accuracy: 0.01)
         XCTAssertEqual(read.bones[0].restAngle, 0.5, accuracy: 0.0001)
         XCTAssertEqual(read.animations[0].keys[1]?.last?.angle ?? 0, 0.25, accuracy: 0.0001)
-        // At rest nothing is moved, however the bones are turned.
-        let moved = read.posedPoints(animation: nil, frame: 0)
-        for (point, now) in zip(read.points, moved) {
-            XCTAssertEqual(point.x, now.x, accuracy: 0.01)
-            XCTAssertEqual(point.y, now.y, accuracy: 0.01)
-        }
+        // At rest the player moves nothing however the bones are turned: what it is handed
+        // at rest is the bones' rest itself.
+        XCTAssertEqual(read.localPoses(animation: nil, frame: 0).map { $0[2] }, read.bones.map(\.restAngle))
     }
 
     func testPaintedWeightsStayAndAddUp() throws {

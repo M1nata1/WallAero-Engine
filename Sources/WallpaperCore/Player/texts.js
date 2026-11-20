@@ -73,12 +73,12 @@
       thing.kept = null;
       thing.blending = 'translucent';
       thing.brightness = 1;
-      thing.blendMode = number(object.colorBlendMode, 0);
+      thing.blendMode = number(object.colorBlendMode, defaults.object.colorBlendMode);
       thing.ownColor = true; // the color is in the picture already
       // In a scene in three dimensions a text stands in the world, as a picture does.
       thing.inWorld = inDepth;
-      also(thing, 'text', live(object.text, 0, '', thing, 'text'));
-      also(thing, 'pointsize', live(object.pointsize, 1, 32, thing));
+      also(thing, 'text', live(object.text, 0, defaults.text.text, thing, 'text'));
+      also(thing, 'pointsize', live(object.pointsize, 1, defaults.text.pointsize, thing));
       // What a script has told the text to look like, in place of what the scene says.
       thing.own = {};
       function said(name) {
@@ -107,19 +107,19 @@
       thing.settle = function () {
         var state = thing.state;
         // The room left around the letters, across and up: one number for both, or two.
-        var room = numbers(said('padding'), 2, 0);
-        var across = key(plain(said('horizontalalign')) || 'center'), down = key(plain(said('verticalalign')) || 'center');
-        var background = flag(said('opaquebackground'), false) ? numbers(said('backgroundcolor'), 3, 0) : null;
+        var room = numbers(said('padding'), 2, defaults.text.padding);
+        var across = key(plain(said('horizontalalign')) || defaults.text.horizontalalign), down = key(plain(said('verticalalign')) || defaults.text.verticalalign);
+        var background = flag(said('opaquebackground'), defaults.text.opaquebackground) ? numbers(said('backgroundcolor'), 3, defaults.text.backgroundcolor) : null;
         var family = fontOf(plain(said('font')));
-        var widest = flag(said('limitwidth'), false) ? number(said('maxwidth'), 0) : 0;
-        var rows = flag(said('limitrows'), false) ? Math.max(1, number(said('maxrows'), 1)) : 0;
-        var ellipsis = flag(said('limituseellipsis'), false);
+        var widest = flag(said('limitwidth'), defaults.text.limitwidth) ? number(said('maxwidth'), defaults.text.maxwidth) : 0;
+        var rows = flag(said('limitrows'), defaults.text.limitrows) ? Math.max(1, number(said('maxrows'), defaults.text.maxrows)) : 0;
+        var ellipsis = flag(said('limituseellipsis'), defaults.text.limituseellipsis);
         // Between letters and between lines, in units of the scene.
-        var spacing = numbers(said('spacing'), 2, 0);
-        var outline = flag(said('outline'), false) ? { color: numbers(said('outlinecolor'), 3, 0), thickness: Math.max(0, number(said('outlinethickness'), 1)) } : null;
-        var shadow = flag(said('dropshadow'), false) ? { color: numbers(said('dropshadowcolor'), 3, 0), offset: numbers(said('dropshadowoffset'), 2, 0),
-                                                        size: Math.max(0, number(said('dropshadowsize'), 0)), opacity: Math.max(0, number(said('dropshadowopacity'), 1)) } : null;
-        var blur = flag(said('blur'), false) ? Math.max(0, number(said('blursize'), 0)) : 0;
+        var spacing = numbers(said('spacing'), 2, defaults.text.spacing);
+        var outline = flag(said('outline'), defaults.text.outline) ? { color: numbers(said('outlinecolor'), 3, defaults.text.outlinecolor), thickness: Math.max(0, number(said('outlinethickness'), defaults.text.outlinethickness)) } : null;
+        var shadow = flag(said('dropshadow'), defaults.text.dropshadow) ? { color: numbers(said('dropshadowcolor'), 3, defaults.text.dropshadowcolor), offset: numbers(said('dropshadowoffset'), 2, defaults.text.dropshadowoffset),
+                                                        size: Math.max(0, number(said('dropshadowsize'), defaults.text.dropshadowsize)), opacity: Math.max(0, number(said('dropshadowopacity'), defaults.text.dropshadowopacity)) } : null;
+        var blur = flag(said('blur'), defaults.text.blur) ? Math.max(0, number(said('blursize'), defaults.text.blursize)) : 0;
         var asked = [state.text, state.pointsize[0], state.color.join(), ctx.scale, room.join(), across, down, String(background), family, fontsThere, widest, rows,
                      ellipsis, spacing.join(), JSON.stringify(outline), JSON.stringify(shadow), blur].join('\u0001');
         if (asked === shown) return;
@@ -454,7 +454,7 @@
       gl.uniform1f(at('u_Roughness'), lit.roughness);
       gl.uniform1f(at('u_Reflectivity'), lit.reflectivity);
       gl.uniform3f(at('u_Emissive'), lit.emissive[0] * lit.glow, lit.emissive[1] * lit.glow, lit.emissive[2] * lit.glow);
-      var ambient = numbers(general.ambientcolor, 3, 0.2);
+      var ambient = numbers(general.ambientcolor, 3, defaults.lit.ambientcolor);
       gl.uniform3f(at('u_Ambient'), ambient[0], ambient[1], ambient[2]);
       var lights = sceneLights();
       gl.uniform1i(at('u_LightCount'), lights.length);

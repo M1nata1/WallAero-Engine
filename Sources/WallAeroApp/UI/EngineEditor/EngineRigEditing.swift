@@ -211,12 +211,12 @@ extension EngineEditorModel {
         return Self.ownSeconds(timelineSeconds, length: Double(animation.length) / rate, mode: mode) * rate
     }
 
-    /// How each bone stands now, from the picture, where the player does not say otherwise.
-    func standingBones(of rig: WallpaperEnginePuppetRig) -> [CGAffineTransform] {
-        if mode == .pose || (showsTimeline && !mode.isRig) {
-            return rig.posedTransforms(animation: rigAnimation, frame: rigFrame, draft: mode == .pose ? poseDraft : [:])
-        }
-        return rig.posedTransforms(animation: nil, frame: 0)
+    /// How each bone stands now on the scene, as the player works it out: where the editor holds
+    /// the bones (`showRig`: at rest, posed, at the timeline's moment), or as the picture plays.
+    /// Nil while the player does not have the rig as it is edited.
+    func standingBones(of rig: WallpaperEnginePuppetRig) -> [CGAffineTransform]? {
+        guard let selection, let moves = preview?.boneMoves(of: selection, atRest: false), moves.count == rig.bones.count else { return nil }
+        return moves
     }
 
     // MARK: - Bones

@@ -14,7 +14,7 @@
       // A scene may say not to clear what was drawn before, so that what moves leaves its trace
       // on the picture. The glow is added onto the picture, so with it the picture is cleared
       // all the same, as it is for the first frame.
-      var keeps = general.clearenabled === false && !flag(general.bloom, false) && ctx.frames > 0 && ctx.sceneTarget.width === keptWidth;
+      var keeps = general.clearenabled === false && !flag(general.bloom, defaults.general.bloom) && ctx.frames > 0 && ctx.sceneTarget.width === keptWidth;
       keptWidth = ctx.sceneTarget.width;
       if (!keeps) {
         gl.clearColor(ctx.clear[0], ctx.clear[1], ctx.clear[2], 1);
@@ -55,7 +55,7 @@
           object.draw(pass === 'under' ? 'through' : pass);
         });
       });
-      if (flag(general.bloom, false)) glow();
+      if (flag(general.bloom, defaults.general.bloom)) glow();
       // Dark for a moment while the camera goes from one of its paths to the next.
       var onPath = inDepth && !freeLook() ? pathLook(activeCamera()) : null;
       if (onPath && onPath.dark > 0) {

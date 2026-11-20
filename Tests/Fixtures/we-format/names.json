@@ -1,0 +1,45 @@
+{
+ "about": "The name a scene's file is known by (docs/we-format.md, row 4): Wallpaper Engine is a Windows program, where names differ neither by case nor by the slash, nor here by whether a letter's marks are written with it or apart. The app lays the table out under such names (WallpaperEngineScene.key); the player looks names up the same way (key in values.js), names that scripts give while playing among them.",
+ "cases": [
+  {
+   "name": "Materials\\Girl.JSON",
+   "key": "materials/girl.json"
+  },
+  {
+   "name": "models/Ёлка.json",
+   "key": "models/ёлка.json"
+  },
+  {
+   "name": "materials/été.tex",
+   "key": "materials/été.tex"
+  },
+  {
+   "name": "İstanbul/IŞIK.json",
+   "key": "i̇stanbul/işik.json"
+  },
+  {
+   "name": "Straße/GROSS.json",
+   "key": "straße/gross.json"
+  },
+  {
+   "name": "ΣΟΦΙΑ/Σ.json",
+   "key": "σοφια/σ.json"
+  },
+  {
+   "name": "ﬁle/Ǆ.json",
+   "key": "ﬁle/ǆ.json"
+  },
+  {
+   "name": "a\\\\b//C.frag",
+   "key": "a//b//c.frag"
+  },
+  {
+   "name": "日本/テクスチャ.tex",
+   "key": "日本/テクスチャ.tex"
+  },
+  {
+   "name": "MIXED/Path\\To/File.Json",
+   "key": "mixed/path/to/file.json"
+  }
+ ]
+}

@@ -1,7 +1,34 @@
   // Models in three dimensions: made by play() with what it shares (`ctx`), handing back what the rest of it uses.
   function makeModels(ctx) {
-    var puppets = ctx.puppets, gl = ctx.gl, json = ctx.json, link = ctx.link, newTexture = ctx.newTexture, flat = ctx.flat, texture = ctx.texture, depthOf = ctx.depthOf, description = ctx.description, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, objects = ctx.objects, live = ctx.live, CHANNELS = ctx.CHANNELS, numbersOf = ctx.numbersOf, freeLook = ctx.freeLook, eyePlace = ctx.eyePlace, activeCamera = ctx.activeCamera, scenePathLook = ctx.scenePathLook, pathLook = ctx.pathLook, cameraMatrix = ctx.cameraMatrix, also = ctx.also, standing = ctx.standing, isSet = ctx.isSet;
+    var puppets = ctx.puppets, gl = ctx.gl, json = ctx.json, materialPass = ctx.materialPass, link = ctx.link, newTexture = ctx.newTexture, flat = ctx.flat, texture = ctx.texture, depthOf = ctx.depthOf, description = ctx.description, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, objects = ctx.objects, live = ctx.live, CHANNELS = ctx.CHANNELS, numbersOf = ctx.numbersOf, freeLook = ctx.freeLook, eyePlace = ctx.eyePlace, activeCamera = ctx.activeCamera, scenePathLook = ctx.scenePathLook, pathLook = ctx.pathLook, cameraMatrix = ctx.cameraMatrix, also = ctx.also, standing = ctx.standing, isSet = ctx.isSet;
     // --- Models in three dimensions --------------------------------------
+    // A part of a model as its material has it — the material's first pass — for the models of
+    // either format alike.
+    function partLook(materialName, thing, number_) {
+      var pass = materialPass(materialName) || {};
+      var constants = {};
+      Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
+      return {
+        picture: (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null,
+        culls: key(String(pass.cullmode || 'normal')) !== 'nocull',
+        tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
+        writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
+        blending: key(String(pass.blending || 'normal')),
+        metallic: number(plain(constants.metallic !== undefined ? constants.metallic : constants.metal), defaults.material.metallic),
+        roughness: number(plain(constants.roughness !== undefined ? constants.roughness : constants.rough), defaults.material.roughness),
+        // Lit unless the material says not: a model's material is, in Wallpaper Engine.
+        lit: alwaysLit(pass) || number((pass.combos || {}).LIGHTING, 1) !== 0,
+        classic: alwaysLit(pass), halfLambert: number(plain(constants.light), 0),
+        fogged: number((pass.combos || {}).FOG, 1) !== 0,
+        surface: surfaceOf(pass, constants),
+        // How much it shows and the color laid over its picture, as its material says —
+        // numbers, or what scripts make of them: a flame that shows only while a button is
+        // held, a sky that darkens at night.
+        alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
+        color: constants.color === undefined ? null : materialLive(thing, number_, 'color', constants.color, 3)
+      };
+    }
+
     //
     // A scene may hold models: meshes with a picture laid over them, lit by the scene's lights,
     // by the light that comes from everywhere (ambient) and from the sky above. Wallpaper
@@ -342,7 +369,7 @@
       }
       var aheadLength = Math.hypot(ahead[0], ahead[1], ahead[2]) || 1;
       ahead = ahead.map(function (part) { return part / aheadLength; });
-      var tall = Math.tan(number(general.perspectiveoverridefov, number(general.fov, 50)) * Math.PI / 360);
+      var tall = Math.tan(number(general.perspectiveoverridefov, number(general.fov, defaults.general.fov)) * Math.PI / 360);
       var wide = tall * (ctx.surface.width / Math.max(1, ctx.surface.height));
       var lookAtSun = Mat4.lookAt(new Vec3(0, 0, 0), new Vec3(way[0], way[1], way[2]), new Vec3(up[0], up[1], up[2])).m;
       gl.disable(gl.BLEND);
@@ -437,7 +464,7 @@
         if (!stands.visible) return;
         var m = stands.matrix;
         var shade = thing.state.color || [1, 1, 1];
-        var strength = number((thing.state.intensity || [])[0], 1);
+        var strength = number((thing.state.intensity || [])[0], defaults.light.intensity);
         // Which way it shines: a sun along its own x axis — the way the light of the Sonic
         // scenes falls in Wallpaper Engine's videos of them, from above where their scripts
         // turn it — a spot down its own z axis.
@@ -451,8 +478,8 @@
           place: thing.lightKind === 'directional' ? [aim[0], aim[1], aim[2], 0]
                : [m[12] - half[0], m[13] - half[1], m[14] - half[2], 1],
           end: thing.lightKind === 'tube' ? [m[12] + half[0], m[13] + half[1], m[14] + half[2], 1] : [0, 0, 0, 0],
-          color: [shade[0] * strength, shade[1] * strength, shade[2] * strength, number((thing.state.radius || [])[0], 0)],
-          aim: thing.lightKind === 'spot' ? [aim[0], aim[1], aim[2], number((thing.state.exponent || [])[0], 1)] : [0, 0, 0, number((thing.state.exponent || [])[0], 1)],
+          color: [shade[0] * strength, shade[1] * strength, shade[2] * strength, number((thing.state.radius || [])[0], defaults.light.radius)],
+          aim: thing.lightKind === 'spot' ? [aim[0], aim[1], aim[2], number((thing.state.exponent || [])[0], defaults.light.exponent)] : [0, 0, 0, number((thing.state.exponent || [])[0], defaults.light.exponent)],
           strength: strength
         });
       });
@@ -464,7 +491,7 @@
     // nearer for larger z; or, for a scene seen through a lens, from in front of its middle.
     function viewProjection() {
       var w = ctx.surface.width, h = ctx.surface.height;
-      var far = Math.max(1, number(general.farz, 10000));
+      var far = Math.max(1, number(general.farz, defaults.general.farz));
       // What is drawn is kept with its top row first, as the pictures are: y is turned over.
       if (general.orthogonalprojection) {
         return [2 / w, 0, 0, 0, 0, -2 / h, 0, 0, 0, 0, -1 / far, 0,
@@ -476,8 +503,8 @@
       var shot = activeCamera();
       var onPath = pathLook(shot);
       var fov = ((onPath && onPath.fov > 0 && onPath.fov) || (shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) ||
-                 number(general.perspectiveoverridefov, number(general.fov, 50))) * Math.PI / 180;
-      var near = Math.max(0.0001, number(general.nearz, 0.01)), f = 1 / Math.tan(fov / 2), aspect = w / h;
+                 number(general.perspectiveoverridefov, number(general.fov, defaults.general.fov))) * Math.PI / 180;
+      var near = Math.max(0.0001, number(general.nearz, defaults.general.nearz)), f = 1 / Math.tan(fov / 2), aspect = w / h;
       var lens = [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) / (near - far), -1, 0, 0, 2 * far * near / (near - far), 0];
       if (freeLook() && editorView.flat > 0) {
         // Flat: as far as the eye is, in front and behind, all seen at one size.
@@ -692,10 +719,6 @@
           }
         }
         var materialName = number_ === 0 && object.material ? object.material : piece.material;
-        var material = json(String(materialName || '')) || {};
-        var pass = (material.passes || [])[0] || {};
-        var constants = {};
-        Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
         var shape = gl.createVertexArray();
         gl.bindVertexArray(shape);
         gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
@@ -707,26 +730,7 @@
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
         gl.bindVertexArray(null);
-        return {
-          shape: shape, length: triangles.length,
-          picture: (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null,
-          culls: key(String(pass.cullmode || 'normal')) !== 'nocull',
-          tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
-          writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
-          blending: key(String(pass.blending || 'normal')),
-          metallic: number(plain(constants.metallic !== undefined ? constants.metallic : constants.metal), 0),
-          roughness: number(plain(constants.roughness !== undefined ? constants.roughness : constants.rough), 0.5),
-          lit: alwaysLit(pass) || number((pass.combos || {}).LIGHTING, 1) !== 0,
-          classic: alwaysLit(pass), halfLambert: number(plain(constants.light), 0),
-          fogged: number((pass.combos || {}).FOG, 1) !== 0,
-          surface: surfaceOf(pass, constants),
-          // How much it shows, as its material says: a number, or what a script makes of it —
-          // a flame that shows only while the button is held.
-          alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
-          // The color the material lays over its picture, which a script may change — a sky
-          // that darkens at night.
-          color: constants.color === undefined ? null : materialLive(thing, number_, 'color', constants.color, 3)
-        };
+        return Object.assign({ shape: shape, length: triangles.length }, partLook(materialName, thing, number_));
       }).filter(Boolean);
       if (!parts.length) return null;
       var middle = [(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, (low[2] + high[2]) / 2];
@@ -776,7 +780,7 @@
         useFog(at);
         var tint = thing.state.color || [1, 1, 1];
         gl.uniform4f(at('u_Tint'), tint[0], tint[1], tint[2], stands.alpha);
-        var ambient = numbers(plain(general.ambientcolor), 3, 0), sky = numbers(plain(general.skylightcolor), 3, 0);
+        var ambient = numbers(plain(general.ambientcolor), 3, defaults.general.ambientcolor), sky = numbers(plain(general.skylightcolor), 3, defaults.general.skylightcolor);
         gl.uniform3f(at('u_Ambient'), ambient[0], ambient[1], ambient[2]);
         gl.uniform3f(at('u_Sky'), sky[0], sky[1], sky[2]);
         var eyeAt = eyePlace();
@@ -866,10 +870,6 @@
             high[axis] = Math.max(high[axis], corners[corner * 8 + axis]);
           }
         }
-        var material = json(String(piece.material || '')) || {};
-        var pass = (material.passes || [])[0] || {};
-        var constants = {};
-        Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
         var shape = gl.createVertexArray();
         gl.bindVertexArray(shape);
         gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
@@ -883,26 +883,8 @@
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
         gl.bindVertexArray(null);
-        return {
-          corners: corners, count: count, shape: shape, length: triangles.length,
-          counted: piece.wideTriangles ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
-          picture: (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null,
-          culls: key(String(pass.cullmode || 'normal')) !== 'nocull',
-          tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
-          writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
-          blending: key(String(pass.blending || 'normal')),
-          metallic: number(plain(constants.metallic !== undefined ? constants.metallic : constants.metal), 0),
-          roughness: number(plain(constants.roughness !== undefined ? constants.roughness : constants.rough), 0.5),
-          // Lit unless the material says not: a model's material is, in Wallpaper Engine.
-          lit: alwaysLit(pass) || number((pass.combos || {}).LIGHTING, 1) !== 0,
-          classic: alwaysLit(pass), halfLambert: number(plain(constants.light), 0),
-          fogged: number((pass.combos || {}).FOG, 1) !== 0,
-          surface: surfaceOf(pass, constants),
-          // How much it shows and the color laid over its picture, as its material says —
-          // numbers, or what scripts make of them: a sky that darkens at night.
-          alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
-          color: constants.color === undefined ? null : materialLive(thing, number_, 'color', constants.color, 3)
-        };
+        return Object.assign({ corners: corners, count: count, shape: shape, length: triangles.length,
+                               counted: piece.wideTriangles ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT }, partLook(piece.material, thing, number_));
       }).filter(Boolean);
       if (!parts.length) return null;
       // How large it is, for what is said to bounce off it.
@@ -950,7 +932,7 @@
         useFog(at);
         var tint = thing.state.color || [1, 1, 1];
         gl.uniform4f(at('u_Tint'), tint[0], tint[1], tint[2], stands.alpha);
-        var ambient = numbers(plain(general.ambientcolor), 3, 0), sky = numbers(plain(general.skylightcolor), 3, 0);
+        var ambient = numbers(plain(general.ambientcolor), 3, defaults.general.ambientcolor), sky = numbers(plain(general.skylightcolor), 3, defaults.general.skylightcolor);
         gl.uniform3f(at('u_Ambient'), ambient[0], ambient[1], ambient[2]);
         gl.uniform3f(at('u_Sky'), sky[0], sky[1], sky[2]);
         var eyeAt = eyePlace();
@@ -1017,7 +999,7 @@
     // A light: where it is, its color and strength, how far it reaches and how fast it fades
     // there. A light that shines from far away in one direction has no place, only a way.
     function buildLight(object, thing) {
-      var kind = key(String(plain(object.light) || 'lpoint'));
+      var kind = key(String(plain(object.light) || defaults.light.light));
       thing.lightKind = /dir|sun/.test(kind) ? 'directional' : (/spot/.test(kind) ? 'spot' : (/tube/.test(kind) ? 'tube' : 'point'));
       // A tube reaches as far each way from its middle as its control point says, along the
       // light's own axes.
@@ -1034,9 +1016,9 @@
         moved.animation.relative = true;
         thing.lives.origin = live(moved, 3, unplaced(object), thing);
       }
-      also(thing, 'intensity', live(object.intensity === undefined ? 1 : object.intensity, 1, 1, thing));
-      also(thing, 'radius', live(object.radius === undefined ? 0 : object.radius, 1, 0, thing));
-      also(thing, 'exponent', live(object.exponent === undefined ? 1 : object.exponent, 1, 1, thing));
+      also(thing, 'intensity', live(object.intensity === undefined ? defaults.light.intensity : object.intensity, 1, defaults.light.intensity, thing));
+      also(thing, 'radius', live(object.radius === undefined ? defaults.light.radius : object.radius, 1, defaults.light.radius, thing));
+      also(thing, 'exponent', live(object.exponent === undefined ? defaults.light.exponent : object.exponent, 1, defaults.light.exponent, thing));
       return thing;
     }
 

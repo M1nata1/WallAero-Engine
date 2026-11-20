@@ -277,10 +277,12 @@ public final class MetalScenePlayer {
     }
 
     /// The scene file as the editor has just written it.
-    public func setSceneFile(_ text: String) { run(.setSceneFile(text)) }
+    public func setSceneFile(_ text: String) {
+        run(.setSceneFile(WallpaperEngineSceneReading.read(["scene.json": text])["scene.json"] ?? text))
+    }
 
     /// Other files as the editor has just written them, by the names the player knows them by.
-    public func setFiles(_ files: [String: String]) { run(.setFiles(files)) }
+    public func setFiles(_ files: [String: String]) { run(.setFiles(files.merging(WallpaperEngineSceneReading.read(files)) { $1 })) }
 
     /// The scene's files laid out anew: read again, and the scene played anew.
     public func reloadFiles() {
@@ -310,6 +312,10 @@ public final class MetalScenePlayer {
             return false
         }
         context.globalObject.setObject(value, forKeyedSubscript: PlayerEnvironment.scene as NSString)
+        // The scene's JSON files as the app reads them, over those written.
+        if let read = WallpaperEngineSceneReading.readTable(data) {
+            context.evaluateScript(WallpaperEngineSceneReading.script(putting: read))
+        }
         return true
     }
 

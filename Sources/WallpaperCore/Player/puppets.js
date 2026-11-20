@@ -576,11 +576,11 @@
           state.last = { root: root, angle: angle, velocity: null, turn: 0 };
         }
         // Gravity as strong as the scene says, and the scene's wind, blowing in gusts.
-        var heavy = SWAY_GRAVITY * Math.max(0, number(general.gravitystrength, 1));
+        var heavy = SWAY_GRAVITY * Math.max(0, number(general.gravitystrength, defaults.general.gravitystrength));
         var pull = state.gravity ? [state.gravity[0] * heavy, state.gravity[1] * heavy] : [0, 0];
-        if (flag(general.windenabled, false)) {
-          var blowing = numbers(general.winddirection, 3, 0);
-          var gust = number(general.windstrength, 1) * SWAY_WIND * (0.65 + 0.35 * Math.sin(ctx.time * 1.3 + length * 0.01) * Math.sin(ctx.time * 0.37 + 1.7));
+        if (flag(general.windenabled, defaults.general.windenabled)) {
+          var blowing = numbers(general.winddirection, 3, defaults.general.winddirection);
+          var gust = number(general.windstrength, defaults.general.windstrength) * SWAY_WIND * (0.65 + 0.35 * Math.sin(ctx.time * 1.3 + length * 0.01) * Math.sin(ctx.time * 0.37 + 1.7));
           pull = [pull[0] + blowing[0] * gust, pull[1] + blowing[1] * gust];
         }
         var left = Math.min(passed, 0.1);

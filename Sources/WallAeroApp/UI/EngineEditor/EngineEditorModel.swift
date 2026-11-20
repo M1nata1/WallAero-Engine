@@ -43,6 +43,12 @@ final class EngineEditorModel: ObservableObject {
     }
     /// What the player says of the scene once it plays: the values of the effects, among others.
     @Published private(set) var description: EngineSceneDescription?
+
+    /// The scene's size: as it says, or, when it leaves it to its first picture, as the player
+    /// worked it out.
+    var sceneSize: CGSize {
+        document.writtenSize ?? description.map { CGSize(width: $0.width, height: $0.height) } ?? document.size
+    }
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
     /// Whether the scene plays. The editor opens with it standing at the start of the timeline,
@@ -757,7 +763,7 @@ final class EngineEditorModel: ObservableObject {
     }
 
     func addSolid() {
-        let size = document.size
+        let size = sceneSize
         var made = 0
         change { made = $0.addSolid(color: [0.2, 0.5, 0.9], width: size.width / 3, height: size.height / 3, name: Self.kindTitle(.solid), under: newParent) }
         selection = made

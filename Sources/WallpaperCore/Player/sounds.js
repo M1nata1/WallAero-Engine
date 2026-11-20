@@ -16,13 +16,13 @@
         note('“' + name + '”: its sound is not in the scene');
         return null;
       }
-      also(thing, 'volume', live(object.volume, 1, 1, thing));
-      var mode = key(plain(object.playbackmode) || 'loop');
-      var least = number(object.mintime, 0), most = number(object.maxtime, 0);
+      also(thing, 'volume', live(object.volume, 1, defaults.sound.volume, thing));
+      var mode = key(plain(object.playbackmode) || defaults.sound.playbackmode);
+      var least = number(object.mintime, defaults.sound.mintime), most = number(object.maxtime, defaults.sound.maxtime);
       var audio = document.createElement('audio');
       var index = 0;
       var timer = 0;
-      var wanted = !flag(object.startsilent, false); // until a script says otherwise
+      var wanted = !flag(object.startsilent, defaults.sound.startsilent); // until a script says otherwise
       var loud = -1;
       audio.style.display = 'none';
       audio.preload = 'auto';

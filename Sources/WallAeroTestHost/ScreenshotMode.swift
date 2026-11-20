@@ -1496,7 +1496,7 @@ enum ScreenshotMode {
                 case "compare":
                     // The bones as the rig has them against those the player works out.
                     if let rig = model.selectedRig, let selection = model.selection {
-                        let ours = model.standingBones(of: rig)
+                        let ours = model.standingBones(of: rig) ?? []
                         let theirs = preview.boneMoves(of: selection, atRest: true)
                         let far = zip(ours, theirs).map { hypot($0.tx - $1.tx, $0.ty - $1.ty) + 100 * (abs($0.a - $1.a) + abs($0.b - $1.b)) }.max() ?? -1
                         print("rig: compared \(theirs.count) bones of #\(selection), most apart \(far)")
