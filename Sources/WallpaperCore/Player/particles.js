@@ -1,6 +1,6 @@
   // Particles: made by play() with what it shares (`ctx`), handing back what the rest of it uses.
   function makeParticles(ctx) {
-    var gl = ctx.gl, bound = ctx.bound, json = ctx.json, link = ctx.link, passBuffer = ctx.passBuffer, sheetFrames = ctx.sheetFrames, texture = ctx.texture, acquire = ctx.acquire, depthOf = ctx.depthOf, general = ctx.general, sceneVersion = ctx.sceneVersion, inDepth = ctx.inDepth, live = ctx.live, times = ctx.times, matrixOf = ctx.matrixOf, CHANNELS = ctx.CHANNELS, viewProjection = ctx.viewProjection, m4invert = ctx.m4invert, byId = ctx.byId, freeLook = ctx.freeLook, cameraLook = ctx.cameraLook, eyePlace = ctx.eyePlace, activeCamera = ctx.activeCamera, cameraMatrix = ctx.cameraMatrix, also = ctx.also, standing = ctx.standing, hearing = ctx.hearing, isSet = ctx.isSet;
+    var gl = ctx.gl, bound = ctx.bound, json = ctx.json, materialPass = ctx.materialPass, link = ctx.link, passBuffer = ctx.passBuffer, sheetFrames = ctx.sheetFrames, texture = ctx.texture, acquire = ctx.acquire, depthOf = ctx.depthOf, general = ctx.general, sceneVersion = ctx.sceneVersion, inDepth = ctx.inDepth, live = ctx.live, times = ctx.times, matrixOf = ctx.matrixOf, CHANNELS = ctx.CHANNELS, viewProjection = ctx.viewProjection, m4invert = ctx.m4invert, byId = ctx.byId, freeLook = ctx.freeLook, cameraLook = ctx.cameraLook, eyePlace = ctx.eyePlace, activeCamera = ctx.activeCamera, cameraMatrix = ctx.cameraMatrix, also = ctx.also, standing = ctx.standing, hearing = ctx.hearing, isSet = ctx.isSet;
     // What a value a system's file leaves unsaid is taken to be (defaults.js).
     var standard = defaults.particles;
     // --- Particles --------------------------------------------------------
@@ -984,7 +984,7 @@
     function particleSystem(fileName, system, thing, entry, depth) {
       var said = json(fileName);
       var name = system.name;
-      var material = ((json(said.material) || {}).passes || [])[0] || {};
+      var material = materialPass(said.material) || {};
       var over = thing.said.instanceoverride || {};
       // Whether it picks its particles a color at random, which a color the scene gives takes
       // the place of (see `settle`).

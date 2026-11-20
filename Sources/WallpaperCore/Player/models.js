@@ -1,7 +1,34 @@
   // Models in three dimensions: made by play() with what it shares (`ctx`), handing back what the rest of it uses.
   function makeModels(ctx) {
-    var puppets = ctx.puppets, gl = ctx.gl, json = ctx.json, link = ctx.link, newTexture = ctx.newTexture, flat = ctx.flat, texture = ctx.texture, depthOf = ctx.depthOf, description = ctx.description, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, objects = ctx.objects, live = ctx.live, CHANNELS = ctx.CHANNELS, numbersOf = ctx.numbersOf, freeLook = ctx.freeLook, eyePlace = ctx.eyePlace, activeCamera = ctx.activeCamera, scenePathLook = ctx.scenePathLook, pathLook = ctx.pathLook, cameraMatrix = ctx.cameraMatrix, also = ctx.also, standing = ctx.standing, isSet = ctx.isSet;
+    var puppets = ctx.puppets, gl = ctx.gl, json = ctx.json, materialPass = ctx.materialPass, link = ctx.link, newTexture = ctx.newTexture, flat = ctx.flat, texture = ctx.texture, depthOf = ctx.depthOf, description = ctx.description, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, objects = ctx.objects, live = ctx.live, CHANNELS = ctx.CHANNELS, numbersOf = ctx.numbersOf, freeLook = ctx.freeLook, eyePlace = ctx.eyePlace, activeCamera = ctx.activeCamera, scenePathLook = ctx.scenePathLook, pathLook = ctx.pathLook, cameraMatrix = ctx.cameraMatrix, also = ctx.also, standing = ctx.standing, isSet = ctx.isSet;
     // --- Models in three dimensions --------------------------------------
+    // A part of a model as its material has it — the material's first pass — for the models of
+    // either format alike.
+    function partLook(materialName, thing, number_) {
+      var pass = materialPass(materialName) || {};
+      var constants = {};
+      Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
+      return {
+        picture: (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null,
+        culls: key(String(pass.cullmode || 'normal')) !== 'nocull',
+        tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
+        writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
+        blending: key(String(pass.blending || 'normal')),
+        metallic: number(plain(constants.metallic !== undefined ? constants.metallic : constants.metal), defaults.material.metallic),
+        roughness: number(plain(constants.roughness !== undefined ? constants.roughness : constants.rough), defaults.material.roughness),
+        // Lit unless the material says not: a model's material is, in Wallpaper Engine.
+        lit: alwaysLit(pass) || number((pass.combos || {}).LIGHTING, 1) !== 0,
+        classic: alwaysLit(pass), halfLambert: number(plain(constants.light), 0),
+        fogged: number((pass.combos || {}).FOG, 1) !== 0,
+        surface: surfaceOf(pass, constants),
+        // How much it shows and the color laid over its picture, as its material says —
+        // numbers, or what scripts make of them: a flame that shows only while a button is
+        // held, a sky that darkens at night.
+        alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
+        color: constants.color === undefined ? null : materialLive(thing, number_, 'color', constants.color, 3)
+      };
+    }
+
     //
     // A scene may hold models: meshes with a picture laid over them, lit by the scene's lights,
     // by the light that comes from everywhere (ambient) and from the sky above. Wallpaper
@@ -692,10 +719,6 @@
           }
         }
         var materialName = number_ === 0 && object.material ? object.material : piece.material;
-        var material = json(String(materialName || '')) || {};
-        var pass = (material.passes || [])[0] || {};
-        var constants = {};
-        Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
         var shape = gl.createVertexArray();
         gl.bindVertexArray(shape);
         gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
@@ -707,26 +730,7 @@
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
         gl.bindVertexArray(null);
-        return {
-          shape: shape, length: triangles.length,
-          picture: (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null,
-          culls: key(String(pass.cullmode || 'normal')) !== 'nocull',
-          tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
-          writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
-          blending: key(String(pass.blending || 'normal')),
-          metallic: number(plain(constants.metallic !== undefined ? constants.metallic : constants.metal), defaults.material.metallic),
-          roughness: number(plain(constants.roughness !== undefined ? constants.roughness : constants.rough), defaults.material.roughness),
-          lit: alwaysLit(pass) || number((pass.combos || {}).LIGHTING, 1) !== 0,
-          classic: alwaysLit(pass), halfLambert: number(plain(constants.light), 0),
-          fogged: number((pass.combos || {}).FOG, 1) !== 0,
-          surface: surfaceOf(pass, constants),
-          // How much it shows, as its material says: a number, or what a script makes of it —
-          // a flame that shows only while the button is held.
-          alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
-          // The color the material lays over its picture, which a script may change — a sky
-          // that darkens at night.
-          color: constants.color === undefined ? null : materialLive(thing, number_, 'color', constants.color, 3)
-        };
+        return Object.assign({ shape: shape, length: triangles.length }, partLook(materialName, thing, number_));
       }).filter(Boolean);
       if (!parts.length) return null;
       var middle = [(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, (low[2] + high[2]) / 2];
@@ -866,10 +870,6 @@
             high[axis] = Math.max(high[axis], corners[corner * 8 + axis]);
           }
         }
-        var material = json(String(piece.material || '')) || {};
-        var pass = (material.passes || [])[0] || {};
-        var constants = {};
-        Object.keys(pass.constantshadervalues || {}).forEach(function (each) { constants[key(each)] = pass.constantshadervalues[each]; });
         var shape = gl.createVertexArray();
         gl.bindVertexArray(shape);
         gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
@@ -883,26 +883,8 @@
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triangles, gl.STATIC_DRAW);
         gl.bindVertexArray(null);
-        return {
-          corners: corners, count: count, shape: shape, length: triangles.length,
-          counted: piece.wideTriangles ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
-          picture: (pass.textures || [])[0] ? texture('materials/' + pass.textures[0]) : null,
-          culls: key(String(pass.cullmode || 'normal')) !== 'nocull',
-          tests: key(String(pass.depthtest || 'enabled')) !== 'disabled',
-          writes: key(String(pass.depthwrite || 'enabled')) !== 'disabled',
-          blending: key(String(pass.blending || 'normal')),
-          metallic: number(plain(constants.metallic !== undefined ? constants.metallic : constants.metal), defaults.material.metallic),
-          roughness: number(plain(constants.roughness !== undefined ? constants.roughness : constants.rough), defaults.material.roughness),
-          // Lit unless the material says not: a model's material is, in Wallpaper Engine.
-          lit: alwaysLit(pass) || number((pass.combos || {}).LIGHTING, 1) !== 0,
-          classic: alwaysLit(pass), halfLambert: number(plain(constants.light), 0),
-          fogged: number((pass.combos || {}).FOG, 1) !== 0,
-          surface: surfaceOf(pass, constants),
-          // How much it shows and the color laid over its picture, as its material says —
-          // numbers, or what scripts make of them: a sky that darkens at night.
-          alpha: constants.alpha === undefined ? null : materialLive(thing, number_, 'alpha', constants.alpha, 1),
-          color: constants.color === undefined ? null : materialLive(thing, number_, 'color', constants.color, 3)
-        };
+        return Object.assign({ corners: corners, count: count, shape: shape, length: triangles.length,
+                               counted: piece.wideTriangles ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT }, partLook(piece.material, thing, number_));
       }).filter(Boolean);
       if (!parts.length) return null;
       // How large it is, for what is said to bounce off it.

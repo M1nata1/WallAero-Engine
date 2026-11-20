@@ -1,6 +1,6 @@
   // Building: made by play() with what it shares (`ctx`), handing back what the rest of it uses.
   function makeBuilding(ctx) {
-    var hearing = ctx.hearing, listen = ctx.listen, isSet = ctx.isSet, files = ctx.files, json = ctx.json, texture = ctx.texture, description = ctx.description, inDepth = ctx.inDepth, bands = ctx.bands;
+    var hearing = ctx.hearing, listen = ctx.listen, isSet = ctx.isSet, files = ctx.files, json = ctx.json, materialPass = ctx.materialPass, texture = ctx.texture, description = ctx.description, inDepth = ctx.inDepth, bands = ctx.bands;
     // --- Building ---------------------------------------------------------
 
     ctx.listening = false;
@@ -23,7 +23,7 @@
         // of Wallpaper Engine's template (843532366, 480 by 300, its middle at 240, 150), or,
         // without a picture to tell, twice as far as the middle it is placed at.
         var firstModel = json(String(plain(first.image) || '')) || {};
-        var firstPass = ((json(String(firstModel.material || '')) || {}).passes || [])[0] || {};
+        var firstPass = materialPass(firstModel.material) || {};
         var firstPicture = (firstPass.textures || [])[0] ? texture('materials/' + firstPass.textures[0]) : null;
         var firstFrame = firstPicture && firstPicture.frames && firstPicture.frames[0];
         firstSize = firstFrame ? [firstFrame[4], firstFrame[7]] : firstPicture && firstPicture.width > 1 ? [firstPicture.width, firstPicture.height]

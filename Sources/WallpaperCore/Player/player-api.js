@@ -1,6 +1,6 @@
   // What the app asks of a scene playing: made by play() with what it shares (`ctx`), handing back what the rest of it uses.
   function makePlayerApi(ctx) {
-    var files = ctx.files, pictures = ctx.pictures, gl = ctx.gl, json = ctx.json, texture = ctx.texture, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, objects = ctx.objects, changed = ctx.changed, forScripts = ctx.forScripts, tellScripts = ctx.tellScripts, hearOfMedia = ctx.hearOfMedia, nudged = ctx.nudged, buildPuppet = ctx.buildPuppet, cameraLook = ctx.cameraLook, activeCamera = ctx.activeCamera, view = ctx.view, standing = ctx.standing, spot = ctx.spot, merged = ctx.merged, refresh = ctx.refresh, color = ctx.color, isSet = ctx.isSet, hexOf = ctx.hexOf, changeOf = ctx.changeOf, amended = ctx.amended, amendGeneral = ctx.amendGeneral, skeleton = ctx.skeleton, canonical = ctx.canonical, follow = ctx.follow, isMoving = ctx.isMoving, isLively = ctx.isLively, wake = ctx.wake, goOn = ctx.goOn, holdFilms = ctx.holdFilms, sceneAt = ctx.sceneAt, pageAt = ctx.pageAt, lost = ctx.lost, restored = ctx.restored;
+    var files = ctx.files, pictures = ctx.pictures, gl = ctx.gl, json = ctx.json, materialPass = ctx.materialPass, texture = ctx.texture, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, objects = ctx.objects, changed = ctx.changed, forScripts = ctx.forScripts, tellScripts = ctx.tellScripts, hearOfMedia = ctx.hearOfMedia, nudged = ctx.nudged, buildPuppet = ctx.buildPuppet, cameraLook = ctx.cameraLook, activeCamera = ctx.activeCamera, view = ctx.view, standing = ctx.standing, spot = ctx.spot, merged = ctx.merged, refresh = ctx.refresh, color = ctx.color, isSet = ctx.isSet, hexOf = ctx.hexOf, changeOf = ctx.changeOf, amended = ctx.amended, amendGeneral = ctx.amendGeneral, skeleton = ctx.skeleton, canonical = ctx.canonical, follow = ctx.follow, isMoving = ctx.isMoving, isLively = ctx.isLively, wake = ctx.wake, goOn = ctx.goOn, holdFilms = ctx.holdFilms, sceneAt = ctx.sceneAt, pageAt = ctx.pageAt, lost = ctx.lost, restored = ctx.restored;
     ctx.player = {
       // `again` when the same canvas is about to be drawn on anew: what it has is then kept.
       stop: function (again) {
@@ -372,7 +372,7 @@
       var seen = {};
       (effect.passes || []).forEach(function (step, index) {
         if (step.command) return;
-        var own = ((json(step.material) || {}).passes || [])[0];
+        var own = materialPass(step.material);
         var vertex = own ? files['shaders/' + key(own.shader) + '.vert'] : null;
         var fragment = own ? files['shaders/' + key(own.shader) + '.frag'] : null;
         if (typeof vertex !== 'string' || typeof fragment !== 'string') return;

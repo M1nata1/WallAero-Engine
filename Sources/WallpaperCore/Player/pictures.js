@@ -1,6 +1,6 @@
   // Pictures: made by play() with what it shares (`ctx`), handing back what the rest of it uses.
   function makePictures(ctx) {
-    var freeLook = ctx.freeLook, cameraLook = ctx.cameraLook, eyePlace = ctx.eyePlace, activeCamera = ctx.activeCamera, scenePathLook = ctx.scenePathLook, pathLook = ctx.pathLook, cameraMatrix = ctx.cameraMatrix, view = ctx.view, also = ctx.also, standing = ctx.standing, spot = ctx.spot, stale = ctx.stale, showsAll = ctx.showsAll, nextPath = ctx.nextPath, files = ctx.files, puppets = ctx.puppets, json = ctx.json, compositeNamed = ctx.compositeNamed, flat = ctx.flat, shows = ctx.shows, chosenTexture = ctx.chosenTexture, texture = ctx.texture, release = ctx.release, description = ctx.description, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, screenLayer = ctx.screenLayer, buildPass = ctx.buildPass, things = ctx.things, same = ctx.same, live = ctx.live, liveOfAnyKind = ctx.liveOfAnyKind, times = ctx.times, matrixOf = ctx.matrixOf, nudged = ctx.nudged, buildPuppet = ctx.buildPuppet, m4mul = ctx.m4mul, m4invert = ctx.m4invert, isSet = ctx.isSet, seenPart = ctx.seenPart;
+    var freeLook = ctx.freeLook, cameraLook = ctx.cameraLook, eyePlace = ctx.eyePlace, activeCamera = ctx.activeCamera, scenePathLook = ctx.scenePathLook, pathLook = ctx.pathLook, cameraMatrix = ctx.cameraMatrix, view = ctx.view, also = ctx.also, standing = ctx.standing, spot = ctx.spot, stale = ctx.stale, showsAll = ctx.showsAll, nextPath = ctx.nextPath, files = ctx.files, puppets = ctx.puppets, json = ctx.json, materialPass = ctx.materialPass, compositeNamed = ctx.compositeNamed, flat = ctx.flat, shows = ctx.shows, chosenTexture = ctx.chosenTexture, texture = ctx.texture, release = ctx.release, description = ctx.description, general = ctx.general, inDepth = ctx.inDepth, unplaced = ctx.unplaced, screenLayer = ctx.screenLayer, buildPass = ctx.buildPass, things = ctx.things, same = ctx.same, live = ctx.live, liveOfAnyKind = ctx.liveOfAnyKind, times = ctx.times, matrixOf = ctx.matrixOf, nudged = ctx.nudged, buildPuppet = ctx.buildPuppet, m4mul = ctx.m4mul, m4invert = ctx.m4invert, isSet = ctx.isSet, seenPart = ctx.seenPart;
     // --- Pictures ---------------------------------------------------------
 
     function merged(first, second) {
@@ -208,7 +208,7 @@
             return;
           }
           var chosen = (use.passes || [])[index] || {};
-          var own = ((json(step.material) || {}).passes || [])[0];
+          var own = materialPass(step.material);
           if (!own) {
             whole = false;
             note(what + ': its material is not in the scene, left out');
@@ -313,7 +313,7 @@
         note('“' + layer.name + '”: its model ' + modelName + ' is not in the scene');
         return null;
       }
-      var base = (model && (json(model.material) || {}).passes || [])[0] || {};
+      var base = (model && materialPass(model.material)) || {};
       layer.blending = key(base.blending || 'translucent');
       // In a scene in three dimensions a picture stands in the world, as large in its units as
       // it has pixels, and is seen through the camera; a layer of the whole screen stays on
