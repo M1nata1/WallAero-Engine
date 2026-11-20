@@ -4,16 +4,20 @@ Every rule of Wallpaper Engine's scene format the app knows, and the side that i
 The split (architecture plan, stage 5):
 
 - **Swift**: whatever does not change while a scene plays. That covers the binary files (`.pkg`,
-  `.tex`, `.mdl`), the shape of the JSON, default values, how materials and effects inherit,
-  and the names of files. The player is handed the scene already read.
+  `.tex`, `.mdl`) and the names the table is laid out under. Swift also reads the scene's JSON
+  files for the player (`WallpaperEngineSceneReading`), keeping keys in order and dropping
+  trailing commas; the player is handed those in place of the files as written.
 - **The player (JS)**: whatever is worked out while a scene plays. That covers settings, combos,
-  curves, bones and scripts. When the editor needs one of these values, Swift asks the same JS
-  code for it instead of keeping a copy.
+  curves, bones and scripts. It also covers what scripts need from the format when they make
+  layers while playing (`createLayer`): material inheritance and the values a file leaves
+  unsaid. When the editor needs one of these, Swift asks the player, or reads the player's own
+  table (`Player/defaults.js`), instead of keeping a copy.
 
-A row marked **both** is a rule written twice. Stage 5 is done when no row says **both**.
-Shared cases live in `Tests/Fixtures/we-format/`; both sides' tests read them.
+A row marked **both** is a rule written twice. No such row is left. Two rules live on both sides
+because each side needs them: file names, and the shape of a value. Shared cases in
+`Tests/Fixtures/we-format/` hold both sides to one rule, and both sides' tests read them.
 
-Last surveyed: 2026-11-19, on `WallAero-Engine-v-4.1` (after v4.0).
+Last surveyed: 2026-11-19; completed 2026-11-20 on `WallAero-Engine-v-4.1`.
 
 ## Read once (belongs to Swift)
 
@@ -53,14 +57,13 @@ Last surveyed: 2026-11-19, on `WallAero-Engine-v-4.1` (after v4.0).
 |---|------|-------|--------|------|
 | 22 | When a setting is shown in the settings window: `project.json` `condition`, an Angular expression | `WallpaperEngineCondition` | — | The plan proposed making this a wrapper over the player. The player never evaluates it, because it only decides what the settings window shows. So it has one implementation and stays in Swift. |
 
-## Order of work
+## How it was done
 
-1. Shared cases first. `Tests/Fixtures/we-format/<rule>.json` gives the input and the expected
-   result. For a **both** row, both implementations must pass the same file before either is
-   removed.
-2. Runtime rows (16, 17). The editor calls the player's code, and the Swift copy goes.
-3. Static rows (4–10), one at a time. Swift writes the read scene into `files.json` (format 2) and
-   the player stops reading the raw `scene.json`, materials and effects for that rule. The
-   editor's live changes (`setSceneFile`, `setFiles`, `editorUpdate`) go through the same Swift
-   reading before they reach the player.
-4. Each step is checked with `scripts/compare.sh` and against Wallpaper Engine (`scripts/we/`).
+1. Shared cases first: `Tests/Fixtures/we-format/<rule>.json` (curves, names, values). Both
+   implementations passed the same file before the second one was removed.
+2. Runtime rows (16, 17): the editor calls the player's code (`WallpaperEngineCurves`, the
+   `bones` query), and the Swift copy went.
+3. Defaults (6, 7, 7a): one table in the player that the app reads.
+4. Scene size (10): the editor asks the player.
+5. Inheritance (8, 9): one `materialPass` in the player, used everywhere.
+6. Every step was checked with `scripts/compare.sh`: no picture changed.
