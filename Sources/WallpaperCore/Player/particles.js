@@ -1458,7 +1458,7 @@
       }
 
       // How far the eye is from the scene, for particles with depth.
-      var away = (ctx.sceneHeight / 2) / Math.tan(number(general.perspectiveoverridefov, number(general.fov, 50)) * Math.PI / 360);
+      var away = (ctx.sceneHeight / 2) / Math.tan(number(general.perspectiveoverridefov, number(general.fov, defaults.general.fov)) * Math.PI / 360);
 
       // In a scene in three dimensions, as Wallpaper Engine's particle shaders do it: a sprite
       // is a square about the particle in the system's own space — along its axes, or turned

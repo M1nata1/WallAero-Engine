@@ -371,8 +371,8 @@
         // Without a normal map nothing is reflected, as in Wallpaper Engine.
         if (lighting || normal) layer.lit = {
           lighting: lighting, reflecting: reflecting && !!normal, normal: normal, masks: masks,
-          metallic: number(plain(own.metallic), 0.5), roughness: number(plain(own.roughness), 0.5),
-          reflectivity: number(plain(own.reflectivity), 1),
+          metallic: number(plain(own.metallic), defaults.lit.metallic), roughness: number(plain(own.roughness), defaults.lit.roughness),
+          reflectivity: number(plain(own.reflectivity), defaults.lit.reflectivity),
           emissive: numbers(plain(own.emissivecolor), 3, 1), glow: number(plain(own.emissivebrightness), 1),
           // Which of the four channels of the masks stand for what: as the material's combos
           // say, else as the masks' own file says (bits 20 to 23 of its flags), as with a

@@ -37,7 +37,7 @@
           any = true;
         });
         if (!any || ctx.stopped) return;
-        ctx.clear = numbers(general.clearcolor, 3, 0);
+        ctx.clear = numbers(general.clearcolor, 3, defaults.general.clearcolor);
         ctx.things.slice().forEach(function (thing) { refresh(thing, true); });
         tellScripts('applyUserProperties', other);
         changed();
@@ -128,7 +128,7 @@
           return { depth: false, x: seen.x, y: seen.y, zoom: seen.zoom, width: ctx.sceneWidth, height: ctx.sceneHeight };
         }
         var look = cameraLook(), shot = activeCamera();
-        var fov = (shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) || number(general.perspectiveoverridefov, number(general.fov, 50));
+        var fov = (shot && number(plain(shot.state.fov ? shot.state.fov[0] : shot.said.fov), 0)) || number(general.perspectiveoverridefov, number(general.fov, defaults.general.fov));
         return { depth: true, eye: look.eye, center: look.center, up: look.up, fov: fov, scripted: !!ctx.scriptedLook,
                  camera: shot ? Number(shot.id) : null, hangs: !!(shot && shot.parent !== undefined) };
       },

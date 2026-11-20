@@ -340,9 +340,9 @@ private struct EngineObjectProperties: View {
                 }
                 ColorRow("Color", hex: model.color(id, "color"))
                     .disabled(model.isScripted(id, "color"))
-                NumberRow("Brightness", value: model.number(id, "intensity", default: 1), in: 0...20, step: 0.01)
-                NumberRow("Reach", value: model.number(id, "radius", default: 500), in: 0...max(model.document.size.width * 2, 1000))
-                NumberRow("Falloff", value: model.number(id, "exponent", default: 1), in: 0.01...10, step: 0.01)
+                NumberRow("Brightness", value: model.number(id, "intensity", default: Self.unsaidNumber("intensity")), in: 0...20, step: 0.01)
+                NumberRow("Reach", value: model.number(id, "radius", default: Self.unsaidNumber("radius")), in: 0...max(model.document.size.width * 2, 1000))
+                NumberRow("Falloff", value: model.number(id, "exponent", default: Self.unsaidNumber("exponent")), in: 0.01...10, step: 0.01)
                 NumberRow("Height", value: model.part(id, "origin", 2, default: [0, 0, 200]), in: -500...2000)
             }
         case .camera:
@@ -383,10 +383,10 @@ private struct EngineObjectProperties: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                NumberRow("Metalness", value: model.materialValue(id, "metallic", default: 0.5), in: 0...1, step: 0.01)
-                NumberRow("Surface Roughness", value: model.materialValue(id, "roughness", default: 0.5), in: 0...1, step: 0.01)
+                NumberRow("Metalness", value: model.materialValue(id, "metallic", default: WallpaperEngineDefaults.table["lit"]?["metallic"]?.numberValue ?? 0), in: 0...1, step: 0.01)
+                NumberRow("Surface Roughness", value: model.materialValue(id, "roughness", default: WallpaperEngineDefaults.table["lit"]?["roughness"]?.numberValue ?? 0), in: 0...1, step: 0.01)
                 if reflection.wrappedValue {
-                    NumberRow("Reflectivity", value: model.materialValue(id, "reflectivity", default: 1), in: 0...1, step: 0.01)
+                    NumberRow("Reflectivity", value: model.materialValue(id, "reflectivity", default: WallpaperEngineDefaults.table["lit"]?["reflectivity"]?.numberValue ?? 0), in: 0...1, step: 0.01)
                 }
             }
         } header: {
@@ -668,32 +668,32 @@ private struct EngineSceneProperties: View {
                 Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
                     .foregroundStyle(.secondary)
             }
-            ColorRow("Background Color", hex: model.generalColor("clearcolor", default: [0, 0, 0]))
+            ColorRow("Background Color", hex: model.generalColor("clearcolor", default: WallpaperEngineDefaults.numbers(general: "clearcolor", count: 3)))
         }
     }
 
     @ViewBuilder
     private var viewTab: some View {
         Section("Camera") {
-            Toggle("Parallax", isOn: model.generalFlag("cameraparallax", default: false))
+            Toggle("Parallax", isOn: model.generalFlag("cameraparallax", default: WallpaperEngineDefaults.general("cameraparallax")?.boolValue ?? false))
             if model.document[general: "cameraparallax"]?.plain.boolValue == true {
-                NumberRow("Amount", value: model.general("cameraparallaxamount", default: 0.5), in: 0...2, step: 0.01)
-                NumberRow("Delay", value: model.general("cameraparallaxdelay", default: 0.1), in: 0...1, step: 0.01)
-                NumberRow("Pointer Influence", value: model.general("cameraparallaxmouseinfluence", default: 0), in: 0...1, step: 0.01)
+                NumberRow("Amount", value: model.general("cameraparallaxamount", default: WallpaperEngineDefaults.general("cameraparallaxamount")?.numberValue ?? 0), in: 0...2, step: 0.01)
+                NumberRow("Delay", value: model.general("cameraparallaxdelay", default: WallpaperEngineDefaults.general("cameraparallaxdelay")?.numberValue ?? 0), in: 0...1, step: 0.01)
+                NumberRow("Pointer Influence", value: model.general("cameraparallaxmouseinfluence", default: WallpaperEngineDefaults.general("cameraparallaxmouseinfluence")?.numberValue ?? 0), in: 0...1, step: 0.01)
             }
-            Toggle("Shake", isOn: model.generalFlag("camerashake", default: false))
+            Toggle("Shake", isOn: model.generalFlag("camerashake", default: WallpaperEngineDefaults.general("camerashake")?.boolValue ?? false))
             if model.document[general: "camerashake"]?.plain.boolValue == true {
-                NumberRow("Amplitude", value: model.general("camerashakeamplitude", default: 0.5), in: 0...5, step: 0.01)
-                NumberRow("Speed", value: model.general("camerashakespeed", default: 3), in: 0...10, step: 0.01)
-                NumberRow("Roughness", value: model.general("camerashakeroughness", default: 1), in: 0...5, step: 0.01)
+                NumberRow("Amplitude", value: model.general("camerashakeamplitude", default: WallpaperEngineDefaults.general("camerashakeamplitude")?.numberValue ?? 0), in: 0...5, step: 0.01)
+                NumberRow("Speed", value: model.general("camerashakespeed", default: WallpaperEngineDefaults.general("camerashakespeed")?.numberValue ?? 0), in: 0...10, step: 0.01)
+                NumberRow("Roughness", value: model.general("camerashakeroughness", default: WallpaperEngineDefaults.general("camerashakeroughness")?.numberValue ?? 0), in: 0...5, step: 0.01)
             }
-            NumberRow("Camera Zoom", value: model.general("zoom", default: 1), in: 0.5...3, step: 0.01)
+            NumberRow("Camera Zoom", value: model.general("zoom", default: WallpaperEngineDefaults.general("zoom")?.numberValue ?? 0), in: 0.5...3, step: 0.01)
         }
         Section("Bloom") {
-            Toggle("Bloom", isOn: model.generalFlag("bloom", default: false))
+            Toggle("Bloom", isOn: model.generalFlag("bloom", default: WallpaperEngineDefaults.general("bloom")?.boolValue ?? false))
             if model.document[general: "bloom"]?.plain.boolValue == true {
-                NumberRow("Strength", value: model.general("bloomstrength", default: 2), in: 0...5, step: 0.01)
-                NumberRow("Threshold", value: model.general("bloomthreshold", default: 0.65), in: 0...1, step: 0.01)
+                NumberRow("Strength", value: model.general("bloomstrength", default: WallpaperEngineDefaults.general("bloomstrength")?.numberValue ?? 0), in: 0...5, step: 0.01)
+                NumberRow("Threshold", value: model.general("bloomthreshold", default: WallpaperEngineDefaults.general("bloomthreshold")?.numberValue ?? 0), in: 0...1, step: 0.01)
             }
         }
     }
@@ -701,16 +701,16 @@ private struct EngineSceneProperties: View {
     @ViewBuilder
     private var environmentTab: some View {
         Section("Physics") {
-            NumberRow("Gravity", value: model.general("gravitystrength", default: 1), in: 0...5, step: 0.01)
-            Toggle("Wind", isOn: model.generalFlag("windenabled", default: false))
+            NumberRow("Gravity", value: model.general("gravitystrength", default: WallpaperEngineDefaults.general("gravitystrength")?.numberValue ?? 0), in: 0...5, step: 0.01)
+            Toggle("Wind", isOn: model.generalFlag("windenabled", default: WallpaperEngineDefaults.general("windenabled")?.boolValue ?? false))
             if model.document[general: "windenabled"]?.plain.boolValue == true {
-                NumberRow("Wind Strength", value: model.general("windstrength", default: 1), in: 0...5, step: 0.01)
+                NumberRow("Wind Strength", value: model.general("windstrength", default: WallpaperEngineDefaults.general("windstrength")?.numberValue ?? 0), in: 0...5, step: 0.01)
                 NumberRow("Wind Direction", value: model.windDirection(), in: -180...180, suffix: "°")
             }
         }
         Section("Scene Light") {
-            ColorRow("Ambient Light", hex: model.generalColor("ambientcolor", default: [0.3, 0.3, 0.3]))
-            ColorRow("Sky Light", hex: model.generalColor("skylightcolor", default: [0.3, 0.3, 0.3]))
+            ColorRow("Ambient Light", hex: model.generalColor("ambientcolor", default: WallpaperEngineDefaults.numbers(general: "ambientcolor", count: 3)))
+            ColorRow("Sky Light", hex: model.generalColor("skylightcolor", default: WallpaperEngineDefaults.numbers(general: "skylightcolor", count: 3)))
         }
     }
 }

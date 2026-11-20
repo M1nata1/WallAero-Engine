@@ -6,6 +6,9 @@
   // this file, so that both can read it.
   //
   // object: what every object takes; text, sound, light: what objects of those kinds take.
+  // general: the scene's own values. lit: what a lit picture's material takes, and the ambient
+  // light it is lit with (0.2, where a model's is 0: both as the player has had them; which of
+  // them Wallpaper Engine takes is open, docs/we-format.md). material: a model's material.
   // particles: by part of a system — its emitters, what sets a new particle up (initializers, by
   // name, and what all of them take), what changes one as it lives (operators, likewise),
   // remapping, collisions, and the system's own values.
@@ -58,7 +61,49 @@
       "playbackmode": "loop"
     },
     "light": {
-      "light": "lpoint"
+      "light": "lpoint",
+      "intensity": 1,
+      "radius": 0,
+      "exponent": 1
+    },
+    "general": {
+      "ambientcolor": 0,
+      "bloom": false,
+      "bloomhdrstrength": 2,
+      "bloomhdrthreshold": 1,
+      "bloomstrength": 2,
+      "bloomthreshold": 0.65,
+      "bloomtint": 1,
+      "camerafade": true,
+      "cameraparallax": false,
+      "cameraparallaxamount": 0.5,
+      "cameraparallaxdelay": 0.1,
+      "cameraparallaxmouseinfluence": 0.5,
+      "camerashake": false,
+      "camerashakeamplitude": 0.5,
+      "camerashakeroughness": 1,
+      "camerashakespeed": 3,
+      "clearcolor": 0,
+      "farz": 10000,
+      "fov": 50,
+      "gravitystrength": 1,
+      "hdr": false,
+      "nearz": 0.01,
+      "skylightcolor": 0,
+      "winddirection": 0,
+      "windenabled": false,
+      "windstrength": 1,
+      "zoom": 1
+    },
+    "lit": {
+      "ambientcolor": 0.2,
+      "metallic": 0.5,
+      "roughness": 0.5,
+      "reflectivity": 1
+    },
+    "material": {
+      "metallic": 0,
+      "roughness": 0.5
     },
     "particles": {
       "initializer": {

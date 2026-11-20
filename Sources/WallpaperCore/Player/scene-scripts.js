@@ -737,20 +737,20 @@
         if (typeof said.zoom === 'number' && said.zoom > 0) ctx.camera.zoom = said.zoom;
         ctx.dirty = true;
       },
-      get camerafade() { return flag(general.camerafade, true); },
+      get camerafade() { return flag(general.camerafade, defaults.general.camerafade); },
       set camerafade(value) { general.camerafade = !!value; },
       // How wide a scene in three dimensions is seen.
-      get fov() { return number(general.perspectiveoverridefov, number(general.fov, 50)); },
+      get fov() { return number(general.perspectiveoverridefov, number(general.fov, defaults.general.fov)); },
       set fov(value) { if (Number(value) > 0) { general.perspectiveoverridefov = Number(value); ctx.dirty = true; } },
-      get bloom() { return flag(general.bloom, false); },
+      get bloom() { return flag(general.bloom, defaults.general.bloom); },
       set bloom(value) { general.bloom = !!value; ctx.dirty = true; },
-      get bloomstrength() { return number(general.bloomstrength, 2); },
+      get bloomstrength() { return number(general.bloomstrength, defaults.general.bloomstrength); },
       set bloomstrength(value) { general.bloomstrength = Number(value); ctx.dirty = true; },
-      get bloomthreshold() { return number(general.bloomthreshold, 0.65); },
+      get bloomthreshold() { return number(general.bloomthreshold, defaults.general.bloomthreshold); },
       set bloomthreshold(value) { general.bloomthreshold = Number(value); ctx.dirty = true; },
       get clearcolor() { return new Vec3(ctx.clear[0], ctx.clear[1], ctx.clear[2]); },
       set clearcolor(value) { ctx.clear = [value.x, value.y, value.z]; ctx.dirty = true; },
-      get cameraparallax() { return flag(general.cameraparallax, false); },
+      get cameraparallax() { return flag(general.cameraparallax, defaults.general.cameraparallax); },
       set cameraparallax(value) { general.cameraparallax = !!value; ctx.dirty = true; }
     });
 

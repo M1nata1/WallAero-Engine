@@ -362,7 +362,7 @@
     function screenLayer(object) {
       return /composelayer|fullscreenlayer|projectlayer/.test(key(String(plain(object.image) || '')));
     }
-    var clear = numbers(general.clearcolor, 3, 0);
+    var clear = numbers(general.clearcolor, 3, defaults.general.clearcolor);
     var scale = 1;          // pixels drawn to a unit of the scene
     var sceneTarget = null; // the whole scene, as drawn so far
     var copyTarget = null;  // a copy of it, for what is blended with what lies under it

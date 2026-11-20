@@ -32,7 +32,20 @@ public enum WallpaperEngineDefaults {
     /// An object's value as so many numbers: a single number stands for all of them, as the
     /// player reads it.
     public static func numbers(_ key: String, count: Int) -> [Double] {
-        let value = object(key)
+        spread(object(key), count: count)
+    }
+
+    /// One of the scene's own values (`general`).
+    public static func general(_ key: String) -> JSONValue? {
+        table["general"]?[key]
+    }
+
+    /// One of the scene's own values as so many numbers.
+    public static func numbers(general key: String, count: Int) -> [Double] {
+        spread(general(key), count: count)
+    }
+
+    static func spread(_ value: JSONValue?, count: Int) -> [Double] {
         let said = value?.arrayValue?.compactMap(\.numberValue) ?? value?.numberValue.map { [$0] } ?? [0]
         return (0..<count).map { $0 < said.count ? said[$0] : said[0] }
     }

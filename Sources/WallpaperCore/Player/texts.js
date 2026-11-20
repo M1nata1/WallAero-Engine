@@ -454,7 +454,7 @@
       gl.uniform1f(at('u_Roughness'), lit.roughness);
       gl.uniform1f(at('u_Reflectivity'), lit.reflectivity);
       gl.uniform3f(at('u_Emissive'), lit.emissive[0] * lit.glow, lit.emissive[1] * lit.glow, lit.emissive[2] * lit.glow);
-      var ambient = numbers(general.ambientcolor, 3, 0.2);
+      var ambient = numbers(general.ambientcolor, 3, defaults.lit.ambientcolor);
       gl.uniform3f(at('u_Ambient'), ambient[0], ambient[1], ambient[2]);
       var lights = sceneLights();
       gl.uniform1i(at('u_LightCount'), lights.length);
