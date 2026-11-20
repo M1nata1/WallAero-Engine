@@ -130,7 +130,7 @@ struct WallpaperEnginePackage {
     /// written apart from their letters, where the scene writes them as one (3660962877's
     /// song, ナブナ).
     private static func key(_ name: String) -> String {
-        name.replacingOccurrences(of: "\\", with: "/").lowercased().precomposedStringWithCanonicalMapping
+        WallpaperEngineScene.key(name)
     }
 }
 

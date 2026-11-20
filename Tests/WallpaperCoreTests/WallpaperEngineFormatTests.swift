@@ -10,6 +10,14 @@ final class WallpaperEngineFormatTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
     }
 
+    func testNamesAreKnownAsThePlayerKnowsThem() throws {
+        let cases = try XCTUnwrap(Self.fixture("names")["cases"] as? [[String: String]])
+        XCTAssertGreaterThan(cases.count, 5)
+        for each in cases {
+            XCTAssertEqual(WallpaperEngineScene.key(try XCTUnwrap(each["name"])), each["key"])
+        }
+    }
+
     func testCurvesAreWorkedOutAsThePlayerDoes() throws {
         let fixture = try Self.fixture("curves")
         let animations = try XCTUnwrap(fixture["animations"] as? [String: Any])

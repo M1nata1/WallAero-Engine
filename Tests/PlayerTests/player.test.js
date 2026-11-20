@@ -70,6 +70,18 @@ test('the table of values left unsaid is plain JSON, as the app reads it (Wallpa
   assert.strictEqual(table.particles.emitter.rate, 5);
 });
 
+test('names are known as the shared cases say (Tests/Fixtures/we-format/names.json)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const vm = require('vm');
+  const page = {};
+  vm.createContext(page);
+  // values.js alone: it opens nothing and needs nothing.
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', '..', 'Sources', 'WallpaperCore', 'Player', 'values.js'), 'utf8'), page);
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'Fixtures', 'we-format', 'names.json'), 'utf8'));
+  for (const each of fixture.cases) assert.strictEqual(page.key(each.name), each.key, each.name);
+});
+
 test('numbers are read from text, one number or none', () => {
   assert.deepStrictEqual(Array.from(engine.numbers('1 2', 3, 7)), [1, 2, 7]);
   assert.deepStrictEqual(Array.from(engine.numbers(4, 3, 0)), [4, 4, 4]);
