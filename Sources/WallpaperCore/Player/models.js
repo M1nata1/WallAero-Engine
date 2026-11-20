@@ -1017,7 +1017,7 @@
     // A light: where it is, its color and strength, how far it reaches and how fast it fades
     // there. A light that shines from far away in one direction has no place, only a way.
     function buildLight(object, thing) {
-      var kind = key(String(plain(object.light) || 'lpoint'));
+      var kind = key(String(plain(object.light) || defaults.light.light));
       thing.lightKind = /dir|sun/.test(kind) ? 'directional' : (/spot/.test(kind) ? 'spot' : (/tube/.test(kind) ? 'tube' : 'point'));
       // A tube reaches as far each way from its middle as its control point says, along the
       // light's own axes.

@@ -5,10 +5,61 @@
   // value left unsaid is what the player plays. The table is plain JSON, up to the last `;` of
   // this file, so that both can read it.
   //
+  // object: what every object takes; text, sound, light: what objects of those kinds take.
   // particles: by part of a system — its emitters, what sets a new particle up (initializers, by
   // name, and what all of them take), what changes one as it lives (operators, likewise),
   // remapping, collisions, and the system's own values.
   var defaults = {
+    "object": {
+      "scale": 1,
+      "angles": 0,
+      "alpha": 1,
+      "color": 1,
+      "visible": true,
+      "parallaxDepth": 1,
+      "brightness": 1,
+      "colorBlendMode": 0,
+      "alignment": "center",
+      "solid": true,
+      "copybackground": true,
+      "clampuvs": false,
+      "queuemode": "sequential"
+    },
+    "text": {
+      "text": "",
+      "pointsize": 32,
+      "horizontalalign": "center",
+      "verticalalign": "center",
+      "padding": 0,
+      "opaquebackground": false,
+      "backgroundcolor": 0,
+      "limitwidth": false,
+      "maxwidth": 0,
+      "limitrows": false,
+      "maxrows": 1,
+      "limituseellipsis": false,
+      "spacing": 0,
+      "outline": false,
+      "outlinecolor": 0,
+      "outlinethickness": 1,
+      "dropshadow": false,
+      "dropshadowcolor": 0,
+      "dropshadowoffset": 0,
+      "dropshadowsize": 0,
+      "dropshadowopacity": 1,
+      "blur": false,
+      "blursize": 0
+    },
+    "sound": {
+      "startsilent": false,
+      "mintime": 0,
+      "maxtime": 0,
+      "volume": 1,
+      "playbackmode": "loop"
+    },
+    "light": {
+      "light": "lpoint"
+    },
     "particles": {
       "initializer": {
         "exponent": 1

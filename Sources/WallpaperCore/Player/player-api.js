@@ -296,23 +296,23 @@
       var file = String(plain(object.image) || plain(object.particle) || '');
       var hangs = isSet(object.parent);
       var origin = numbers(object.origin, 3, unplaced(object));
-      var scale = numbers(object.scale, 3, 1);
-      var angles = numbers(object.angles, 3, 0);
+      var scale = numbers(object.scale, 3, defaults.object.scale);
+      var angles = numbers(object.angles, 3, defaults.object.angles);
       var result = {
         id: Number(object.id), kind: kind, parent: hangs && numbered(object.parent) ? Number(object.parent) : null,
         // Unnamed, an object goes by its file: "models/girl.json" is “girl”.
         name: String(plain(object.name) || file.replace(/^.*\//, '').replace(/\.[^.]*$/, '') || ''),
-        isVisible: flag(object.visible, true), x: real(origin[0]), y: real(origin[1]), scaleX: real(scale[0], 1), scaleY: real(scale[1], 1),
-        rotation: real(-angles[2] * 180 / Math.PI), opacity: real(number(object.alpha, 1) * 100, 100), color: hexOf(numbers(object.color, 3, 1)),
+        isVisible: flag(object.visible, defaults.object.visible), x: real(origin[0]), y: real(origin[1]), scaleX: real(scale[0], 1), scaleY: real(scale[1], 1),
+        rotation: real(-angles[2] * 180 / Math.PI), opacity: real(number(object.alpha, defaults.object.alpha) * 100, 100), color: hexOf(numbers(object.color, 3, defaults.object.color)),
         steered: ctx.FOLLOWED.filter(function (name) { return changesByItself(object[name]); }),
         effects: (Array.isArray(object.effects) ? object.effects : []).map(describeEffect)
       };
       if (kind === 'text') {
         var text = plain(object.text);
         result.text = isSet(text) ? String(text) : '';
-        result.fontSize = real(number(object.pointsize, 32), 32);
+        result.fontSize = real(number(object.pointsize, defaults.text.pointsize), 32);
       }
-      if (kind === 'sound') result.volume = real(number(object.volume, 1) * 100, 100);
+      if (kind === 'sound') result.volume = real(number(object.volume, defaults.sound.volume) * 100, 100);
       if (kind === 'particles') {
         var over = object.instanceoverride || {};
         result.particleCount = real(number(over.count, 1) * 100, 100);

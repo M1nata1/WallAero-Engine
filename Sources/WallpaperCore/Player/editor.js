@@ -62,14 +62,14 @@
         put('origin', origin.join(' '));
       }
       if (isSet(change.scaleX) || isSet(change.scaleY)) {
-        var scale = numbers(object.scale, 3, 1);
+        var scale = numbers(object.scale, 3, defaults.object.scale);
         if (isSet(change.scaleX)) scale[0] = Number(change.scaleX);
         if (isSet(change.scaleY)) scale[1] = Number(change.scaleY);
         put('scale', scale.join(' '));
       }
       if (isSet(change.rotation)) {
         // The editor turns clockwise, as on the page; the scene counts the other way.
-        var angles = numbers(object.angles, 3, 0);
+        var angles = numbers(object.angles, 3, defaults.object.angles);
         angles[2] = -Number(change.rotation) * Math.PI / 180;
         put('angles', angles.join(' '));
       }
@@ -171,7 +171,7 @@
     // when that cannot be done without playing the scene anew: something that was not made
     // ready because it was hidden is to show.
     function follow(thing, object) {
-      if (thing.unmade && flag(object.visible, true)) return false;
+      if (thing.unmade && flag(object.visible, defaults.object.visible)) return false;
       thing.said = object;
       ctx.FOLLOWED.forEach(function (name) {
         var value = thing.lives[name];
@@ -266,7 +266,7 @@
       objects.push(thing);
       if (composited[String(object.id)] && object.image) {
         thing.composite = compositeNamed('_rt_imagelayercomposite_' + object.id + '_a');
-        thing.clampsUvs = flag(object.clampuvs, false);
+        thing.clampsUvs = flag(object.clampuvs, defaults.object.clampuvs);
       }
       // A layer made to put effects over others either takes what the scene shows under it or
       // holds the layers that hang on it, which are then drawn into it. The scene says which;

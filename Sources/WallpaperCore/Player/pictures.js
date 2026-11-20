@@ -40,22 +40,22 @@
       var thing = { name: String(plain(object.name) || otherName || object.id || ''), id: object.id, parent: hangs ? object.parent : undefined,
                     said: object, state: {}, lives: {}, moving: false };
       // The mouse is told to an object unless the scene says it is not solid.
-      thing.solid = flag(object.solid, true);
+      thing.solid = flag(object.solid, defaults.object.solid);
       var given = numbers(object.size, 2, 0);
       if (given[0] > 0 && given[1] > 0) thing.size = given;
       thing.lives.origin = live(object.origin, 3, unplaced(object), thing);
-      thing.lives.scale = live(object.scale, 3, 1, thing);
-      thing.lives.angles = live(object.angles, 3, 0, thing, 'numbers', 'degrees');
-      thing.lives.alpha = live(object.alpha, 1, 1, thing);
-      thing.lives.color = live(object.color, 3, 1, thing);
-      thing.lives.visible = live(object.visible, 0, true, thing, 'flag');
-      thing.state.parallax = numbers(object.parallaxDepth, 2, 1);
+      thing.lives.scale = live(object.scale, 3, defaults.object.scale, thing);
+      thing.lives.angles = live(object.angles, 3, defaults.object.angles, thing, 'numbers', 'degrees');
+      thing.lives.alpha = live(object.alpha, 1, defaults.object.alpha, thing);
+      thing.lives.color = live(object.color, 3, defaults.object.color, thing);
+      thing.lives.visible = live(object.visible, 0, defaults.object.visible, thing, 'flag');
+      thing.state.parallax = numbers(object.parallaxDepth, 2, defaults.object.parallaxDepth);
       // A camera: where it looks from, against the middle of the scene, and how near.
       if (object.camera !== undefined && object.camera !== null) {
         thing.isCamera = true;
         thing.lives.zoom = live(object.zoom === undefined ? 1 : object.zoom, 1, 1, thing);
         thing.paths = cameraPathsOf(plain(object.path));
-        thing.pathOrder = key(String(plain(object.queuemode) || 'sequential')) === 'random' ? 'random' : 'sequential';
+        thing.pathOrder = key(String(plain(object.queuemode) || defaults.object.queuemode)) === 'random' ? 'random' : 'sequential';
       }
       // Whatever else of it has a script behind it: the script is run for what it does.
       Object.keys(object).forEach(function (name) {
@@ -298,8 +298,8 @@
         // Told not to copy the background, it starts empty, and its effects make all it shows.
         // One that holds layers starts, unless told not to, with what the scene shows under it,
         // and they are drawn over that (2902406982's triangles show it through their clip).
-        if (layer.holds) layer.copiesBackground = flag(object.copybackground, true) !== false;
-        if (!layer.holds && flag(object.copybackground, true) === false) {
+        if (layer.holds) layer.copiesBackground = flag(object.copybackground, defaults.object.copybackground) !== false;
+        if (!layer.holds && flag(object.copybackground, defaults.object.copybackground) === false) {
           layer.picture = flat(0, 0, 0, 0);
           layer.plain = true;
         } else if (!layer.holds) {
@@ -345,18 +345,18 @@
       }
       layer.size = size;
       // Which point of the picture is at its place: its middle, the middle of a side, or a corner.
-      var hangs = key(String(plain(object.alignment) || 'center'));
+      var hangs = key(String(plain(object.alignment) || defaults.object.alignment));
       var aside = [/left/.test(hangs) ? size[0] / 2 : (/right/.test(hangs) ? -size[0] / 2 : 0),
                    /top/.test(hangs) ? -size[1] / 2 : (/bottom/.test(hangs) ? size[1] / 2 : 0)];
       if (aside[0] !== 0 || aside[1] !== 0) layer.shift = aside;
-      layer.brightness = number(object.brightness, 1);
+      layer.brightness = number(object.brightness, defaults.object.brightness);
       // Scenes of early versions say how see-through and how bright a picture is in its
       // material rather than on the object.
       var own = {};
       Object.keys(base.constantshadervalues || {}).forEach(function (name) { own[key(name)] = base.constantshadervalues[name]; });
       layer.materialAlpha = number(plain(own.alpha), 1);
       layer.brightness *= number(plain(own.brightness), 1);
-      layer.blendMode = number(object.colorBlendMode, 0);
+      layer.blendMode = number(object.colorBlendMode, defaults.object.colorBlendMode);
       if (layer.picture && layer.picture.frames) layer.moving = true;
       // A picture lit by the scene's lights, through a map of which way its surface faces, or
       // showing what is behind it as a polished surface would: as its material says.

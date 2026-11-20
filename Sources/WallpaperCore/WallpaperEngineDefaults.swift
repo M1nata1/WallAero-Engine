@@ -20,6 +20,23 @@ public enum WallpaperEngineDefaults {
         return String(script[start.upperBound..<end.lowerBound])
     }
 
+    /// A value of an object: what every object takes, or what one of a kind takes (a text, a
+    /// sound, a light).
+    public static func object(_ key: String) -> JSONValue? {
+        for section in ["object", "text", "sound", "light"] {
+            if let value = table[section]?[key] { return value }
+        }
+        return nil
+    }
+
+    /// An object's value as so many numbers: a single number stands for all of them, as the
+    /// player reads it.
+    public static func numbers(_ key: String, count: Int) -> [Double] {
+        let value = object(key)
+        let said = value?.arrayValue?.compactMap(\.numberValue) ?? value?.numberValue.map { [$0] } ?? [0]
+        return (0..<count).map { $0 < said.count ? said[$0] : said[0] }
+    }
+
     /// A value of a part of a system of particles: of its emitters (all take the same), of an
     /// initializer or operator by its name — or what all of them take — or of the system itself
     /// (`section` "system").
