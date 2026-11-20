@@ -577,7 +577,7 @@ final class EngineEditorOverlay: NSView {
             return
         }
         guard let camera = model.cameraView, !camera.inDepth else { return }
-        let size = model.document.size
+        let size = model.sceneSize
         guard size.width > 0, size.height > 0 else { return }
         let width = size.width / camera.zoom, height = size.height / camera.zoom
         let middleX = size.width / 2 + camera.x, middleY = size.height / 2 + camera.y

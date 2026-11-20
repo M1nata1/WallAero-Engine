@@ -147,7 +147,7 @@ private struct EngineObjectProperties: View {
         }
         if kind != .sound {
             Section("Position") {
-                let size = model.document.size
+                let size = model.sceneSize
                 // What hangs on another, and a camera, are placed from a middle.
                 let hangs = model.document.parent(of: id) != nil || kind == .camera
                 // Where an object without a place of its own stands, as the player places it.
@@ -210,7 +210,7 @@ private struct EngineObjectProperties: View {
             }
         case .solid:
             Section("Size") {
-                let scene = model.document.size
+                let scene = model.sceneSize
                 NumberRow("Width", value: model.part(id, "size", 0, default: [100, 100]), in: 1...max(scene.width * 2, 100))
                 NumberRow("Height", value: model.part(id, "size", 1, default: [100, 100]), in: 1...max(scene.height * 2, 100))
             }
@@ -341,7 +341,7 @@ private struct EngineObjectProperties: View {
                 ColorRow("Color", hex: model.color(id, "color"))
                     .disabled(model.isScripted(id, "color"))
                 NumberRow("Brightness", value: model.number(id, "intensity", default: Self.unsaidNumber("intensity")), in: 0...20, step: 0.01)
-                NumberRow("Reach", value: model.number(id, "radius", default: Self.unsaidNumber("radius")), in: 0...max(model.document.size.width * 2, 1000))
+                NumberRow("Reach", value: model.number(id, "radius", default: Self.unsaidNumber("radius")), in: 0...max(model.sceneSize.width * 2, 1000))
                 NumberRow("Falloff", value: model.number(id, "exponent", default: Self.unsaidNumber("exponent")), in: 0.01...10, step: 0.01)
                 NumberRow("Height", value: model.part(id, "origin", 2, default: [0, 0, 200]), in: -500...2000)
             }
@@ -665,7 +665,7 @@ private struct EngineSceneProperties: View {
         Section("Scene") {
             TextField("Title", text: Binding(get: { model.document.title }, set: { model.document.title = $0 }))
             LabeledContent("Size") {
-                Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
+                Text(verbatim: "\(Int(model.sceneSize.width)) × \(Int(model.sceneSize.height))")
                     .foregroundStyle(.secondary)
             }
             ColorRow("Background Color", hex: model.generalColor("clearcolor", default: WallpaperEngineDefaults.numbers(general: "clearcolor", count: 3)))

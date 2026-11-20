@@ -88,7 +88,17 @@ public struct WallpaperEngineDocument: Equatable, Sendable {
 
     // MARK: - The scene
 
-    /// The size the scene is made at, in pixels.
+    /// The size the scene says it is made at, in pixels; nil when it does not say, and leaves it
+    /// to its first picture as the player works it out (docs/we-format.md, row 10).
+    public var writtenSize: CGSize? {
+        guard let projection = scene["general"]?["orthogonalprojection"],
+              let width = projection["width"]?.numberValue, let height = projection["height"]?.numberValue, width > 0, height > 0
+        else { return nil }
+        return CGSize(width: width, height: height)
+    }
+
+    /// The size the scene is made at, in pixels: as it says, else 1920 by 1080. The editor asks
+    /// the player for the size of a scene that does not say (`EngineEditorModel.sceneSize`).
     public var size: CGSize {
         get {
             let projection = scene["general"]?["orthogonalprojection"]

@@ -140,7 +140,7 @@ struct EngineEditorView: View {
 
     /// The scene with its header, and the tools and view controls on it.
     private var viewport: some View {
-        let size = model.document.size
+        let size = model.sceneSize
         return VStack(spacing: 0) {
             if preview.drawsNatively {
                 EngineViewportHeader(model: model, addMenu: addMenu)
@@ -168,7 +168,7 @@ struct EngineEditorView: View {
     private var statusLine: some View {
         HStack(spacing: SystemLook.barSpacing) {
             Spacer(minLength: SystemLook.barSpacing)
-            Text(verbatim: "\(Int(model.document.size.width)) × \(Int(model.document.size.height))")
+            Text(verbatim: "\(Int(model.sceneSize.width)) × \(Int(model.sceneSize.height))")
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             if preview.drawsNatively {
