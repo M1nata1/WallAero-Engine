@@ -82,6 +82,26 @@ test('names are known as the shared cases say (Tests/Fixtures/we-format/names.js
   for (const each of fixture.cases) assert.strictEqual(page.key(each.name), each.key, each.name);
 });
 
+test('values are read as the shared cases say (Tests/Fixtures/we-format/values.json)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const vm = require('vm');
+  const page = {};
+  vm.createContext(page);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', '..', 'Sources', 'WallpaperCore', 'Player', 'values.js'), 'utf8'), page);
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'Fixtures', 'we-format', 'values.json'), 'utf8'));
+  for (const each of fixture.cases) {
+    vm.runInContext('properties = {};', page);
+    const written = page.plain(each.value);
+    assert.deepStrictEqual(written === undefined ? null : written, each.written, JSON.stringify(each.value));
+    if (each.settings) {
+      page.__settings = each.settings;
+      vm.runInContext('properties = __settings;', page);
+      assert.deepStrictEqual(page.plain(each.value), each.playing, JSON.stringify(each));
+    }
+  }
+});
+
 test('numbers are read from text, one number or none', () => {
   assert.deepStrictEqual(Array.from(engine.numbers('1 2', 3, 7)), [1, 2, 7]);
   assert.deepStrictEqual(Array.from(engine.numbers(4, 3, 0)), [4, 4, 4]);

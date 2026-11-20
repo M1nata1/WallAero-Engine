@@ -1,0 +1,137 @@
+{
+ "about": "A value of a scene as written (docs/we-format.md, row 5): plain, or a dictionary with the value under \"value\" and what stands behind it, a setting of the wallpaper under \"user\" (a name, or a name and the choice it must be at for a yes), an animation, a script. A dictionary that names a setting is such a dictionary even without a value. written: the value as written, which the app edits (JSONValue.plain); setting, choice: what it stands on (JSONValue.setting); playing: what the player takes it to be with the wallpaper's settings as given (plain in values.js).",
+ "cases": [
+  {
+   "value": "1.0 0.5 0",
+   "written": "1.0 0.5 0",
+   "setting": null,
+   "choice": null
+  },
+  {
+   "value": {
+    "value": 0.5,
+    "animation": {
+     "c0": []
+    }
+   },
+   "written": 0.5,
+   "setting": null,
+   "choice": null
+  },
+  {
+   "value": {
+    "value": "a",
+    "script": "export function update(v){return v}"
+   },
+   "written": "a",
+   "setting": null,
+   "choice": null
+  },
+  {
+   "value": {
+    "user": "speed",
+    "value": 2
+   },
+   "written": 2,
+   "setting": "speed",
+   "choice": null,
+   "settings": {
+    "speed": 7
+   },
+   "playing": 7
+  },
+  {
+   "value": {
+    "user": "speed",
+    "value": 2
+   },
+   "written": 2,
+   "setting": "speed",
+   "choice": null,
+   "settings": {
+    "other": 1
+   },
+   "playing": 2
+  },
+  {
+   "value": {
+    "user": {
+     "name": "mode",
+     "condition": "2"
+    },
+    "value": true
+   },
+   "written": true,
+   "setting": "mode",
+   "choice": "2",
+   "settings": {
+    "mode": 2
+   },
+   "playing": true
+  },
+  {
+   "value": {
+    "user": {
+     "name": "mode",
+     "condition": "2"
+    },
+    "value": true
+   },
+   "written": true,
+   "setting": "mode",
+   "choice": "2",
+   "settings": {
+    "mode": 1
+   },
+   "playing": false
+  },
+  {
+   "value": {
+    "user": {
+     "name": "mode",
+     "condition": 3
+    },
+    "value": false
+   },
+   "written": false,
+   "setting": "mode",
+   "choice": "3",
+   "settings": {
+    "mode": "3"
+   },
+   "playing": true
+  },
+  {
+   "value": {
+    "user": "lonely"
+   },
+   "written": null,
+   "setting": "lonely",
+   "choice": null
+  },
+  {
+   "value": {
+    "x": 1,
+    "y": 2
+   },
+   "written": {
+    "x": 1,
+    "y": 2
+   },
+   "setting": null,
+   "choice": null
+  },
+  {
+   "value": [
+    1,
+    2
+   ],
+   "written": [
+    1,
+    2
+   ],
+   "setting": null,
+   "choice": null
+  }
+ ]
+}

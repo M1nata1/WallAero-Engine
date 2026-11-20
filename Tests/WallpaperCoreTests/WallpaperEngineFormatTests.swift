@@ -18,6 +18,17 @@ final class WallpaperEngineFormatTests: XCTestCase {
         }
     }
 
+    func testValuesAreReadAsThePlayerReadsThem() throws {
+        let cases = try XCTUnwrap(Self.fixture("values")["cases"] as? [[String: Any]])
+        XCTAssertGreaterThan(cases.count, 5)
+        for each in cases {
+            let value = JSONValue(any: each["value"])
+            XCTAssertEqual(value.plain, JSONValue(any: each["written"]), "\(value)")
+            XCTAssertEqual(value.setting?.name, each["setting"] as? String, "\(value)")
+            XCTAssertEqual(value.setting?.choice, each["choice"] as? String, "\(value)")
+        }
+    }
+
     func testCurvesAreWorkedOutAsThePlayerDoes() throws {
         let fixture = try Self.fixture("curves")
         let animations = try XCTUnwrap(fixture["animations"] as? [String: Any])

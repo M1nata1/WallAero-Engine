@@ -85,8 +85,8 @@ extension EngineEditorModel {
     private static func unlinking(_ name: String, in value: JSONValue) -> JSONValue {
         switch value {
         case .object(var dictionary):
-            if dictionary["user"]?.stringValue == name || dictionary["user"]?["name"]?.stringValue == name {
-                return dictionary["value"] ?? .null
+            if value.setting?.name == name {
+                return value.plain
             }
             for (key, inner) in dictionary { dictionary[key] = unlinking(name, in: inner) }
             return .object(dictionary)
@@ -136,10 +136,8 @@ extension EngineEditorModel {
     func link(_ id: Int, _ key: String) -> Binding<Link?> {
         Binding(
             get: { [weak self] in
-                guard let user = self?.document.object(id)?[key]?["user"] else { return nil }
-                if let name = user.stringValue { return Link(name: name) }
-                guard let name = user["name"]?.stringValue else { return nil }
-                return Link(name: name, choice: user["condition"]?.stringValue)
+                guard let setting = self?.document.object(id)?[key]?.setting else { return nil }
+                return Link(name: setting.name, choice: setting.choice)
             },
             set: { [weak self] link in
                 self?.document.update(id) { object in

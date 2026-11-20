@@ -322,9 +322,7 @@ public enum WallpaperEngineScene {
         var scripts: [String] = []
         func look(_ value: Any) {
             if let dictionary = value as? [String: Any] {
-                if let name = dictionary["user"] as? String {
-                    used.insert(name)
-                } else if let name = (dictionary["user"] as? [String: Any])?["name"] as? String {
+                if let user = dictionary["user"], let name = JSONValue.object(["user": JSONValue(any: user)]).setting?.name {
                     used.insert(name)
                 }
                 if let script = dictionary["script"] as? String {
