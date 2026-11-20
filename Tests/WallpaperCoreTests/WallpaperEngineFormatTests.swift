@@ -33,3 +33,58 @@ final class WallpaperEngineFormatTests: XCTestCase {
         }
     }
 }
+
+/// Wallpaper Engine's JSON files read as written (`WallpaperEngineJSON`).
+final class WallpaperEngineJSONTests: XCTestCase {
+    func testWhatIsReadIsWrittenAsItCameWithoutSpaces() throws {
+        let text = #"{ "b": 1.50, "a": [true, null, -2e3], "s": "x\"yé\\", "b": "again", "o": {} }"#
+        let json = try XCTUnwrap(WallpaperEngineJSON(text: text))
+        XCTAssertEqual(json.text, #"{"b":1.50,"a":[true,null,-2e3],"s":"x\"yé\\","b":"again","o":{}}"#)
+        guard case .object(let members) = json else { return XCTFail() }
+        XCTAssertEqual(members.map(\.key), ["b", "a", "s", "b", "o"], "keys in their order, twice if written twice")
+        XCTAssertEqual(members[2].value.stringValue, "x\"yé\\")
+    }
+
+    func testACommaBeforeTheEndIsPassedOver() throws {
+        XCTAssertEqual(WallpaperEngineJSON(text: #"{"a": [1, 2,], "b": {"c": 3,},}"#)?.text, #"{"a":[1,2],"b":{"c":3}}"#)
+    }
+
+    func testWhatThePlayerCannotReadDoesNotReadHereEither() {
+        for bad in ["{\"a\": 1.}", "{\"a\": +1}", "{\"a\": NaN}", "{\"a\": 01}", "{\"a\": \"x\ny\"}", "{\"a\": 1", "[1 2]", "{} x", "{'a': 1}"] {
+            XCTAssertNil(WallpaperEngineJSON(text: bad), bad)
+        }
+    }
+
+    func testOneMemberIsReadWithoutTheOthers() throws {
+        let table = Data(#"{"format":1,"big":{"x":[1,2,{"y":"]}"}]},"files":{"scene.json":"{\"objects\":[]}"},"puppets":{}}"#.utf8)
+        let files = try XCTUnwrap(WallpaperEngineJSON.member("files", ofObjectIn: table))
+        XCTAssertEqual(files.text, #"{"scene.json":"{\"objects\":[]}"}"#)
+        XCTAssertNil(WallpaperEngineJSON.member("nothing", ofObjectIn: table))
+    }
+
+    func testTheTableIsReadForThePlayer() throws {
+        let table = Data(#"{"format":1,"files":{"scene.json":"{ \"objects\" : [ ], }","shaders/a.frag":"void main() {}"},"puppets":{}}"#.utf8)
+        let read = try XCTUnwrap(WallpaperEngineSceneReading.readTable(table))
+        XCTAssertEqual(read, #"{"scene.json":"{\"objects\":[]}"}"#, "JSON files only, read")
+        XCTAssertEqual(WallpaperEngineSceneReading.read(["scene.json": "{ \"a\":1 }", "x.frag": "{"]), ["scene.json": "{\"a\":1}"])
+    }
+}
+
+/// Not a test: with WALLAERO_READ_CHECK=<library folder>:<out folder>, writes what is read of every
+/// laid-out scene's table to `<out>/<scene>.json`, for Tests/PlayerTests/read-check.js to compare
+/// with the files as written.
+final class WallpaperEngineReadCheck: XCTestCase {
+    func testWriteWhatIsRead() throws {
+        guard let asked = ProcessInfo.processInfo.environment["WALLAERO_READ_CHECK"] else { throw XCTSkip("no library asked for") }
+        let parts = asked.split(separator: ":").map(String.init)
+        let library = URL(fileURLWithPath: parts[0]), out = URL(fileURLWithPath: parts[1])
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        var count = 0
+        for folder in (try? FileManager.default.contentsOfDirectory(at: library.appendingPathComponent("Web"), includingPropertiesForKeys: nil)) ?? [] {
+            guard case .success(let data) = WallpaperEngineSceneData.read(scene: folder), let read = WallpaperEngineSceneReading.readTable(data) else { continue }
+            try Data(read.utf8).write(to: out.appendingPathComponent(folder.lastPathComponent + ".json"))
+            count += 1
+        }
+        print("read-check: \(count) scenes")
+    }
+}

@@ -422,7 +422,9 @@ final class EngineEditorPreviewController {
         }
         guard let view = webView else { return }
         // What the editor script showed while an object was dragged is in the scene now.
-        view.send(.showEngineScene(scene: scene, files: changed))
+        // The scene's JSON files as the app reads them, as the native player is handed them.
+        let read = WallpaperEngineSceneReading.read(changed.merging(["scene.json": scene]) { $1 })
+        view.send(.showEngineScene(scene: read["scene.json"] ?? scene, files: changed.merging(read.filter { $0.key != "scene.json" }) { $1 }))
     }
 
     /// The scene's files were laid out anew: they are read again.

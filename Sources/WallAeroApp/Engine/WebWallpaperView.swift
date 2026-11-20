@@ -176,15 +176,19 @@ final class WebWallpaperView: NSView, CEFPageViewDelegate {
         var served = [CEFServedScript(path: folder.appendingPathComponent(PlayerEnvironment.playerFile).path,
                                       text: WallpaperEngineRuntime.script, file: nil, suffix: "")]
         let table = WallpaperEngineSceneData.url(scene: folder)
+        let script = folder.appendingPathComponent("\(WallpaperEngineScene.folderName)/\(WallpaperEngineScene.filesName)").path
         switch WallpaperEngineSceneData.read(scene: folder) {
-        case .success where FileManager.default.fileExists(atPath: table.path):
-            served.append(CEFServedScript(path: folder.appendingPathComponent("\(WallpaperEngineScene.folderName)/\(WallpaperEngineScene.filesName)").path,
-                                          text: PlayerEnvironment.scenePrefix, file: table.path, suffix: ";\n"))
+        case .success(let data):
+            // The scene's JSON files as the app reads them go over those written.
+            let read = WallpaperEngineSceneReading.readTable(data).map(WallpaperEngineSceneReading.script(putting:)) ?? ""
+            if FileManager.default.fileExists(atPath: table.path) {
+                served.append(CEFServedScript(path: script, text: PlayerEnvironment.scenePrefix, file: table.path, suffix: ";\n" + read))
+            } else {
+                // Laid out before v4.0 and not yet moved on: the old script, as it is.
+                served.append(CEFServedScript(path: script, text: "", file: script, suffix: "\n" + read))
+            }
         case .failure(let problem):
             Log.playback.error("Cannot play the scene in \(folder.lastPathComponent, privacy: .public): its table \(String(describing: problem), privacy: .public)")
-        default:
-            // Laid out before v4.0 and not yet moved on: the page loads the old script itself.
-            break
         }
         return served
     }
