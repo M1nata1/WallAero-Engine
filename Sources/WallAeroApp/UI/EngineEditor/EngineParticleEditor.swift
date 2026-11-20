@@ -31,7 +31,27 @@ struct ParticleComponentKind: Identifiable {
         let key: String
         let title: String
         let kind: ValueKind
-        let fallback: JSONValue
+        /// What a part added in the editor starts with: the app's own choice, as Wallpaper
+        /// Engine's editor has its own for a new part.
+        let initial: JSONValue
+
+        /// What the player takes the value to be when the system's file does not say it
+        /// (`WallpaperEngineDefaults`), in the form the row shows.
+        func unsaid(in section: Section, of part: String) -> JSONValue? {
+            guard let given = WallpaperEngineDefaults.particle(section.rawValue, part, key) else { return nil }
+            // A single number stands for every one of a vector's, as the player reads it.
+            let numbers = given.arrayValue?.compactMap(\.numberValue) ?? given.numberValue.map { [$0] } ?? []
+            guard let first = numbers.first else { return nil }
+            switch kind {
+            case .number: return .number(first)
+            case .vector(let count): return Self.written((0..<count).map { $0 < numbers.count ? numbers[$0] : first })
+            case .color255, .color1: return Self.written((0..<3).map { $0 < numbers.count ? numbers[$0] : first })
+            }
+        }
+
+        static func written(_ numbers: [Double]) -> JSONValue {
+            .string(numbers.map { EngineEditorModel.short($0) }.joined(separator: " "))
+        }
     }
 
     let name: String
@@ -42,15 +62,15 @@ struct ParticleComponentKind: Identifiable {
     var id: String { name }
 
     private static func number(_ key: String, _ title: String, _ fallback: Double, _ range: ClosedRange<Double>) -> Value {
-        Value(key: key, title: title, kind: .number(range), fallback: .number(fallback))
+        Value(key: key, title: title, kind: .number(range), initial: .number(fallback))
     }
 
     private static func vector(_ key: String, _ title: String, _ fallback: [Double]) -> Value {
-        Value(key: key, title: title, kind: .vector(fallback.count), fallback: .string(fallback.map { EngineEditorModel.short($0) }.joined(separator: " ")))
+        Value(key: key, title: title, kind: .vector(fallback.count), initial: Value.written(fallback))
     }
 
     private static func color(_ key: String, _ title: String, _ fallback: String, of255: Bool = true) -> Value {
-        Value(key: key, title: title, kind: of255 ? .color255 : .color1, fallback: .string(fallback))
+        Value(key: key, title: title, kind: of255 ? .color255 : .color1, initial: .string(fallback))
     }
 
     private static let t = { (key: String) in NSLocalizedString(key, comment: "A value of a part of a system of particles") }
@@ -164,8 +184,8 @@ struct EngineParticleSystemSections: View {
     var body: some View {
         if let fileName, model.document.file(fileName) != nil {
             Section("Whole System") {
-                NumberRow("Most Particles", value: systemNumber(fileName, "maxcount", 100), in: 1...5000)
-                NumberRow("Warmed Up For", value: systemNumber(fileName, "starttime", 0), in: 0...60, step: 0.1, suffix: NSLocalizedString("s", comment: "Seconds, after a number"))
+                NumberRow("Most Particles", value: systemNumber(fileName, "maxcount"), in: 1...5000)
+                NumberRow("Warmed Up For", value: systemNumber(fileName, "starttime"), in: 0...60, step: 0.1, suffix: NSLocalizedString("s", comment: "Seconds, after a number"))
                 Picker("Blending", selection: blending(fileName)) {
                     Text("Add Light").tag("additive")
                     Text("Over What Is Behind").tag("translucent")
@@ -208,7 +228,7 @@ struct EngineParticleSystemSections: View {
                 } content: {
                     if let kind = ParticleComponentKind.named(name) {
                         ForEach(kind.values, id: \.key) { value in
-                            valueRow(value, section: section, index: index, fileName: fileName)
+                            valueRow(value, section: section, part: name, index: index, fileName: fileName)
                         }
                     } else {
                         Text("Its values are kept as they are.").font(.callout).foregroundStyle(.secondary)
@@ -230,9 +250,10 @@ struct EngineParticleSystemSections: View {
     }
 
     @ViewBuilder
-    private func valueRow(_ value: ParticleComponentKind.Value, section: ParticleComponentKind.Section, index: Int, fileName: String) -> some View {
+    private func valueRow(_ value: ParticleComponentKind.Value, section: ParticleComponentKind.Section, part: String, index: Int, fileName: String) -> some View {
         let binding = Binding<JSONValue>(
-            get: { model.document.file(fileName)?[section.rawValue]?[index]?[value.key] ?? value.fallback },
+            // A value the file leaves unsaid shows as the player plays it.
+            get: { model.document.file(fileName)?[section.rawValue]?[index]?[value.key] ?? value.unsaid(in: section, of: part) ?? value.initial },
             set: { new in
                 change(fileName) { system in
                     var list = system[section.rawValue]?.arrayValue ?? []
@@ -306,16 +327,16 @@ struct EngineParticleSystemSections: View {
                 }
             }
             var part: [String: JSONValue] = ["name": .string(kind.name), "id": .number(Double(highest + 1))]
-            for value in kind.values { part[value.key] = value.fallback }
+            for value in kind.values { part[value.key] = value.initial }
             list.append(.object(part))
             system[kind.section.rawValue] = .array(list)
         }
         model.endGesture()
     }
 
-    private func systemNumber(_ fileName: String, _ key: String, _ fallback: Double) -> Binding<Double> {
+    private func systemNumber(_ fileName: String, _ key: String) -> Binding<Double> {
         Binding(
-            get: { model.document.file(fileName)?[key]?.numberValue ?? fallback },
+            get: { model.document.file(fileName)?[key]?.numberValue ?? WallpaperEngineDefaults.particle("system", nil, key)?.numberValue ?? 0 },
             set: { new in change(fileName) { $0[key] = .number(new) } }
         )
     }

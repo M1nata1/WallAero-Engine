@@ -60,6 +60,16 @@ test('curves come out as the shared cases say (Tests/Fixtures/we-format/curves.j
   }
 });
 
+test('the table of values left unsaid is plain JSON, as the app reads it (WallpaperEngineDefaults.swift)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const script = fs.readFileSync(path.join(__dirname, '..', '..', 'Sources', 'WallpaperCore', 'Player', 'defaults.js'), 'utf8');
+  const start = script.indexOf('var defaults = ') + 'var defaults = '.length;
+  const table = JSON.parse(script.slice(start, script.lastIndexOf(';')));
+  assert.strictEqual(table.particles.operators.turbulence.speedmax, 200);
+  assert.strictEqual(table.particles.emitter.rate, 5);
+});
+
 test('numbers are read from text, one number or none', () => {
   assert.deepStrictEqual(Array.from(engine.numbers('1 2', 3, 7)), [1, 2, 7]);
   assert.deepStrictEqual(Array.from(engine.numbers(4, 3, 0)), [4, 4, 4]);

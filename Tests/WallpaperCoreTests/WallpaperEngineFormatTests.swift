@@ -88,3 +88,16 @@ final class WallpaperEngineReadCheck: XCTestCase {
         print("read-check: \(count) scenes")
     }
 }
+
+/// The player's table of values left unsaid, read by the app (`WallpaperEngineDefaults`).
+final class WallpaperEngineDefaultsTests: XCTestCase {
+    func testTheAppReadsThePlayersOwnTable() {
+        XCTAssertEqual(WallpaperEngineDefaults.particle("operator", "turbulence", "speedmax")?.numberValue, 200)
+        XCTAssertEqual(WallpaperEngineDefaults.particle("operator", "turbulence", "starttime")?.numberValue, 0, "what all operators take")
+        XCTAssertEqual(WallpaperEngineDefaults.particle("initializer", "sizerandom", "min")?.numberValue, 20)
+        XCTAssertEqual(WallpaperEngineDefaults.particle("emitter", "boxrandom", "rate")?.numberValue, 5)
+        XCTAssertEqual(WallpaperEngineDefaults.particle("system", nil, "maxcount")?.numberValue, 100)
+        XCTAssertEqual(WallpaperEngineDefaults.particle("initializer", "rotationrandom", "max")?.arrayValue?.last?.numberValue ?? 0, 2 * .pi, accuracy: 1e-12)
+        XCTAssertNil(WallpaperEngineDefaults.particle("renderer", "sprite", "x"))
+    }
+}

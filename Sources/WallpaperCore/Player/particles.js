@@ -1,6 +1,8 @@
   // Particles: made by play() with what it shares (`ctx`), handing back what the rest of it uses.
   function makeParticles(ctx) {
     var gl = ctx.gl, bound = ctx.bound, json = ctx.json, link = ctx.link, passBuffer = ctx.passBuffer, sheetFrames = ctx.sheetFrames, texture = ctx.texture, acquire = ctx.acquire, depthOf = ctx.depthOf, general = ctx.general, sceneVersion = ctx.sceneVersion, inDepth = ctx.inDepth, live = ctx.live, times = ctx.times, matrixOf = ctx.matrixOf, CHANNELS = ctx.CHANNELS, viewProjection = ctx.viewProjection, m4invert = ctx.m4invert, byId = ctx.byId, freeLook = ctx.freeLook, cameraLook = ctx.cameraLook, eyePlace = ctx.eyePlace, activeCamera = ctx.activeCamera, cameraMatrix = ctx.cameraMatrix, also = ctx.also, standing = ctx.standing, hearing = ctx.hearing, isSet = ctx.isSet;
+    // What a value a system's file leaves unsaid is taken to be (defaults.js).
+    var standard = defaults.particles;
     // --- Particles --------------------------------------------------------
     //
     // A system of particles is said in three lists: emitters, which make particles; initializers,
@@ -286,27 +288,27 @@
 
     // What gives a new particle one of its properties; null for one not known here.
     function initializer(said, system) {
-      var exponent = number(said.exponent, 1);
+      var exponent = number(said.exponent, standard.initializer.exponent);
       function pick(least, most) {
         return mix(least, most, exponent === 1 ? Math.random() : Math.pow(Math.random(), exponent));
       }
       var least, most;
       switch (key(said.name)) {
         case 'lifetimerandom':
-          least = number(said.min, 1);
-          most = number(said.max, 1);
+          least = number(said.min, standard.initializers.lifetimerandom.min);
+          most = number(said.max, standard.initializers.lifetimerandom.max);
           return function (particle) { particle.life = Math.max(0.01, pick(least, most)); };
         case 'sizerandom':
-          least = number(said.min, 20);
-          most = number(said.max, 20);
+          least = number(said.min, standard.initializers.sizerandom.min);
+          most = number(said.max, standard.initializers.sizerandom.max);
           return function (particle) { particle.size = pick(least, most); };
         case 'alpharandom':
-          least = number(said.min, 1);
-          most = number(said.max, 1);
+          least = number(said.min, standard.initializers.alpharandom.min);
+          most = number(said.max, standard.initializers.alpharandom.max);
           return function (particle) { particle.alpha = pick(least, most); };
         case 'velocityrandom':
-          least = numbers(said.min, 3, 0);
-          most = numbers(said.max, 3, 0);
+          least = numbers(said.min, 3, standard.initializers.velocityrandom.min);
+          most = numbers(said.max, 3, standard.initializers.velocityrandom.max);
           return function (particle) {
             particle.vx += pick(least[0], most[0]);
             particle.vy += pick(least[1], most[1]);
@@ -316,8 +318,8 @@
           // One end said alone stands for both: a system that says only `max: "0 0 0"` makes
           // black particles in Wallpaper Engine (3598808038's dark vapor), one that says only
           // `min` white ones; neither said, white.
-          least = color(isSet(said.min) ? said.min : said.max, 255);
-          most = color(isSet(said.max) ? said.max : said.min, 255);
+          least = color(isSet(said.min) ? said.min : said.max, standard.initializers.colorrandom.min);
+          most = color(isSet(said.max) ? said.max : said.min, standard.initializers.colorrandom.max);
           return function (particle) {
             // One of the colors between the two, not each part of it on its own.
             var share = pick(0, 1);
@@ -328,35 +330,35 @@
         case 'rotationrandom':
           // Without bounds a particle is turned anyhow, up to a whole turn (Wallpaper Engine
           // draws the squares of such a fog every which way).
-          least = numbers(said.min, 3, 0)[2];
-          most = numbers(said.max, 3, [0, 0, Math.PI * 2])[2];
+          least = numbers(said.min, 3, standard.initializers.rotationrandom.min)[2];
+          most = numbers(said.max, 3, standard.initializers.rotationrandom.max)[2];
           return function (particle) { particle.angle = pick(least, most); };
         case 'angularvelocityrandom':
-          least = numbers(said.min, 3, 0)[2];
-          most = numbers(said.max, 3, 0)[2];
+          least = numbers(said.min, 3, standard.initializers.angularvelocityrandom.min)[2];
+          most = numbers(said.max, 3, standard.initializers.angularvelocityrandom.max)[2];
           return function (particle) { particle.spin = pick(least, most); };
         case 'turbulentvelocityrandom':
           // A speed in a direction that wanders around `forward`, the more the larger the scale.
-          var forward = numbers(said.forward, 3, [0, 1, 0]);
+          var forward = numbers(said.forward, 3, standard.initializers.turbulentvelocityrandom.forward);
           // `offset` turns the way it goes, in radians: leaves at 3 fall where embers at −0.5 rise
           // (measured on Wallpaper Engine's own video of "Anime lake at night").
-          var heading = Math.atan2(forward[1], forward[0]) + number(said.offset, 0);
-          var spread = number(said.scale, 1) * Math.PI / 2;
-          least = number(said.speedmin, 100);
-          most = number(said.speedmax, 250);
+          var heading = Math.atan2(forward[1], forward[0]) + number(said.offset, standard.initializers.turbulentvelocityrandom.offset);
+          var spread = number(said.scale, standard.initializers.turbulentvelocityrandom.scale) * Math.PI / 2;
+          least = number(said.speedmin, standard.initializers.turbulentvelocityrandom.speedmin);
+          most = number(said.speedmax, standard.initializers.turbulentvelocityrandom.speedmax);
           return function (particle) {
             // In a rope, one particle after another makes one line: each wanders as the one made
             // just before it did, a little further on, so the line bends rather than frays.
             var where = system.rope ? 0 : particle.seed * 50;
-            var wander = (smoothNoise(system.age * number(said.timescale, 1) * 2, where, 256, 11) - 0.5) * 2 * spread;
+            var wander = (smoothNoise(system.age * number(said.timescale, standard.initializers.turbulentvelocityrandom.timescale) * 2, where, 256, 11) - 0.5) * 2 * spread;
             var speed = mix(least, most, Math.random());
             particle.vx += Math.cos(heading + wander) * speed;
             particle.vy += Math.sin(heading + wander) * speed;
           };
         case 'mapsequencearoundcontrolpoint':
           // One particle after another is sent off a step further round: so many to a turn.
-          var toTurn = Math.max(1, Math.round(number(said.count, 1)));
-          var offLeast = numbers(said.speedmin, 3, 0), offMost = numbers(said.speedmax, 3, 0);
+          var toTurn = Math.max(1, Math.round(number(said.count, standard.initializers.mapsequencearoundcontrolpoint.count)));
+          var offLeast = numbers(said.speedmin, 3, standard.initializers.mapsequencearoundcontrolpoint.speedmin), offMost = numbers(said.speedmax, 3, standard.initializers.mapsequencearoundcontrolpoint.speedmax);
           return function (particle) {
             var turn = ((particle.id - 1) % toTurn) / toTurn * Math.PI * 2;
             var share = Math.random();
@@ -367,10 +369,10 @@
           };
         case 'hsvcolorrandom':
           // A color said as where on the wheel it is, how full and how light: each drawn by itself.
-          var hues = [number(said.huemin, 0), number(said.huemax, 1)];
+          var hues = [number(said.huemin, standard.initializers.hsvcolorrandom.huemin), number(said.huemax, standard.initializers.hsvcolorrandom.huemax)];
           if (hues[0] > 1.5 || hues[1] > 1.5) hues = [hues[0] / 360, hues[1] / 360];
-          var fullness = [number(said.saturationmin, 0), number(said.saturationmax, 1)];
-          var lightness = [number(said.valuemin, 0), number(said.valuemax, 1)];
+          var fullness = [number(said.saturationmin, standard.initializers.hsvcolorrandom.saturationmin), number(said.saturationmax, standard.initializers.hsvcolorrandom.saturationmax)];
+          var lightness = [number(said.valuemin, standard.initializers.hsvcolorrandom.valuemin), number(said.valuemax, standard.initializers.hsvcolorrandom.valuemax)];
           return function (particle) {
             var hue = ((pick(hues[0], hues[1]) % 1) + 1) % 1 * 6;
             var full = Math.max(0, Math.min(1, pick(fullness[0], fullness[1]))), light = Math.max(0, Math.min(1, pick(lightness[0], lightness[1])));
@@ -385,8 +387,8 @@
         case 'mapsequencebetweencontrolpoints':
           // One particle after another is put a step further along the way from one of the
           // system's points to another: so many to the way, and then back or from the start.
-          var toWay = Math.max(2, Math.round(number(said.count, 2)));
-          var wayFrom = number(said.controlpointstart, 0), wayTo = number(said.controlpointend, 1);
+          var toWay = Math.max(2, Math.round(number(said.count, standard.initializers.mapsequencebetweencontrolpoints.count)));
+          var wayFrom = number(said.controlpointstart, standard.initializers.mapsequencebetweencontrolpoints.controlpointstart), wayTo = number(said.controlpointend, standard.initializers.mapsequencebetweencontrolpoints.controlpointend);
           var back = key(said.limitbehavior || 'repeat') === 'mirror';
           return function (particle) {
             var step = (particle.id - 1) % (back ? (toWay - 1) * 2 : toWay);
@@ -409,7 +411,7 @@
           };
         case 'positionoffsetrandom':
           // Put somewhere within a distance of where it was made.
-          var within = number(said.distance, 0);
+          var within = number(said.distance, standard.initializers.positionoffsetrandom.distance);
           return function (particle) {
             var turn = Math.random() * Math.PI * 2, far = Math.sqrt(Math.random()) * within;
             particle.x += Math.cos(turn) * far;
@@ -418,9 +420,9 @@
         case 'inheritcontrolpointvelocity':
           // Sent off with a share of the speed one of the system's points moves at: particles made
           // where the pointer is fly off the way it was going.
-          var moving = number(said.controlpoint, 0);
-          least = number(said.min, 1);
-          most = number(said.max, 1);
+          var moving = number(said.controlpoint, standard.initializers.inheritcontrolpointvelocity.controlpoint);
+          least = number(said.min, standard.initializers.inheritcontrolpointvelocity.min);
+          most = number(said.max, standard.initializers.inheritcontrolpointvelocity.max);
           return function (particle) {
             var speed = system.pointVelocity(moving), share = pick(least, most);
             particle.vx += speed[0] * share;
@@ -446,14 +448,14 @@
     // system's points, how far two points are apart, how long the system has run — or chance.
     function remapping(said, system) {
       var input = key(said.input || 'random');
-      var from = number(said.inputrangemin, 0), to = number(said.inputrangemax, 1);
-      var low = numbers(said.outputrangemin, 3, 0), high = numbers(said.outputrangemax, 3, 1);
+      var from = number(said.inputrangemin, standard.remapping.inputrangemin), to = number(said.inputrangemax, standard.remapping.inputrangemax);
+      var low = numbers(said.outputrangemin, 3, standard.remapping.outputrangemin), high = numbers(said.outputrangemax, 3, standard.remapping.outputrangemax);
       var how = key(said.operation || 'remap');
       // What is changed when the scene does not say: the size — Wallpaper Engine's own
       // lightning preset leaves it unsaid on a beam that narrows towards where it strikes
       // (inferred; its documentation does not name the default).
       var output = key(said.output || 'size');
-      var first = number(said.inputcontrolpoint0, 0), second = number(said.inputcontrolpoint1, 1);
+      var first = number(said.inputcontrolpoint0, standard.remapping.inputcontrolpoint0), second = number(said.inputcontrolpoint1, standard.remapping.inputcontrolpoint1);
       function measured(particle) {
         var a, b;
         if (input === 'distancetocontrolpoint') {
@@ -532,18 +534,18 @@
 
     // What changes a particle as it lives; null for one not known here.
     function operator(said, system) {
-      var start = number(said.starttime, 0), end = number(said.endtime, 1);
+      var start = number(said.starttime, standard.operator.starttime), end = number(said.endtime, standard.operator.endtime);
       // The wave of an oscillation at a moment of a particle's life, from −1 to 1. Each
       // particle has its own pace and start, drawn once from its own number.
       function wave(particle, share, salt) {
-        var pace = mix(number(said.frequencymin, 0), number(said.frequencymax, 10), hash(particle.id, salt, 1));
-        var shift = mix(number(said.phasemin, 0), number(said.phasemax, Math.PI * 2), hash(particle.id, salt, 2));
+        var pace = mix(number(said.frequencymin, standard.operator.frequencymin), number(said.frequencymax, standard.operator.frequencymax), hash(particle.id, salt, 1));
+        var shift = mix(number(said.phasemin, standard.operator.phasemin), number(said.phasemax, standard.operator.phasemax), hash(particle.id, salt, 2));
         return Math.sin(Math.PI * 2 * pace * share + shift);
       }
       switch (key(said.name)) {
         case 'movement':
-          var gravity = numbers(said.gravity, 3, 0);
-          var drag = number(said.drag, 0);
+          var gravity = numbers(said.gravity, 3, standard.operators.movement.gravity);
+          var drag = number(said.drag, standard.operators.movement.drag);
           return function (particle, seconds) {
             var keep = Math.max(0, 1 - drag * seconds);
             var pull = system.speedBy * seconds;
@@ -555,29 +557,29 @@
             particle.z += particle.vz * seconds;
           };
         case 'angularmovement':
-          var force = numbers(said.force, 3, 0)[2];
-          var slowing = number(said.drag, 0);
+          var force = numbers(said.force, 3, standard.operators.angularmovement.force)[2];
+          var slowing = number(said.drag, standard.operators.angularmovement.drag);
           return function (particle, seconds) {
             particle.spin = (particle.spin + force * seconds) * Math.max(0, 1 - slowing * seconds);
             particle.angle += particle.spin * seconds;
           };
         case 'alphafade':
-          var fadeIn = number(said.fadeintime, 0.5), fadeOut = number(said.fadeouttime, 0.5);
+          var fadeIn = number(said.fadeintime, standard.operators.alphafade.fadeintime), fadeOut = number(said.fadeouttime, standard.operators.alphafade.fadeouttime);
           return function (particle, seconds, share) {
             if (fadeIn > 0 && share < fadeIn) particle.alphaNow *= share / fadeIn;
             if (fadeOut < 1 && share > fadeOut) particle.alphaNow *= (1 - share) / (1 - fadeOut);
           };
         case 'sizechange':
-          var sizeFrom = number(said.startvalue, 1), sizeTo = number(said.endvalue, 0);
+          var sizeFrom = number(said.startvalue, standard.operators.sizechange.startvalue), sizeTo = number(said.endvalue, standard.operators.sizechange.endvalue);
           // The scene's own size factor counts once more here: Wallpaper Engine scales this
           // change by it as well as the particle (measured on ropes in its own window: 0.2 of
           // 40 at size 2 is 32 wide, not 16 — oscillatesize and alphachange take it only once).
           return function (particle, seconds, share) { particle.sizeNow *= mix(sizeFrom, sizeTo, ramp(share, start, end)) * system.sizeBy; };
         case 'alphachange':
-          var alphaFrom = number(said.startvalue, 1), alphaTo = number(said.endvalue, 0);
+          var alphaFrom = number(said.startvalue, standard.operators.alphachange.startvalue), alphaTo = number(said.endvalue, standard.operators.alphachange.endvalue);
           return function (particle, seconds, share) { particle.alphaNow *= mix(alphaFrom, alphaTo, ramp(share, start, end)); };
         case 'colorchange':
-          var colorFrom = color(said.startvalue, 1), colorTo = color(said.endvalue, 1);
+          var colorFrom = color(said.startvalue, standard.operators.colorchange.startvalue), colorTo = color(said.endvalue, standard.operators.colorchange.endvalue);
           return function (particle, seconds, share) {
             var done = ramp(share, start, end);
             particle.redNow *= mix(colorFrom[0], colorTo[0], done);
@@ -585,14 +587,14 @@
             particle.blueNow *= mix(colorFrom[2], colorTo[2], done);
           };
         case 'oscillatealpha':
-          var alphaLow = number(said.scalemin, 0), alphaHigh = number(said.scalemax, 1);
+          var alphaLow = number(said.scalemin, standard.operators.oscillatealpha.scalemin), alphaHigh = number(said.scalemax, standard.operators.oscillatealpha.scalemax);
           return function (particle, seconds, share) { particle.alphaNow *= mix(alphaLow, alphaHigh, 0.5 + 0.5 * wave(particle, share, 31)); };
         case 'oscillatesize':
-          var sizeLow = number(said.scalemin, 0.8), sizeHigh = number(said.scalemax, 1.2);
+          var sizeLow = number(said.scalemin, standard.operators.oscillatesize.scalemin), sizeHigh = number(said.scalemax, standard.operators.oscillatesize.scalemax);
           return function (particle, seconds, share) { particle.sizeNow *= mix(sizeLow, sizeHigh, 0.5 + 0.5 * wave(particle, share, 37)); };
         case 'oscillateposition':
-          var mask = numbers(said.mask, 3, [1, 1, 0]);
-          var swingLow = number(said.scalemin, 1), swingHigh = number(said.scalemax, 1);
+          var mask = numbers(said.mask, 3, standard.operators.oscillateposition.mask);
+          var swingLow = number(said.scalemin, standard.operators.oscillateposition.scalemin), swingHigh = number(said.scalemax, standard.operators.oscillateposition.scalemax);
           return function (particle, seconds, share) {
             var swing = mix(swingLow, swingHigh, hash(particle.id, 43, 3)) * wave(particle, share, 41);
             particle.shiftX += mask[0] * swing;
@@ -600,9 +602,9 @@
           };
         case 'turbulence':
           // A push that changes smoothly from place to place and with time.
-          var grain = number(said.scale, 0.01), pace = number(said.timescale, 1);
-          var pushLow = number(said.speedmin, 100), pushHigh = number(said.speedmax, 200);
-          var along = numbers(said.mask, 3, [1, 1, 0]);
+          var grain = number(said.scale, standard.operators.turbulence.scale), pace = number(said.timescale, standard.operators.turbulence.timescale);
+          var pushLow = number(said.speedmin, standard.operators.turbulence.speedmin), pushHigh = number(said.speedmax, standard.operators.turbulence.speedmax);
+          var along = numbers(said.mask, 3, standard.operators.turbulence.mask);
           return function (particle, seconds) {
             var push = mix(pushLow, pushHigh, hash(particle.id, 47, 4)) * seconds;
             var at = system.age * pace;
@@ -612,8 +614,8 @@
         case 'controlpointattract':
           // Pulled toward one of the system's points, or pushed from it, while nearer to it
           // than the threshold.
-          var toward = number(said.controlpoint, 0), pull = number(said.scale, 0), reach = number(said.threshold, 0);
-          var beside = numbers(said.origin, 3, 0);
+          var toward = number(said.controlpoint, standard.operators.controlpointattract.controlpoint), pull = number(said.scale, standard.operators.controlpointattract.scale), reach = number(said.threshold, standard.operators.controlpointattract.threshold);
+          var beside = numbers(said.origin, 3, standard.operators.controlpointattract.origin);
           return function (particle, seconds) {
             var point = system.pointAt(toward);
             var dx = point[0] + beside[0] - particle.x, dy = point[1] + beside[1] - particle.y, dz = point[2] + beside[2] - particle.z;
@@ -628,10 +630,10 @@
         case 'vortex':
           // Swept round one of the system's points: fastest within the inner distance, less
           // and less up to the outer one.
-          var about = number(said.controlpoint, 0), swirlAt = numbers(said.offset, 3, 0);
-          var inner = number(said.distanceinner, 0), outer = number(said.distanceouter, 0);
-          var swiftest = number(said.speedinner, 0), slowest = number(said.speedouter, 0);
-          var handed = numbers(said.axis, 3, [0, 0, 1])[2] < 0 ? -1 : 1;
+          var about = number(said.controlpoint, standard.operators.vortex.controlpoint), swirlAt = numbers(said.offset, 3, standard.operators.vortex.offset);
+          var inner = number(said.distanceinner, standard.operators.vortex.distanceinner), outer = number(said.distanceouter, standard.operators.vortex.distanceouter);
+          var swiftest = number(said.speedinner, standard.operators.vortex.speedinner), slowest = number(said.speedouter, standard.operators.vortex.speedouter);
+          var handed = numbers(said.axis, 3, standard.operators.vortex.axis)[2] < 0 ? -1 : 1;
           return function (particle, seconds) {
             var point = system.pointAt(about);
             var dx = particle.x - point[0] - swirlAt[0], dy = particle.y - point[1] - swirlAt[1];
@@ -647,9 +649,9 @@
           // between two values. Each particle wanders its own way.
           var remapped = key(said.output || '');
           var way = key(said.transformfunction || 'linear');
-          var grain = number(said.transforminputscale, 1);
-          var lowest = numbers(said.outputrangemin, 3, 0), highest = numbers(said.outputrangemax, 3, 1);
-          var inFrom = number(said.inputrangemin, 0), inTo = number(said.inputrangemax, 1);
+          var grain = number(said.transforminputscale, standard.operators.remapvalue.transforminputscale);
+          var lowest = numbers(said.outputrangemin, 3, standard.operators.remapvalue.outputrangemin), highest = numbers(said.outputrangemax, 3, standard.operators.remapvalue.outputrangemax);
+          var inFrom = number(said.inputrangemin, standard.operators.remapvalue.inputrangemin), inTo = number(said.inputrangemax, standard.operators.remapvalue.inputrangemax);
           var how = key(said.operation || 'remap');
           function wandered(particle, share, axis) {
             var input = ramp(share, inFrom, inTo) * grain;
@@ -705,7 +707,7 @@
           return null;
         case 'capvelocity':
           // No faster than a speed, from a point of its life on.
-          var fastest = number(said.maxspeed, 100), capFrom = number(said.blendinstart, 0), capTo = number(said.blendinend, 0);
+          var fastest = number(said.maxspeed, standard.operators.capvelocity.maxspeed), capFrom = number(said.blendinstart, standard.operators.capvelocity.blendinstart), capTo = number(said.blendinend, standard.operators.capvelocity.blendinend);
           return function (particle, seconds, share) {
             var speed = Math.sqrt(particle.vx * particle.vx + particle.vy * particle.vy + particle.vz * particle.vz);
             if (speed <= fastest || speed < 0.000001) return;
@@ -717,8 +719,8 @@
         case 'reducemovementnearcontrolpoint':
           // Slowed near one of the system's points: the most within the inner distance, less and
           // less up to the outer one.
-          var slowAt = number(said.controlpoint, 0), slowInner = number(said.distanceinner, 0), slowOuter = number(said.distanceouter, 100);
-          var cutInner = number(said.reductioninner, 1), cutOuter = number(said.reductionouter, 0);
+          var slowAt = number(said.controlpoint, standard.operators.reducemovementnearcontrolpoint.controlpoint), slowInner = number(said.distanceinner, standard.operators.reducemovementnearcontrolpoint.distanceinner), slowOuter = number(said.distanceouter, standard.operators.reducemovementnearcontrolpoint.distanceouter);
+          var cutInner = number(said.reductioninner, standard.operators.reducemovementnearcontrolpoint.reductioninner), cutOuter = number(said.reductionouter, standard.operators.reducemovementnearcontrolpoint.reductionouter);
           return function (particle, seconds) {
             var point = system.pointAt(slowAt);
             var far = Math.sqrt(Math.pow(particle.x - point[0], 2) + Math.pow(particle.y - point[1], 2) + Math.pow(particle.z - point[2], 2));
@@ -730,7 +732,7 @@
           };
         case 'maintaindistancetocontrolpoint':
           // Kept at a distance from one of the system's points: drawn back to it from either side.
-          var keptFrom = number(said.controlpoint, 0), keptAt = number(said.distance, 100), firm = number(said.variablestrength, 5);
+          var keptFrom = number(said.controlpoint, standard.operators.maintaindistancetocontrolpoint.controlpoint), keptAt = number(said.distance, standard.operators.maintaindistancetocontrolpoint.distance), firm = number(said.variablestrength, standard.operators.maintaindistancetocontrolpoint.variablestrength);
           return function (particle, seconds) {
             var point = system.pointAt(keptFrom);
             var dx = particle.x - point[0], dy = particle.y - point[1], dz = particle.z - point[2];
@@ -743,7 +745,7 @@
           };
         case 'maintaindistancebetweencontrolpoints':
           // Kept on the way between two of the system's points, as on a string held between them.
-          var endA = number(said.controlpointstart, 0), endB = number(said.controlpointend, 1), hold = number(said.variablestrength, 5);
+          var endA = number(said.controlpointstart, standard.operators.maintaindistancebetweencontrolpoints.controlpointstart), endB = number(said.controlpointend, standard.operators.maintaindistancebetweencontrolpoints.controlpointend), hold = number(said.variablestrength, standard.operators.maintaindistancebetweencontrolpoints.variablestrength);
           return function (particle, seconds) {
             var a = system.pointAt(endA), b = system.pointAt(endB);
             var wx = b[0] - a[0], wy = b[1] - a[1], wz = b[2] - a[2];
@@ -757,8 +759,8 @@
         case 'boids':
           // A flock: drawn to the middle of those near it and kept apart from the nearest,
           // going the way they go.
-          var sight = Math.max(1, number(said.neighborthreshold, 50));
-          var cohesion = number(said.cohesionfactor, 1), separation = number(said.separationfactor, 1), alignment = number(said.alignmentfactor, 0);
+          var sight = Math.max(1, number(said.neighborthreshold, standard.operators.boids.neighborthreshold));
+          var cohesion = number(said.cohesionfactor, standard.operators.boids.cohesionfactor), separation = number(said.separationfactor, standard.operators.boids.separationfactor), alignment = number(said.alignmentfactor, standard.operators.boids.alignmentfactor);
           return function (particle, seconds) {
             var near = system.neighbors(particle, sight);
             if (!near.length) return;
@@ -806,14 +808,14 @@
     function collision(said, system) {
       var kind = key(said.name);
       var behavior = key(said.collisionbehavior || 'bounce');
-      var bounce = number(said.bouncefactor, behavior === 'slide' ? 0 : 0.5);
-      var origin = numbers(said.origin, 3, 0);
+      var bounce = number(said.bouncefactor, behavior === 'slide' ? standard.collision.bouncefactorslide : standard.collision.bouncefactor);
+      var origin = numbers(said.origin, 3, standard.collision.origin);
       var normal = numbers(said.plane || said.normal || said.forward, 3, [0, 1, 0]);
       var length = Math.sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]) || 1;
       normal = normal.map(function (part) { return part / length; });
-      var distance = number(said.distance, 0);
-      var size = numbers(said.size, 2, 100);
-      var radius = number(said.radius, 100);
+      var distance = number(said.distance, standard.collision.distance);
+      var size = numbers(said.size, 2, standard.collision.size);
+      var radius = number(said.radius, standard.collision.radius);
       // Meets a surface with `n` pointing to the side it must stay on, `under` deep beyond it.
       function meet(particle, n, under) {
         particle.x += n[0] * under;
@@ -1008,7 +1010,7 @@
       system.children = [];
       // A child may be given a count of its own; one that goes with its parent's particles has
       // that many for each of them.
-      var ownMost = entry && isSet(entry.maxcount) ? number(entry.maxcount, 100) : number(said.maxcount, 100);
+      var ownMost = entry && isSet(entry.maxcount) ? number(entry.maxcount, standard.system.maxcount) : number(said.maxcount, standard.system.maxcount);
       // Where a child stands on its parent's place, and the way back from there.
       var offset = entry ? matrixOf(numbers(entry.origin, 3, 0), numbers(entry.angles, 3, 0).map(function (angle) { return angle * Math.PI / 180; }),
                                     numbers(entry.scale, 3, 1)) : null;
@@ -1025,7 +1027,7 @@
       }
       // Whether particles stay where they were made when what made them moves on, as a trail
       // does; a glow that goes with a particle moves along with it.
-      var stays = (number(said.flags, 0) & 1) !== 0;
+      var stays = (number(said.flags, standard.system.flags) & 1) !== 0;
       system.moving = true;
       system.age = 0;
       system.particles = [];
@@ -1040,7 +1042,7 @@
       system.randomFrame = key(said.animationmode || '') === 'randomframe';
       // How a clear particle faces, for how it bends what is behind it.
       system.normals = system.refracts && (material.textures || [])[1] ? texture('materials/' + material.textures[1]) : null;
-      system.frameRuns = Math.max(0.0001, number(said.sequencemultiplier, 1));
+      system.frameRuns = Math.max(0.0001, number(said.sequencemultiplier, standard.system.sequencemultiplier));
       // A clear drop that the scene does not bring a picture of is drawn as a drop, whatever
       // picture it names: a halo or a dot would bend nothing as a drop does.
       if (system.refracts && system.picture.made && !system.picture.builtin && system.picture.fill === undefined) {
@@ -1051,7 +1053,7 @@
       system.depthTest = key(String(material.depthtest || 'enabled')) !== 'disabled';
       system.bright = number((material.constantshadervalues || {}).ui_editor_properties_overbright, 1);
       // Further away is smaller: the particles have depth, and are drawn as seen by an eye.
-      system.perspective = (number(said.flags, 0) & 4) !== 0;
+      system.perspective = (number(said.flags, standard.system.flags) & 4) !== 0;
       // What the scene changes of the particles where it uses them; a setting of the
       // wallpaper may stand behind each, and the editor may change each.
       system.settle = function () {
@@ -1194,19 +1196,19 @@
           // The picture of the scene it is made over, as the object names it; the n-th such
           // emitter has the n-th one.
           picture: fromLayer ? dependency(thing, 'emitterimage', layerEmitters++) : null,
-          point: number(emitter.controlpoint, 0), withPointer: follows(number(emitter.controlpoint, 0)),
+          point: number(emitter.controlpoint, standard.emitter.controlpoint), withPointer: follows(number(emitter.controlpoint, standard.emitter.controlpoint)),
           box: key(emitter.name) === 'boxrandom',
           // Made all over a layer's picture: here, over the scene where the system lies.
           layer: key(emitter.name) === 'layerimage',
-          origin: numbers(emitter.origin, 3, 0), directions: numbers(emitter.directions, 3, 1),
-          least: numbers(emitter.distancemin, 3, 0), most: numbers(emitter.distancemax, 3, 256),
-          sign: numbers(emitter.sign, 3, 0),
-          rate: number(emitter.rate, 5), burst: number(emitter.instantaneous, 0),
-          speedLeast: number(emitter.speedmin, 0), speedMost: number(emitter.speedmax, 0),
-          lasts: number(emitter.duration, 0), waits: number(emitter.delay, 0), owed: 0,
+          origin: numbers(emitter.origin, 3, standard.emitter.origin), directions: numbers(emitter.directions, 3, standard.emitter.directions),
+          least: numbers(emitter.distancemin, 3, standard.emitter.distancemin), most: numbers(emitter.distancemax, 3, standard.emitter.distancemax),
+          sign: numbers(emitter.sign, 3, standard.emitter.sign),
+          rate: number(emitter.rate, standard.emitter.rate), burst: number(emitter.instantaneous, standard.emitter.instantaneous),
+          speedLeast: number(emitter.speedmin, standard.emitter.speedmin), speedMost: number(emitter.speedmax, standard.emitter.speedmax),
+          lasts: number(emitter.duration, standard.emitter.duration), waits: number(emitter.delay, standard.emitter.delay), owed: 0,
           // Not more than one particle a frame, however many the rate owes: the second of the
           // emitter's flags (Wallpaper Engine's editor: "Limit to one per frame").
-          eachFrame: (number(emitter.flags, 0) & 2) !== 0,
+          eachFrame: (number(emitter.flags, standard.emitter.flags) & 2) !== 0,
           hears: hearing(emitter)
         };
       });
@@ -1930,7 +1932,7 @@
         ownSettle();
         system.children.forEach(function (child) { child.settle(); });
       };
-      system.warm = system.children.reduce(function (most, child) { return Math.max(most, child.warm); }, number(said.starttime, 0));
+      system.warm = system.children.reduce(function (most, child) { return Math.max(most, child.warm); }, number(said.starttime, standard.system.starttime));
       return system;
     }
 
